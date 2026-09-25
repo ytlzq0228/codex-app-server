@@ -1,22 +1,30 @@
 import json
+import asyncio
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from uuid import uuid4
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
-from sqlalchemy import select
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .admin import auth_router as admin_auth_router
 from .admin import router as admin_router
 from .auth import ApiPrincipal, require_api_key
-from .backend import AppServerBackend, BackendTarget, CompletionBackend, MockBackend
+from .app_server import open_app_server
+from .backend import AppServerBackend, BackendTarget, CompletionBackend, MockBackend, WorkerFailure
 from .config import get_settings
 from .database import SessionLocal, engine, get_session
-from .models import Base, ResponseBinding, UsageRecord, Worker, WorkerStatus
+from .models import AdminUser, Base, ResponseBinding, UsageRecord, Worker, WorkerStatus
+from .security import hash_password
 from .schemas import BackendResult, ChatCompletionRequest, ResponseRequest
 
 
@@ -26,7 +34,23 @@ async def lifespan(app: FastAPI):
     if settings.auto_create_schema:
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
+            # This project intentionally has no migration framework yet. Keep existing
+            # installations forward-compatible until Alembic is introduced.
+            if connection.dialect.name == "postgresql":
+                for ddl in (
+                    "ALTER TABLE workers ADD COLUMN IF NOT EXISTS failure_kind VARCHAR(32)",
+                    "ALTER TABLE workers ADD COLUMN IF NOT EXISTS failure_reason VARCHAR(500)",
+                    "ALTER TABLE workers ADD COLUMN IF NOT EXISTS quarantined_at TIMESTAMPTZ",
+                    "ALTER TABLE workers ADD COLUMN IF NOT EXISTS retry_after TIMESTAMPTZ",
+                    "ALTER TABLE workers ADD COLUMN IF NOT EXISTS recovered_at TIMESTAMPTZ",
+                    "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ",
+                    "CREATE INDEX IF NOT EXISTS ix_api_keys_deleted_at ON api_keys (deleted_at)",
+                ):
+                    await connection.execute(text(ddl))
     async with SessionLocal() as session:
+        admin_user = await session.get(AdminUser, settings.admin_username)
+        if not admin_user:
+            session.add(AdminUser(username=settings.admin_username, password_hash=hash_password(settings.admin_password.get_secret_value()), session_version=1))
         worker = await session.scalar(select(Worker).where(Worker.name == "worker-1"))
         if not worker:
             worker = Worker(name="worker-1", container_name="codex-worker-1", endpoint=settings.app_server_url, status=WorkerStatus.ready)
@@ -36,13 +60,89 @@ async def lifespan(app: FastAPI):
             worker.endpoint = settings.app_server_url
         await session.commit()
     app.state.backend = MockBackend() if settings.backend == "mock" else AppServerBackend(settings)
+    recovery_task = asyncio.create_task(worker_recovery_loop(), name="worker-recovery")
     yield
+    recovery_task.cancel()
+    await asyncio.gather(recovery_task, return_exceptions=True)
     await app.state.backend.close()
     await engine.dispose()
 
 
-app = FastAPI(title="Codex App Server Gateway", version="0.3.0", lifespan=lifespan)
+PACKAGE_ROOT = Path(__file__).resolve().parent
+
+app = FastAPI(title="Codex App Server Gateway", version="0.4.0", lifespan=lifespan)
+app.state.templates = Jinja2Templates(directory=PACKAGE_ROOT / "templates")
+app.mount("/static", StaticFiles(directory=PACKAGE_ROOT / "static"), name="static")
+app.include_router(admin_auth_router)
 app.include_router(admin_router)
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+async def quarantine_worker(worker_id, reason: str, kind: str = "connection") -> None:
+    settings = get_settings()
+    cooldown = settings.worker_limit_cooldown_seconds if kind == "limit" else settings.worker_failure_cooldown_seconds
+    async with SessionLocal() as session:
+        worker = await session.get(Worker, worker_id)
+        if not worker:
+            return
+        worker.status = WorkerStatus.error
+        worker.failure_kind = kind
+        worker.failure_reason = reason[:500]
+        worker.quarantined_at = utcnow()
+        worker.retry_after = utcnow() + timedelta(seconds=cooldown)
+        if kind == "logged_out":
+            worker.auth_mode = None
+            worker.plan_type = None
+        await session.commit()
+
+
+async def recover_worker(worker: Worker) -> bool:
+    settings = get_settings()
+    try:
+        async with open_app_server(worker.endpoint, settings.app_server_token.get_secret_value(), min(settings.app_server_timeout_seconds, 20)) as server:
+            response = await server.call("account/read", {"refreshToken": True})
+        account = response.get("account") or {}
+        if not account:
+            worker.failure_kind = "logged_out"
+            worker.failure_reason = "Codex worker is not logged in"
+            worker.retry_after = utcnow() + timedelta(seconds=settings.worker_failure_cooldown_seconds)
+            return False
+        worker.status = WorkerStatus.ready
+        worker.auth_mode = account.get("type")
+        worker.plan_type = account.get("planType")
+        worker.last_seen_at = utcnow()
+        worker.recovered_at = utcnow()
+        worker.failure_kind = None
+        worker.failure_reason = None
+        worker.quarantined_at = None
+        worker.retry_after = None
+        return True
+    except Exception as exc:
+        worker.failure_reason = str(exc)[:500]
+        worker.retry_after = utcnow() + timedelta(seconds=settings.worker_failure_cooldown_seconds)
+        return False
+
+
+async def worker_recovery_loop() -> None:
+    settings = get_settings()
+    while True:
+        try:
+            await asyncio.sleep(settings.worker_recovery_interval_seconds)
+            async with SessionLocal() as session:
+                workers = (await session.scalars(select(Worker).where(Worker.enabled.is_(True), Worker.status == WorkerStatus.error))).all()
+                now = utcnow()
+                for worker in workers:
+                    if not worker.retry_after or worker.retry_after <= now:
+                        await recover_worker(worker)
+                await session.commit()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # A failed sweep must not terminate future recovery attempts.
+            continue
 
 
 @app.middleware("http")
@@ -147,23 +247,67 @@ def chat_completion_object(completion_id: str, created: int, body: ChatCompletio
     return payload
 
 
-async def choose_target(principal: ApiPrincipal, session: AsyncSession, binding: ResponseBinding | None = None) -> BackendTarget:
+def worker_unavailable(*, bound: bool = False) -> HTTPException:
+    message = "The worker for this conversation is unavailable" if bound else "No healthy Codex worker is available"
+    code = "session_worker_unavailable" if bound else "worker_unavailable"
+    return HTTPException(503, detail={"error": {"message": message, "type": "server_error", "code": code}})
+
+
+async def choose_target(
+    principal: ApiPrincipal,
+    session: AsyncSession,
+    binding: ResponseBinding | None = None,
+    exclude_worker_ids: set | None = None,
+) -> BackendTarget:
     settings = get_settings()
-    worker: Worker | None
+    excluded = exclude_worker_ids or set()
+    candidates: list[Worker] = []
     if binding:
         worker = await session.get(Worker, binding.worker_id)
+        candidates = [worker] if worker else []
     elif principal.pinned_worker_id:
         worker = await session.get(Worker, principal.pinned_worker_id)
+        candidates = [worker] if worker else []
     else:
-        worker = await session.scalar(select(Worker).where(Worker.enabled.is_(True), Worker.status.in_([WorkerStatus.ready, WorkerStatus.busy])).order_by(Worker.status, Worker.last_seen_at.desc().nullslast()))
-    if not worker or not worker.enabled or worker.status in {WorkerStatus.offline, WorkerStatus.draining, WorkerStatus.error}:
-        raise HTTPException(503, detail={"error": {"message": "No healthy Codex worker is available", "type": "server_error", "code": "worker_unavailable"}})
+        candidates = list((await session.scalars(select(Worker).where(Worker.enabled.is_(True), Worker.status.in_([WorkerStatus.ready, WorkerStatus.busy])).order_by(Worker.status, Worker.last_seen_at.desc().nullslast()))).all())
+    candidates = [worker for worker in candidates if worker.id not in excluded and worker.enabled and worker.status in {WorkerStatus.ready, WorkerStatus.busy}]
+    if not candidates:
+        raise worker_unavailable(bound=binding is not None)
     key_slug = str(principal.key_id or "development")
-    async with httpx.AsyncClient(timeout=15) as client:
-        response = await client.put(f"{settings.manager_url}/workers/{worker.container_name}/workspaces/{key_slug}", headers={"Authorization": f"Bearer {settings.manager_token.get_secret_value()}"})
-        if response.status_code >= 400:
-            raise HTTPException(503, detail={"error": {"message": "Worker workspace could not be prepared", "type": "server_error", "code": "worker_unavailable"}})
-    return BackendTarget(connection_key=f"{key_slug}:{worker.id}", endpoint=worker.endpoint, workspace=f"{settings.workspace_worker_root}/{key_slug}", worker_id=worker.id)
+    for worker in candidates:
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.put(f"{settings.manager_url}/workers/{worker.container_name}/workspaces/{key_slug}", headers={"Authorization": f"Bearer {settings.manager_token.get_secret_value()}"})
+            if response.status_code >= 400:
+                raise RuntimeError(f"Worker manager returned HTTP {response.status_code}")
+            return BackendTarget(connection_key=f"{key_slug}:{worker.id}", endpoint=worker.endpoint, workspace=f"{settings.workspace_worker_root}/{key_slug}", worker_id=worker.id)
+        except Exception as exc:
+            await quarantine_worker(worker.id, f"Workspace preparation failed: {exc}", "connection")
+            if binding or principal.pinned_worker_id:
+                break
+    raise worker_unavailable(bound=binding is not None)
+
+
+async def retry_target(principal: ApiPrincipal, failed: BackendTarget) -> BackendTarget:
+    async with SessionLocal() as session:
+        return await choose_target(principal, session, exclude_worker_ids={failed.worker_id})
+
+
+async def complete_with_failover(body: ResponseRequest, backend: CompletionBackend, principal: ApiPrincipal, target: BackendTarget, *, allow_retry: bool) -> tuple[BackendResult, BackendTarget]:
+    try:
+        return await backend.complete(body, target), target
+    except WorkerFailure as exc:
+        if target.worker_id:
+            await quarantine_worker(target.worker_id, str(exc), exc.kind)
+        if not (allow_retry and exc.safe_to_retry):
+            raise
+        replacement = await retry_target(principal, target)
+        try:
+            return await backend.complete(body, replacement), replacement
+        except WorkerFailure as retry_exc:
+            if replacement.worker_id:
+                await quarantine_worker(replacement.worker_id, str(retry_exc), retry_exc.kind)
+            raise
 
 
 async def save_usage(response_id: str, principal: ApiPrincipal, target: BackendTarget, model: str, status_code: int, started: float, result: BackendResult | None = None, error_code: str | None = None) -> None:
@@ -174,7 +318,7 @@ async def save_usage(response_id: str, principal: ApiPrincipal, target: BackendT
         await session.commit()
 
 
-async def response_stream(body: ResponseRequest, backend: CompletionBackend, principal: ApiPrincipal, target: BackendTarget, public_previous_id: str | None) -> AsyncIterator[str]:
+async def response_stream(body: ResponseRequest, backend: CompletionBackend, principal: ApiPrincipal, target: BackendTarget, public_previous_id: str | None, allow_retry: bool = True) -> AsyncIterator[str]:
     started = time.monotonic()
     response_id, message_id, sequence = f"resp_{uuid4().hex}", f"msg_{uuid4().hex}", 0
     created = {"id": response_id, "object": "response", "created_at": int(time.time()), "completed_at": None, "status": "in_progress", "model": body.model, "previous_response_id": public_previous_id, "output": [], "error": None, "incomplete_details": None, "instructions": body.instructions, "metadata": body.metadata or {}, "max_output_tokens": body.max_output_tokens, "parallel_tool_calls": body.parallel_tool_calls if body.parallel_tool_calls is not None else True, "reasoning": body.reasoning, "store": False, "temperature": body.temperature, "text": body.text or {"format": {"type": "text"}}, "tool_choice": body.tool_choice or "auto", "tools": body.tools or [], "top_p": body.top_p, "truncation": body.truncation or "disabled", "usage": None}
@@ -185,14 +329,27 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
     chunks: list[str] = []
     thread_id = ""
     input_tokens = output_tokens = 0
+    retried = False
     try:
-        async for event in backend.stream(body, target):
-            thread_id = event.thread_id or thread_id
-            input_tokens = event.input_tokens or input_tokens
-            output_tokens = event.output_tokens or output_tokens
-            if event.delta:
-                chunks.append(event.delta)
-                yield sse({"type": "response.output_text.delta", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "delta": event.delta}); sequence += 1
+        while True:
+            try:
+                async for event in backend.stream(body, target):
+                    thread_id = event.thread_id or thread_id
+                    input_tokens = event.input_tokens or input_tokens
+                    output_tokens = event.output_tokens or output_tokens
+                    if event.delta:
+                        chunks.append(event.delta)
+                        yield sse({"type": "response.output_text.delta", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "delta": event.delta}); sequence += 1
+                break
+            except WorkerFailure as exc:
+                if target.worker_id:
+                    await quarantine_worker(target.worker_id, str(exc), exc.kind)
+                # Retry once only when Codex confirms the turn could not have begun and
+                # no model content has reached the client.
+                if retried or chunks or not allow_retry or not exc.safe_to_retry:
+                    raise
+                target = await retry_target(principal, target)
+                retried = True
     except Exception:
         error = {"code": "backend_error", "message": "The Codex backend could not complete the request"}
         yield sse({"type": "error", "sequence_number": sequence, **error, "param": None}); sequence += 1
@@ -211,7 +368,7 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
     await save_usage(response_id, principal, target, body.model, 200, started, result)
 
 
-async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseRequest, backend: CompletionBackend, principal: ApiPrincipal, target: BackendTarget) -> AsyncIterator[str]:
+async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseRequest, backend: CompletionBackend, principal: ApiPrincipal, target: BackendTarget, allow_retry: bool = True) -> AsyncIterator[str]:
     started = time.monotonic()
     completion_id, created = f"chatcmpl-{uuid4().hex}", int(time.time())
 
@@ -229,13 +386,26 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
     yield chat_sse(chunk({"role": "assistant", "content": ""}))
     thread_id = ""
     input_tokens = output_tokens = 0
+    content_emitted = False
+    retried = False
     try:
-        async for event in backend.stream(request, target):
-            thread_id = event.thread_id or thread_id
-            input_tokens = event.input_tokens or input_tokens
-            output_tokens = event.output_tokens or output_tokens
-            if event.delta:
-                yield chat_sse(chunk({"content": event.delta}))
+        while True:
+            try:
+                async for event in backend.stream(request, target):
+                    thread_id = event.thread_id or thread_id
+                    input_tokens = event.input_tokens or input_tokens
+                    output_tokens = event.output_tokens or output_tokens
+                    if event.delta:
+                        content_emitted = True
+                        yield chat_sse(chunk({"content": event.delta}))
+                break
+            except WorkerFailure as exc:
+                if target.worker_id:
+                    await quarantine_worker(target.worker_id, str(exc), exc.kind)
+                if retried or content_emitted or not allow_retry or not exc.safe_to_retry:
+                    raise
+                target = await retry_target(principal, target)
+                retried = True
     except Exception:
         yield chat_sse({"error": {"message": "The Codex backend could not complete the request", "type": "server_error", "code": "backend_error"}})
         yield chat_sse("[DONE]")
@@ -277,11 +447,11 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
     request = body.to_response_request()
     target = await choose_target(principal, session)
     if body.stream:
-        return StreamingResponse(chat_completion_stream(body, request, backend, principal, target), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        return StreamingResponse(chat_completion_stream(body, request, backend, principal, target, principal.pinned_worker_id is None), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
     started = time.monotonic()
     completion_id, created = f"chatcmpl-{uuid4().hex}", int(time.time())
     try:
-        result = await backend.complete(request, target)
+        result, target = await complete_with_failover(request, backend, principal, target, allow_retry=principal.pinned_worker_id is None)
     except Exception:
         await save_usage(completion_id, principal, target, body.model, 502, started, error_code="backend_error")
         raise
@@ -307,10 +477,10 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
         body = body.model_copy(update={"previous_response_id": binding.thread_id})
     target = await choose_target(principal, session, binding)
     if body.stream:
-        return StreamingResponse(response_stream(body, backend, principal, target, public_previous_id), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        return StreamingResponse(response_stream(body, backend, principal, target, public_previous_id, binding is None and principal.pinned_worker_id is None), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
     started = time.monotonic()
     try:
-        result = await backend.complete(body, target)
+        result, target = await complete_with_failover(body, backend, principal, target, allow_retry=binding is None and principal.pinned_worker_id is None)
     except Exception:
         response_id = f"resp_{uuid4().hex}"
         await save_usage(response_id, principal, target, body.model, 502, started, error_code="backend_error")

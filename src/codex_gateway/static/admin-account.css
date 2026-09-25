@@ -1,0 +1,20 @@
+.sidebar-password {
+  width: 100%;
+  margin-top: auto;
+  padding: 11px 14px;
+  border: 1px solid rgba(255, 255, 255, .18);
+  border-radius: 10px;
+  color: rgba(255, 255, 255, .86);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebar-password:hover {
+  color: white;
+  background: rgba(255, 255, 255, .08);
+}
+
+.sidebar-password + .logout-form {
+  margin-top: 10px;
+}

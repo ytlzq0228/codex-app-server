@@ -32,7 +32,7 @@ async def require_api_key(
 
     parts = supplied.split("_", 2)
     if len(parts) == 3 and parts[0] == "cag":
-        record = await session.scalar(select(ApiKey).where(ApiKey.prefix == parts[1], ApiKey.enabled.is_(True)))
+        record = await session.scalar(select(ApiKey).where(ApiKey.prefix == parts[1], ApiKey.enabled.is_(True), ApiKey.deleted_at.is_(None)))
         if record and keys_equal(supplied, record.key_hash, settings.key_pepper.get_secret_value()):
             record.last_used_at = datetime.now(timezone.utc)
             await session.commit()

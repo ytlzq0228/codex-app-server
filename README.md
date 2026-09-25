@@ -7,6 +7,9 @@ cp .env.example .env
 docker compose up --build
 ```
 
-The test deployment listens on `0.0.0.0:8000`. For production, disable the development API key, rotate every secret, and put a TLS reverse proxy in front of it.
+The test deployment listens on `0.0.0.0:8000`. The admin console is available
+at `/login` and uses a signed HttpOnly session cookie. For production, disable
+the development API key, rotate every secret (including the admin session
+secret), enable secure admin cookies, and put a TLS reverse proxy in front of it.
 
 See [PRD.md](PRD.md), [docs/architecture.md](docs/architecture.md), and [docs/operations.md](docs/operations.md).

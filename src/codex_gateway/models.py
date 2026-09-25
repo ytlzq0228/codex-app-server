@@ -15,6 +15,14 @@ class WorkerStatus(str, enum.Enum):
     draining = "draining"
     error = "error"
 
+
+class AdminUser(Base):
+    __tablename__ = "admin_users"
+    username: Mapped[str] = mapped_column(String(120), primary_key=True)
+    password_hash: Mapped[str] = mapped_column(String(256))
+    session_version: Mapped[int] = mapped_column(Integer, default=1)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
 class Worker(Base):
     __tablename__ = "workers"
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -27,6 +35,11 @@ class Worker(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    failure_kind: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    quarantined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retry_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    recovered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 class ApiKey(Base):
     __tablename__ = "api_keys"
@@ -39,6 +52,7 @@ class ApiKey(Base):
     pinned_worker_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("workers.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
 class ResponseBinding(Base):
     __tablename__ = "response_bindings"

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>登录 · Codex Gateway</title>
+  <link rel="stylesheet" href="/static/admin.css">
+</head>
+<body class="login-page">
+  <main class="login-shell">
+    <section class="login-brand">
+      <div class="brand-mark">C</div>
+      <p class="eyebrow">CODEX APP SERVER</p>
+      <h1>控制每一次<br>模型调用。</h1>
+      <p>管理隔离 Worker、访问密钥、账号状态与用量，一切集中在同一个控制台。</p>
+      <div class="login-signal"><span></span> Gateway Console</div>
+    </section>
+    <section class="login-card">
+      <div>
+        <p class="eyebrow">ADMIN CONSOLE</p>
+        <h2>欢迎回来</h2>
+        <p class="muted">使用管理员凭据继续。</p>
+      </div>
+      {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+      <form method="post" action="/login" class="stack-form">
+        <input type="hidden" name="next" value="{{ next }}">
+        <label>用户名<input name="username" autocomplete="username" required autofocus></label>
+        <label>密码<input type="password" name="password" autocomplete="current-password" required></label>
+        <button class="button button-primary button-wide" type="submit">登录控制台</button>
+      </form>
+      <p class="login-foot">会话将在 12 小时后自动失效</p>
+    </section>
+  </main>
+</body>
+</html>

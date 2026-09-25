@@ -70,6 +70,7 @@ Raspberry Pi -> HTTPS/Bearer -> FastAPI -> PostgreSQL
 ## 安全
 
 - API Key 只显示一次，数据库保存带 pepper 的 HMAC-SHA256 哈希。
+- 管理端使用 `/login` 表单登录和 12 小时有效的 HMAC 签名 HttpOnly Cookie，不使用浏览器 HTTP Basic Auth；所有管理写操作校验会话内 CSRF Token。
 - worker 不挂载宿主目录或 Docker socket，使用非 root、只读根文件系统、cap-drop、no-new-privileges 和资源限制。
 - Codex 禁止审批；使用只读/受管权限配置。出站网络只允许模型服务所需目标。
 - Docker 管理走独立受限组件，且同时校验数据库登记和项目标签。
@@ -97,6 +98,7 @@ Raspberry Pi -> HTTPS/Bearer -> FastAPI -> PostgreSQL
 - 断连可重连，但不会自动重复提交状态不明的 turn。
 - 网关不能访问 worker 文件；worker 无宿主权限。
 - 只能操作系统登记且带项目标签的容器。
+- 未登录访问 `/admin` 自动跳转 `/login`；登录、退出及会话过期行为正确，管理操作结果通过页面内弹窗反馈。
 
 ## 已确认设计决定
 1. 首期主要兼容 /v1/chat/completions，还是 /v1/responses？---直接上/v1/responses
@@ -199,3 +201,20 @@ Raspberry Pi -> HTTPS/Bearer -> FastAPI -> PostgreSQL
 - 为兼容会自动携带能力声明的客户端，可以接受并忽略不强制执行的声明；一旦客户端要求强制执行，则必须明确拒绝。
 - 不为了接口表面一致而违反“不保存输入输出正文”的隐私要求。
 - 每解决一项差异，都必须增加单元测试或官方 SDK 黑盒测试，并在测试服务器验证后更新本表状态。
+
+### Worker 故障转移与恢复（已完成）
+
+- 连接失败、账号退出和订阅限额错误会自动隔离 Worker，自动池不再向其分配新请求。
+- 池化且无会话绑定的请求，仅在确认 Codex turn 尚未开始时允许换 Worker 重试一次。
+- 已产生模型输出、可能已开始执行、固定 Worker Key 或携带 `previous_response_id` 的请求禁止自动重放。
+- 会话绑定 Worker 不可用时返回 `session_worker_unavailable`，不会静默丢失上下文。
+- 后台按冷却周期探测隔离 Worker；连接正常且账号仍已登录后恢复为 `ready`。
+- 管理页面显示隔离类型、故障原因、隔离时间、下次探测时间和最近恢复时间。
+
+### 管理端审计与会话管理（已完成）
+
+- 请求历史页面分页展示全部请求，可展开查看 Key、Worker、模型、状态码、耗时、Token 和错误代码，不保存输入输出正文。
+- Key 活动会话按 Codex thread 聚合，展示对应 Worker；支持删除单个 thread 的全部响应绑定或清空某个 Key 的全部绑定。
+- 支持修改 Key 名称以及自动池化/固定 Worker 调度策略；已有会话不会因策略修改而迁移。
+- 删除 Key 采用软删除：Key 立即失效并释放活动会话，请求历史和审计关联继续保留。
+- 管理员可在控制台验证当前密码后自助修改密码；凭据使用 PBKDF2-SHA256 加盐存储，改密会使其他旧登录会话立即失效。

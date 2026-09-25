@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>管理控制台 · Codex Gateway</title>
+  <link rel="stylesheet" href="/static/admin.css">
+  <link rel="stylesheet" href="/static/admin-features.css">
+  <link rel="stylesheet" href="/static/admin-account.css">
+  <script defer src="/static/admin.js"></script>
+</head>
+<body data-csrf-token="{{ csrf_token }}">
+  <aside class="sidebar">
+    <div class="brand"><div class="brand-mark">C</div><div><strong>Codex Gateway</strong><span>Admin Console</span></div></div>
+    <nav><a class="{{ 'active' if page == 'overview' else '' }}" href="/admin">概览</a><a class="{{ 'active' if page == 'keys' else '' }}" href="/admin/api-keys">API Keys</a><a class="{{ 'active' if page == 'sessions' else '' }}" href="/admin/sessions">Key 活动会话</a><a class="{{ 'active' if page == 'history' else '' }}" href="/admin/history">请求历史</a></nav>
+    <button type="button" class="sidebar-password" data-open-dialog="password-dialog">修改密码</button>
+    <form method="post" action="/logout" class="logout-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit">退出登录</button>
+    </form>
+  </aside>
+
+  <main class="content">
+    <header class="topbar"><div><p class="eyebrow">{{ {'overview':'OPERATIONS','keys':'ACCESS CONTROL','sessions':'THREAD BINDINGS','history':'AUDIT LOG'}[page] }}</p><h1>{{ {'overview':'运行控制台','keys':'API Keys','sessions':'Key 活动会话','history':'请求历史'}[page] }}</h1><p class="muted">{{ {'overview':'查看网关状态，管理访问权限与 Codex Worker。','keys':'创建、编辑、停用或删除 API Key。','sessions':'查看并释放 Key 与 Codex Worker 的会话绑定。','history':'查看系统请求记录与用量详情。'}[page] }}</p></div><div class="health-pill"><span></span>系统在线</div></header>
+
+    {% if page == 'overview' %}
+    <section id="overview" class="stats-grid">
+      <article class="stat"><span>累计请求</span><strong>{{ stats.requests }}</strong><small>全部 API Keys</small></article>
+      <article class="stat"><span>输入 Token</span><strong>{{ "{:,}".format(stats.input_tokens) }}</strong><small>历史累计</small></article>
+      <article class="stat"><span>输出 Token</span><strong>{{ "{:,}".format(stats.output_tokens) }}</strong><small>历史累计</small></article>
+      <article class="stat"><span>可用资源</span><strong>{{ keys|length }} / {{ workers|length }}</strong><small>Keys / Workers</small></article>
+    </section>
+
+    <section class="panel quick-panel">
+      <div><p class="eyebrow">QUICK ACTIONS</p><h2>默认 Worker</h2><p class="muted">快速检查 worker-1 的连接与 Codex 账号状态。账号登录请在对应 Worker 行操作。</p></div>
+      <div class="actions">
+        <form data-ajax data-reload method="post" action="/admin/workers/probe"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button">探测 worker-1</button></form>
+      </div>
+    </section>
+    {% endif %}
+
+    {% if page in ['overview', 'keys'] %}
+    <section id="keys" class="panel">
+      <div class="section-head"><div><p class="eyebrow">ACCESS CONTROL</p><h2>API Keys</h2></div><button class="button button-primary" data-open-dialog="key-dialog">创建 Key</button></div>
+      <div class="table-wrap"><table><thead><tr><th>名称</th><th>Key 前缀</th><th>状态</th><th>调度策略</th><th></th></tr></thead><tbody>
+      {% for key in keys %}<tr><td><strong>{{ key.name }}</strong></td><td><code>cag_{{ key.prefix }}_…</code></td><td><span class="badge {{ 'badge-ok' if key.enabled else 'badge-off' }}">{{ '启用' if key.enabled else '停用' }}</span></td><td>{% if key.scheduling_mode == 'pinned' %}固定 · {% for worker in workers if worker.id == key.pinned_worker_id %}{{ worker.name }}{% else %}未知 Worker{% endfor %}{% else %}自动池化{% endif %}</td><td class="row-actions"><button type="button" class="button button-small" data-edit-key data-key-id="{{ key.id }}" data-key-name="{{ key.name|e }}" data-scheduling-mode="{{ key.scheduling_mode }}" data-pinned-worker-id="{{ key.pinned_worker_id or '' }}">编辑</button><form data-ajax data-reload method="post" action="/admin/keys/{{ key.id }}/toggle"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-small">{{ '停用' if key.enabled else '启用' }}</button></form><form data-ajax data-reload data-confirm="确定删除这个 Key 吗？Key 会立即失效，活动会话会释放，请求历史会保留。" method="post" action="/admin/keys/{{ key.id }}/delete"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-small button-danger">删除</button></form></td></tr>
+      {% else %}<tr><td colspan="5" class="empty">还没有 API Key</td></tr>{% endfor %}
+      </tbody></table></div>
+    </section>
+    {% endif %}
+
+    {% if page == 'sessions' %}
+    <section id="sessions" class="panel">
+      <div class="section-head"><div><p class="eyebrow">THREAD BINDINGS</p><h2>Key 活动会话</h2><p class="muted">删除绑定不会删除请求历史；客户端再次使用原 previous_response_id 时将收到未找到错误。</p></div></div>
+      {% for key in keys %}{% set key_sessions = sessions_by_key.get(key.id, []) %}{% if key_sessions %}<div class="session-group"><div class="session-group-head"><div><strong>{{ key.name }}</strong><small>cag_{{ key.prefix }}_… · {{ key_sessions|length }} 个会话</small></div><form data-ajax data-reload data-confirm="确定释放这个 Key 下的全部活动会话吗？" method="post" action="/admin/keys/{{ key.id }}/sessions/clear"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-small button-danger">清空全部</button></form></div><div class="table-wrap"><table><thead><tr><th>会话 Thread</th><th>当前 Worker</th><th>最近 Response</th><th>建立时间</th><th></th></tr></thead><tbody>{% for item in key_sessions %}<tr><td><code>{{ item.binding.thread_id }}</code>{% if item.binding_count > 1 %}<small>{{ item.binding_count }} 条响应绑定</small>{% endif %}</td><td>{{ item.worker.name }}</td><td><code>{{ item.binding.response_id }}</code></td><td>{{ item.binding.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td><td><form data-ajax data-reload data-confirm="确定释放这个活动会话吗？" method="post" action="/admin/sessions/{{ item.binding.response_id }}/delete"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-small button-danger">删除会话</button></form></td></tr>{% endfor %}</tbody></table></div></div>{% endif %}{% else %}<p class="empty">还没有 Key</p>{% endfor %}
+      {% if not active_sessions %}<p class="empty">当前没有活动会话绑定</p>{% endif %}
+    </section>
+    {% endif %}
+
+    {% if page == 'history' %}
+    <section id="history" class="panel">
+      <div class="section-head"><div><p class="eyebrow">AUDIT LOG</p><h2>请求历史</h2><p class="muted">共 {{ history_total }} 条，每页 100 条；不记录输入和输出正文。</p></div></div>
+      <div class="table-wrap"><table><thead><tr><th>时间</th><th>请求 ID</th><th>Key</th><th>Worker</th><th>模型</th><th>状态</th><th>耗时</th><th></th></tr></thead><tbody>{% for usage, key_name, worker_name in history_rows %}<tr class="history-row" data-history-row="history-{{ usage.id }}"><td>{{ usage.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</td><td><code>{{ usage.request_id }}</code></td><td>{{ key_name or '开发 Key / 已删除' }}</td><td>{{ worker_name or '—' }}</td><td>{{ usage.model }}</td><td><span class="badge {{ 'badge-ok' if usage.status_code < 400 else 'badge-error' }}">{{ usage.status_code }}</span></td><td>{{ usage.duration_ms }} ms</td><td><button type="button" class="button button-small" data-toggle-history="history-{{ usage.id }}">详情</button></td></tr><tr id="history-{{ usage.id }}" class="history-detail" hidden><td colspan="8"><dl><div><dt>输入 Token</dt><dd>{{ usage.input_tokens }}</dd></div><div><dt>输出 Token</dt><dd>{{ usage.output_tokens }}</dd></div><div><dt>总 Token</dt><dd>{{ usage.input_tokens + usage.output_tokens }}</dd></div><div><dt>错误代码</dt><dd>{{ usage.error_code or '—' }}</dd></div><div><dt>Key ID</dt><dd><code>{{ usage.api_key_id or '—' }}</code></dd></div><div><dt>Worker ID</dt><dd><code>{{ usage.worker_id or '—' }}</code></dd></div></dl></td></tr>{% else %}<tr><td colspan="8" class="empty">暂无请求历史</td></tr>{% endfor %}</tbody></table></div>
+      {% if history_pages > 1 %}<div class="pagination">{% if history_page > 1 %}<a class="button button-small" href="/admin/history?history_page={{ history_page - 1 }}">上一页</a>{% endif %}<span>第 {{ history_page }} / {{ history_pages }} 页</span>{% if history_page < history_pages %}<a class="button button-small" href="/admin/history?history_page={{ history_page + 1 }}">下一页</a>{% endif %}</div>{% endif %}
+    </section>
+    {% endif %}
+
+    {% if page == 'overview' %}
+    <section id="workers" class="panel">
+      <div class="section-head"><div><p class="eyebrow">RUNTIME</p><h2>Codex Workers</h2></div><button class="button button-primary" data-open-dialog="worker-dialog">增加 Worker</button></div>
+      <div class="table-wrap"><table><thead><tr><th>名称</th><th>状态</th><th>认证方式</th><th>套餐</th><th>故障与恢复</th><th>操作</th></tr></thead><tbody>
+      {% for worker in workers %}<tr><td><div class="worker-name"><span class="worker-dot worker-{{ worker.status.value }}"></span><strong>{{ worker.name }}</strong></div><small>{{ worker.container_name }}</small></td><td><span class="badge badge-{{ worker.status.value }}">{{ '已隔离' if worker.status.value == 'error' else worker.status.value }}</span></td><td>{% if worker.auth_mode %}<span class="badge badge-ok">已登录 · {{ worker.auth_mode }}</span>{% else %}<span class="badge badge-off">未登录</span>{% endif %}</td><td>{{ worker.plan_type or '—' }}</td><td class="worker-health">{% if worker.failure_reason %}<strong>{{ {'connection':'连接故障','logged_out':'账号已退出','limit':'账户限额'}.get(worker.failure_kind, '运行故障') }}</strong><span title="{{ worker.failure_reason }}">{{ worker.failure_reason }}</span>{% if worker.quarantined_at %}<small>隔离于 {{ worker.quarantined_at.strftime('%m-%d %H:%M:%S') }}</small>{% endif %}{% if worker.retry_after %}<small>下次恢复探测 {{ worker.retry_after.strftime('%m-%d %H:%M:%S') }}</small>{% endif %}{% elif worker.recovered_at %}<span class="health-recovered">已自动恢复</span><small>{{ worker.recovered_at.strftime('%m-%d %H:%M:%S') }}</small>{% else %}<span class="muted">正常</span>{% endif %}</td><td class="row-actions">
+        <form data-ajax data-reload method="post" action="/admin/workers/{{ worker.id }}/probe"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-small">探测</button></form>
+        <form data-ajax method="post" action="/admin/workers/{{ worker.id }}/login"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% if worker.auth_mode %}<input type="hidden" name="force" value="true"><button class="button button-small">重新登录</button>{% else %}<button class="button button-small button-primary">登录账号</button>{% endif %}</form>
+        <form data-ajax data-reload method="post" action="/admin/workers/{{ worker.id }}/state"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-small">{{ '排空' if worker.enabled else '启用' }}</button></form>
+        {% if worker.name != 'worker-1' %}<form data-ajax data-reload data-confirm="确定删除这个 Worker 容器吗？" method="post" action="/admin/workers/{{ worker.id }}/delete"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-small button-danger">删除</button></form>{% endif %}
+      </td></tr>{% else %}<tr><td colspan="6" class="empty">还没有 Worker</td></tr>{% endfor %}
+      </tbody></table></div>
+    </section>
+    {% endif %}
+  </main>
+
+  {% if page in ['overview', 'keys'] %}<dialog id="key-dialog" class="form-dialog"><form data-ajax data-reload method="post" action="/admin/keys"><div class="dialog-head"><div><p class="eyebrow">NEW CREDENTIAL</p><h2>创建 API Key</h2></div><button type="button" class="icon-button" data-close-dialog>×</button></div><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>名称<input name="name" required maxlength="120" placeholder="例如：Raspberry Pi Workflow"></label><label>调度策略<select name="scheduling_mode"><option value="pooled">自动池化</option><option value="pinned">固定 Worker</option></select></label><label>关联 Worker<select name="pinned_worker_id"><option value="">自动选择</option>{% for worker in workers if worker.enabled %}<option value="{{ worker.id }}">{{ worker.name }}</option>{% endfor %}</select></label><div class="dialog-actions"><button type="button" class="button" data-close-dialog>取消</button><button class="button button-primary">创建</button></div></form></dialog>
+  <dialog id="edit-key-dialog" class="form-dialog"><form data-ajax data-reload method="post"><div class="dialog-head"><div><p class="eyebrow">EDIT CREDENTIAL</p><h2>编辑 API Key</h2></div><button type="button" class="icon-button" data-close-dialog>×</button></div><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>名称<input name="name" required maxlength="120"></label><label>调度策略<select name="scheduling_mode"><option value="pooled">自动池化</option><option value="pinned">固定 Worker</option></select></label><label>关联 Worker<select name="pinned_worker_id"><option value="">自动选择</option>{% for worker in workers if worker.enabled %}<option value="{{ worker.id }}">{{ worker.name }}</option>{% endfor %}</select></label><p class="form-help">修改调度策略不会移动已有会话；如需释放旧绑定，请在“Key 活动会话”中删除。</p><div class="dialog-actions"><button type="button" class="button" data-close-dialog>取消</button><button class="button button-primary">保存</button></div></form></dialog>
+  {% endif %}{% if page == 'overview' %}<dialog id="worker-dialog" class="form-dialog"><form data-ajax data-reload method="post" action="/admin/workers"><div class="dialog-head"><div><p class="eyebrow">NEW RUNTIME</p><h2>增加 Worker</h2></div><button type="button" class="icon-button" data-close-dialog>×</button></div><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>Worker 名称<input name="name" required pattern="[a-z][a-z0-9-]{0,47}" placeholder="worker-2"></label><p class="form-help">仅允许小写字母、数字和连字符，必须以字母开头。</p><div class="dialog-actions"><button type="button" class="button" data-close-dialog>取消</button><button class="button button-primary">创建容器</button></div></form></dialog>{% endif %}
+
+  <dialog id="password-dialog" class="form-dialog"><form data-ajax data-reload method="post" action="/admin/password"><div class="dialog-head"><div><p class="eyebrow">ACCOUNT SECURITY</p><h2>修改管理员密码</h2></div><button type="button" class="icon-button" data-close-dialog>×</button></div><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label>当前密码<input type="password" name="current_password" required autocomplete="current-password"></label><label>新密码<input type="password" name="new_password" required minlength="12" maxlength="256" autocomplete="new-password"></label><label>确认新密码<input type="password" name="confirm_password" required minlength="12" maxlength="256" autocomplete="new-password"></label><p class="form-help">至少 12 个字符。修改成功后，其他管理员登录会话将立即失效。</p><div class="dialog-actions"><button type="button" class="button" data-close-dialog>取消</button><button class="button button-primary">更新密码</button></div></form></dialog>
+
+  <dialog id="result-dialog" class="result-dialog"><div class="dialog-head"><div><p class="eyebrow" id="result-eyebrow">RESULT</p><h2 id="result-title">操作结果</h2></div><button type="button" class="icon-button" data-close-result>×</button></div><p id="result-message" class="result-message"></p><div id="result-secret" class="secret-box" hidden><code></code><button class="button button-small" data-copy-secret>复制</button></div><div id="result-login" hidden><a class="button button-primary button-wide" target="_blank" rel="noopener">打开 OpenAI 登录页面</a><p class="device-label">设备码</p><div class="device-code"></div><p id="login-poll-status" class="poll-status"><span></span>等待登录完成…</p></div><div class="dialog-actions"><button class="button button-primary" data-close-result>完成</button></div></dialog>
+</body>
+</html>

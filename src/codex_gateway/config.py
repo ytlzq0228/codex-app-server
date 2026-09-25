@@ -10,6 +10,9 @@ class Settings(BaseSettings):
     backend: Literal["mock", "app_server"] = "mock"
     dev_api_key: SecretStr | None = SecretStr("cag_dev_local")
     admin_password: SecretStr = SecretStr("development-admin-change-me")
+    admin_username: str = "admin"
+    admin_session_secret: SecretStr | None = None
+    admin_cookie_secure: bool = False
     auto_create_schema: bool = True
     model_name: str = "codex"
     upstream_model: str = "gpt-6-sol"
@@ -22,6 +25,9 @@ class Settings(BaseSettings):
     manager_url: str = "http://worker-manager:4600"
     manager_token: SecretStr = SecretStr("development-manager-token-change-me")
     max_request_bytes: int = 1_048_576
+    worker_recovery_interval_seconds: float = 30.0
+    worker_failure_cooldown_seconds: int = 300
+    worker_limit_cooldown_seconds: int = 1800
 
     def public_models(self) -> list[str]:
         configured = [model.strip() for model in self.allowed_models.split(",") if model.strip()]

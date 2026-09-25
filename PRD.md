@@ -216,7 +216,7 @@ Raspberry Pi -> HTTPS/Bearer -> FastAPI -> PostgreSQL
 
 ### 管理端审计与会话管理（已完成）
 
-- 请求历史页面分页展示全部请求，可展开查看 Key、Worker、模型、状态码、耗时、Token 和错误代码，不保存输入输出正文。
+- 请求历史按 API Key 与 Codex thread 聚合为会话，使用 `previous_response_id`、ResponseBinding 和内部 thread ID 串联多轮请求；展开会话后按时间查看每次请求的 Worker、模型、状态码、耗时、Token 和错误代码，不保存输入输出正文。
 - Key 活动会话按 Codex thread 聚合，展示对应 Worker；支持删除单个 thread 的全部响应绑定或清空某个 Key 的全部绑定。
 - 活动会话页只展示未过期且状态正常的 Responses 会话，并显示最近使用时间和 TTL 到期时间；后台定时将超过 24 小时未使用的绑定标记为过期。
 - 支持修改 Key 名称以及自动池化/固定 Worker 调度策略；已有会话不会因策略修改而迁移。
@@ -231,3 +231,23 @@ Raspberry Pi -> HTTPS/Bearer -> FastAPI -> PostgreSQL
 - 空闲超过 600 秒的 WS 由后台回收。
 - `previous_response_id` 固定原 Worker，但可通过该 Key 在该 Worker 上任一空闲 WS 恢复；同一 Codex thread 使用独立锁保持 turn 串行。
 - 每个 WS 使用 `/{key_id}/ws-{slot_id}` 独立工作目录。
+
+
+增加会话超时清理机制
+检查现在同一个key在同一个docker上是不是最大只会创建一个WS。是否有可能创建多个WS并设置单worker的最大WS并发上限
+
+优先复用该 Key 的空闲 WS。
+未达到 Key/Worker 上限时创建新 WS。
+达到 Key 上限后等待该 Key 的空闲 WS。
+达到 Worker 总上限后不再建连接，进入排队。
+等待超时返回明确的 worker_capacity_exceeded。
+previous_response_id 仍固定原 Worker，但可以选择该 Key 在该 Worker 上的任一空闲 WS恢复 thread。
+同一个 Codex thread 必须加独立锁，避免同一会话的两个 turn 并发执行。
+每个 WS 使用独立工作目录，例如 /{key_id}/{slot_id}，满足不同 WS 文件隔离要求。
+
+MAX_WS_PER_KEY_WORKER	10	同一 Key 在同一 Worker 最多并行两个请求
+MAX_WS_PER_WORKER	40	单个 Worker 所有 Key 合计的持久 WS 上限
+WS_IDLE_TTL_SECONDS	600	回收长期空闲连接
+WS_ACQUIRE_TIMEOUT_SECONDS	30	等待连接槽位超时后返回 429/503
+
+请求历史界面，按照previous_response_id等线索聚合同一个会话的多个请求

@@ -17,7 +17,15 @@ Only the internal worker-manager receives the Docker socket. It refuses to remov
 
 Connection failures, logged-out accounts, and subscription-limit errors quarantine a worker automatically. Pooled stateless requests may retry once on another worker only when the failed turn is known not to have started. Pinned keys and `previous_response_id` continuations never move between workers. The recovery loop probes quarantined workers after their cooldown and returns them to the pool only when the app-server is reachable and the account is logged in. Configure the sweep and cooldowns with `CODEX_GATEWAY_WORKER_RECOVERY_INTERVAL_SECONDS`, `CODEX_GATEWAY_WORKER_FAILURE_COOLDOWN_SECONDS`, and `CODEX_GATEWAY_WORKER_LIMIT_COOLDOWN_SECONDS`.
 
+Both manual probes and automatic recovery probes run a minimal real Codex turn. `account/read` is used only to establish identity; a worker returns to `ready` only after the turn completes successfully. Probes therefore consume a very small amount of subscription usage.
+
+API request sessions release their PostgreSQL transaction before entering a potentially long Codex turn. Configure SQLAlchemy capacity with `CODEX_GATEWAY_DATABASE_POOL_SIZE`, `CODEX_GATEWAY_DATABASE_MAX_OVERFLOW`, and `CODEX_GATEWAY_DATABASE_POOL_TIMEOUT_SECONDS`. An `idle` PostgreSQL connection is a reusable pooled connection; `idle in transaction` during inference indicates a regression.
+
 The admin console provides paginated access to all request records. Deleting an API key is a soft delete: authentication stops immediately and active response bindings are removed, while usage records remain available for audit. Removing a single active session deletes every `previous_response_id` binding for that Key/thread pair, so subsequent continuation attempts return `previous_response_not_found`.
+
+Only Responses API requests create server-side response-to-thread bindings. The bindings use a sliding TTL controlled by `CODEX_GATEWAY_RESPONSE_BINDING_TTL_HOURS` (24 hours by default). Chat Completions remains stateless and expects callers to resend the complete `messages` transcript. Expired or unresumable Responses sessions return `previous_response_not_found`; a failed thread resume does not quarantine an otherwise healthy worker.
+
+The app-server connection pool allows up to 10 WebSockets per API Key/Worker pair and 40 WebSockets per Worker by default. Idle connections are reaped after 600 seconds. Requests wait up to 30 seconds for a slot and then receive HTTP 503 with `worker_capacity_exceeded`. Configure these limits with `CODEX_GATEWAY_MAX_WS_PER_KEY_WORKER`, `CODEX_GATEWAY_MAX_WS_PER_WORKER`, `CODEX_GATEWAY_WS_IDLE_TTL_SECONDS`, and `CODEX_GATEWAY_WS_ACQUIRE_TIMEOUT_SECONDS`.
 
 ## Security notes
 

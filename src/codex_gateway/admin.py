@@ -18,6 +18,7 @@ from .admin_auth import (
     verify_csrf,
 )
 from .app_server import AppServerError, open_app_server
+from .backend import WorkerFailure, classify_worker_failure, run_healthcheck_turn
 from .config import Settings, get_settings
 from .database import get_session
 from .models import AdminUser, ApiKey, ResponseBinding, UsageRecord, Worker, WorkerStatus
@@ -151,8 +152,8 @@ async def render_admin_page(request: Request, page: str, history_page: int, admi
         select(ResponseBinding, ApiKey, Worker)
         .join(ApiKey, ResponseBinding.api_key_id == ApiKey.id)
         .join(Worker, ResponseBinding.worker_id == Worker.id)
-        .where(ApiKey.deleted_at.is_(None))
-        .order_by(ResponseBinding.created_at.desc())
+        .where(ApiKey.deleted_at.is_(None), ResponseBinding.status == "active", ResponseBinding.expires_at > datetime.now(timezone.utc))
+        .order_by(ResponseBinding.last_used_at.desc())
     )).all()
     active_sessions = []
     sessions_by_key: dict[UUID, list] = {}
@@ -385,7 +386,10 @@ async def probe_worker_record(worker: Worker, session: AsyncSession, settings: S
     try:
         async with open_app_server(worker.endpoint, settings.app_server_token.get_secret_value(), settings.app_server_timeout_seconds) as app_server:
             response = await app_server.call("account/read", {"refreshToken": False})
-        account = response.get("account") or {}
+            account = response.get("account") or {}
+            if not account:
+                raise WorkerFailure("Codex worker is not logged in", kind="logged_out", safe_to_retry=True)
+            await run_healthcheck_turn(app_server, settings.upstream_model)
         was_error = worker.status == WorkerStatus.error
         worker.status = WorkerStatus.ready
         worker.auth_mode = account.get("type")
@@ -396,25 +400,18 @@ async def probe_worker_record(worker: Worker, session: AsyncSession, settings: S
         worker.failure_reason = None
         worker.quarantined_at = None
         worker.retry_after = None
-        logged_in = bool(account)
-        if not logged_in:
-            worker.status = WorkerStatus.error
-            worker.failure_kind = "logged_out"
-            worker.failure_reason = "Codex worker is not logged in"
-            worker.quarantined_at = datetime.now(timezone.utc)
-            worker.retry_after = datetime.now(timezone.utc) + timedelta(seconds=settings.worker_failure_cooldown_seconds)
-        message = (
-            f"Worker 可连接；账户类型：{worker.auth_mode}；套餐：{worker.plan_type or '—'}"
-            if logged_in else "Worker 可连接，但 Codex 账号尚未登录。"
-        )
+        logged_in = True
+        message = f"Worker 推理测试通过；账户类型：{worker.auth_mode}；套餐：{worker.plan_type or '—'}"
         ok = True
     except Exception as exc:
         worker.status = WorkerStatus.error
         message = f"Worker 探测失败：{exc}"
-        worker.failure_kind = "connection"
+        kind = exc.kind if isinstance(exc, WorkerFailure) else classify_worker_failure(str(exc))
+        worker.failure_kind = kind
         worker.failure_reason = str(exc)[:500]
         worker.quarantined_at = datetime.now(timezone.utc)
-        worker.retry_after = datetime.now(timezone.utc) + timedelta(seconds=settings.worker_failure_cooldown_seconds)
+        cooldown = settings.worker_limit_cooldown_seconds if kind == "limit" else settings.worker_failure_cooldown_seconds
+        worker.retry_after = datetime.now(timezone.utc) + timedelta(seconds=cooldown)
         ok = False
         logged_in = False
     await session.commit()

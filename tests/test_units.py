@@ -3,9 +3,12 @@ from uuid import uuid4
 import pytest
 
 import codex_gateway.main as main_module
+import codex_gateway.app_server as app_server_module
 from codex_gateway.auth import ApiPrincipal
-from codex_gateway.backend import BackendTarget, WorkerFailure, _token_counts, classify_worker_failure
-from codex_gateway.main import complete_with_failover
+from codex_gateway.app_server import AppServerCapacityError, AppServerError, AppServerPool
+from codex_gateway.backend import AppServerBackend, BackendTarget, WorkerFailure, _token_counts, classify_worker_failure, run_healthcheck_turn
+from codex_gateway.config import get_settings
+from codex_gateway.main import complete_with_failover, release_request_session
 from codex_gateway.schemas import BackendResult, ResponseRequest
 from codex_gateway.security import generate_api_key, hash_api_key, hash_password, keys_equal, verify_password
 
@@ -46,10 +49,16 @@ def test_token_usage_variants(payload: dict, expected: tuple[int, int]) -> None:
     ("Codex worker is not logged in", "logged_out"),
     ("You have reached your 5 hour usage limit", "limit"),
     ("HTTP 429 too many requests", "limit"),
+    ("invalid_request_error: model is not supported", "request"),
     ("websocket closed unexpectedly", "connection"),
 ])
 def test_worker_failure_classification(message: str, kind: str) -> None:
     assert classify_worker_failure(message) == kind
+
+
+def test_generic_gpt_56_client_name_maps_to_codex_variant() -> None:
+    backend = AppServerBackend(get_settings())
+    assert backend.model("gpt-5.6") == "gpt-5.6-sol"
 
 
 @pytest.mark.asyncio
@@ -104,3 +113,143 @@ async def test_ambiguous_started_turn_is_never_replayed(monkeypatch) -> None:
     with pytest.raises(WorkerFailure):
         await complete_with_failover(ResponseRequest(model="codex", input="hello"), Backend(), ApiPrincipal(None, "test"), target, allow_retry=True)
     assert retry_called is False
+
+
+@pytest.mark.asyncio
+async def test_request_database_session_is_released_before_inference() -> None:
+    calls: list[str] = []
+
+    class FakeSession:
+        def in_transaction(self):
+            return True
+
+        async def commit(self):
+            calls.append("commit")
+
+        async def close(self):
+            calls.append("close")
+
+    await release_request_session(FakeSession())
+    assert calls == ["commit", "close"]
+
+
+@pytest.mark.asyncio
+async def test_healthcheck_turn_requires_successful_inference() -> None:
+    class FakeServer:
+        async def call(self, method, _params):
+            return {"thread": {"id": "thread-health"}} if method == "thread/start" else {}
+
+        async def messages(self):
+            yield {"method": "turn/completed", "params": {"turn": {"status": "completed"}}}
+
+        async def reject_server_request(self, _message):
+            return None
+
+    await run_healthcheck_turn(FakeServer(), "gpt-test")
+
+
+@pytest.mark.asyncio
+async def test_healthcheck_turn_preserves_usage_limit_failure() -> None:
+    class FakeServer:
+        async def call(self, method, _params):
+            return {"thread": {"id": "thread-health"}} if method == "thread/start" else {}
+
+        async def messages(self):
+            yield {"method": "turn/completed", "params": {"turn": {"status": "failed", "error": {"message": "You've hit your usage limit"}}}}
+
+        async def reject_server_request(self, _message):
+            return None
+
+    with pytest.raises(WorkerFailure) as exc:
+        await run_healthcheck_turn(FakeServer(), "gpt-test")
+    assert exc.value.kind == "limit"
+
+
+@pytest.mark.asyncio
+async def test_failed_thread_resume_is_a_session_failure() -> None:
+    class FakeServer:
+        async def call(self, method, _params):
+            assert method == "thread/resume"
+            raise AppServerError("thread not found")
+
+    backend = AppServerBackend(get_settings())
+    request = ResponseRequest(model="codex", input="continue", previous_response_id="thread-missing")
+    with pytest.raises(WorkerFailure) as exc:
+        await backend._start_thread(FakeServer(), request, "/workspace/key")
+    assert exc.value.kind == "session"
+    assert exc.value.safe_to_retry is False
+
+
+@pytest.mark.asyncio
+async def test_session_failure_does_not_quarantine_or_retry(monkeypatch) -> None:
+    worker_id = uuid4()
+    target = BackendTarget("first", "ws://first", "/workspace/key", worker_id)
+    quarantined = False
+    retried = False
+
+    class Backend:
+        async def complete(self, _body, _target):
+            raise WorkerFailure("thread missing", kind="session", safe_to_retry=False)
+
+    async def fake_quarantine(*_args):
+        nonlocal quarantined
+        quarantined = True
+
+    async def fake_retry(*_args):
+        nonlocal retried
+        retried = True
+
+    monkeypatch.setattr(main_module, "quarantine_worker", fake_quarantine)
+    monkeypatch.setattr(main_module, "retry_target", fake_retry)
+    with pytest.raises(Exception) as exc:
+        await complete_with_failover(ResponseRequest(model="codex", input="continue"), Backend(), ApiPrincipal(None, "test"), target, allow_retry=True)
+    assert getattr(exc.value, "status_code", None) == 404
+    assert quarantined is False
+    assert retried is False
+
+
+@pytest.mark.asyncio
+async def test_app_server_pool_opens_parallel_slots_and_reuses_them(monkeypatch) -> None:
+    created = []
+
+    class FakeSession:
+        closed = False
+
+        async def close(self):
+            self.closed = True
+
+    async def fake_connect(*_args):
+        session = FakeSession()
+        created.append(session)
+        return session
+
+    monkeypatch.setattr(app_server_module, "connect_app_server", fake_connect)
+    pool = AppServerPool("token", 10, max_per_group=2, max_per_worker=4, idle_ttl=600, acquire_timeout=0.1)
+    async with pool.lease("key:worker", "worker", "ws://worker") as (_, first_slot):
+        async with pool.lease("key:worker", "worker", "ws://worker") as (_, second_slot):
+            assert {first_slot, second_slot} == {0, 1}
+            assert len(created) == 2
+    async with pool.lease("key:worker", "worker", "ws://worker") as (_, reused_slot):
+        assert reused_slot in {0, 1}
+        assert len(created) == 2
+    await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_app_server_pool_returns_capacity_error_after_timeout(monkeypatch) -> None:
+    class FakeSession:
+        closed = False
+
+        async def close(self):
+            self.closed = True
+
+    async def fake_connect(*_args):
+        return FakeSession()
+
+    monkeypatch.setattr(app_server_module, "connect_app_server", fake_connect)
+    pool = AppServerPool("token", 10, max_per_group=1, max_per_worker=1, idle_ttl=600, acquire_timeout=0.01)
+    async with pool.lease("key:worker", "worker", "ws://worker"):
+        with pytest.raises(AppServerCapacityError):
+            async with pool.lease("key:worker", "worker", "ws://worker"):
+                pass
+    await pool.close()

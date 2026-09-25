@@ -1,13 +1,19 @@
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any
 
 from websockets.asyncio.client import connect
 
 
 class AppServerError(RuntimeError):
+    pass
+
+
+class AppServerCapacityError(RuntimeError):
     pass
 
 
@@ -86,37 +92,120 @@ async def open_app_server(url: str, token: str, timeout: float = 300.0) -> Async
         await session.close()
 
 
-class AppServerPool:
-    """Persistent app-server sessions keyed by API key and worker."""
+@dataclass
+class AppServerSlot:
+    group_key: str
+    worker_key: str
+    slot_id: int
+    session: AppServerSession | None = None
+    busy: bool = True
+    last_used: float = 0.0
 
-    def __init__(self, token: str, timeout: float) -> None:
+
+class AppServerPool:
+    """Bounded persistent sessions with per-Key and per-Worker capacity limits."""
+
+    def __init__(self, token: str, timeout: float, max_per_group: int = 10, max_per_worker: int = 40, idle_ttl: float = 600.0, acquire_timeout: float = 30.0) -> None:
         self.token = token
         self.timeout = timeout
-        self._sessions: dict[str, AppServerSession] = {}
-        self._locks: dict[str, asyncio.Lock] = {}
-        self._pool_lock = asyncio.Lock()
+        self.max_per_group = max_per_group
+        self.max_per_worker = max_per_worker
+        self.idle_ttl = idle_ttl
+        self.acquire_timeout = acquire_timeout
+        self._slots: list[AppServerSlot] = []
+        self._condition = asyncio.Condition()
+        self._closed = False
+        self._reaper: asyncio.Task | None = None
 
-    def lock(self, key: str) -> asyncio.Lock:
-        return self._locks.setdefault(key, asyncio.Lock())
+    def _ensure_reaper(self) -> None:
+        if not self._reaper:
+            self._reaper = asyncio.create_task(self._reap_loop(), name="app-server-pool-reaper")
 
-    async def session(self, key: str, url: str) -> AppServerSession:
-        async with self._pool_lock:
-            current = self._sessions.get(key)
-            if current and not current.closed:
-                return current
-            if current:
-                await current.close()
-            current = await connect_app_server(url, self.token, self.timeout)
-            self._sessions[key] = current
-            return current
+    async def _drop_stale_locked(self) -> None:
+        now = time.monotonic()
+        stale = [slot for slot in self._slots if not slot.busy and (not slot.session or slot.session.closed or now - slot.last_used >= self.idle_ttl)]
+        for slot in stale:
+            self._slots.remove(slot)
+        if stale:
+            await asyncio.gather(*(slot.session.close() for slot in stale if slot.session), return_exceptions=True)
+            self._condition.notify_all()
 
-    async def invalidate(self, key: str) -> None:
-        async with self._pool_lock:
-            current = self._sessions.pop(key, None)
-        if current:
-            await current.close()
+    async def _reap_loop(self) -> None:
+        interval = max(1.0, min(60.0, self.idle_ttl / 2))
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                async with self._condition:
+                    await self._drop_stale_locked()
+        except asyncio.CancelledError:
+            raise
+
+    @asynccontextmanager
+    async def lease(self, group_key: str, worker_key: str, url: str) -> AsyncIterator[tuple[AppServerSession, int]]:
+        self._ensure_reaper()
+        deadline = time.monotonic() + self.acquire_timeout
+        slot: AppServerSlot | None = None
+        needs_connect = False
+        while slot is None:
+            async with self._condition:
+                if self._closed:
+                    raise RuntimeError("app-server pool is closed")
+                await self._drop_stale_locked()
+                slot = next((item for item in self._slots if item.group_key == group_key and not item.busy), None)
+                if slot:
+                    slot.busy = True
+                    break
+                group_slots = [item for item in self._slots if item.group_key == group_key]
+                worker_slots = [item for item in self._slots if item.worker_key == worker_key]
+                if len(group_slots) < self.max_per_group and len(worker_slots) < self.max_per_worker:
+                    used_ids = {item.slot_id for item in group_slots}
+                    slot_id = next(index for index in range(self.max_per_group) if index not in used_ids)
+                    slot = AppServerSlot(group_key=group_key, worker_key=worker_key, slot_id=slot_id)
+                    self._slots.append(slot)
+                    needs_connect = True
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise AppServerCapacityError("Timed out waiting for an available Codex worker connection")
+                try:
+                    await asyncio.wait_for(self._condition.wait(), remaining)
+                except TimeoutError as exc:
+                    raise AppServerCapacityError("Timed out waiting for an available Codex worker connection") from exc
+        try:
+            if needs_connect:
+                try:
+                    slot.session = await connect_app_server(url, self.token, self.timeout)
+                except Exception:
+                    async with self._condition:
+                        if slot in self._slots:
+                            self._slots.remove(slot)
+                        self._condition.notify_all()
+                    raise
+            if not slot.session:
+                raise RuntimeError("app-server connection slot was not initialized")
+            yield slot.session, slot.slot_id
+        finally:
+            async with self._condition:
+                if slot in self._slots:
+                    slot.busy = False
+                    slot.last_used = time.monotonic()
+                self._condition.notify_all()
+
+    async def invalidate(self, group_key: str, slot_id: int) -> None:
+        async with self._condition:
+            slot = next((item for item in self._slots if item.group_key == group_key and item.slot_id == slot_id), None)
+            if slot:
+                self._slots.remove(slot)
+            self._condition.notify_all()
+        if slot and slot.session:
+            await slot.session.close()
 
     async def close(self) -> None:
-        async with self._pool_lock:
-            sessions, self._sessions = list(self._sessions.values()), {}
-        await asyncio.gather(*(session.close() for session in sessions), return_exceptions=True)
+        self._closed = True
+        if self._reaper:
+            self._reaper.cancel()
+            await asyncio.gather(self._reaper, return_exceptions=True)
+        async with self._condition:
+            slots, self._slots = self._slots, []
+            self._condition.notify_all()
+        await asyncio.gather(*(slot.session.close() for slot in slots if slot.session), return_exceptions=True)

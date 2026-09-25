@@ -61,6 +61,10 @@ class ResponseBinding(Base):
     worker_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("workers.id"), index=True)
     thread_id: Mapped[str] = mapped_column(String(120), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_used_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    status: Mapped[str] = mapped_column(String(16), default="active", index=True)
+    invalid_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
 class UsageRecord(Base):
     __tablename__ = "usage_records"
@@ -74,4 +78,7 @@ class UsageRecord(Base):
     output_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
     error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    endpoint: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    previous_response_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
+    thread_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)

@@ -11,6 +11,7 @@ client = docker.from_env()
 MANAGED_LABEL = "io.codex-gateway.managed"
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
 ID_RE = re.compile(r"^[a-zA-Z0-9-]{1,80}$")
+WORKSPACE_SLOT_COUNT = int(os.environ.get("CODEX_MAX_WS_PER_KEY_WORKER", "10"))
 
 
 class WorkerSpec(BaseModel):
@@ -66,7 +67,8 @@ def prepare_workspace(name: str, workspace_id: str, authorization: str | None = 
     if not ID_RE.fullmatch(workspace_id):
         raise HTTPException(400, "invalid workspace id")
     container = managed_container(name)
-    result = container.exec_run(["mkdir", "-p", f"/workspace/{workspace_id}"], user="10001:10001")
+    paths = [f"/workspace/{workspace_id}", *(f"/workspace/{workspace_id}/ws-{slot}" for slot in range(WORKSPACE_SLOT_COUNT))]
+    result = container.exec_run(["mkdir", "-p", *paths], user="10001:10001")
     if result.exit_code != 0:
         raise HTTPException(502, "could not prepare workspace")
     return {"path": f"/workspace/{workspace_id}"}

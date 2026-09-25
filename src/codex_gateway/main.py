@@ -13,14 +13,14 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select, text
+from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .admin import auth_router as admin_auth_router
 from .admin import router as admin_router
 from .auth import ApiPrincipal, require_api_key
 from .app_server import open_app_server
-from .backend import AppServerBackend, BackendTarget, CompletionBackend, MockBackend, WorkerFailure
+from .backend import AppServerBackend, BackendTarget, CompletionBackend, MockBackend, WorkerFailure, classify_worker_failure, run_healthcheck_turn
 from .config import get_settings
 from .database import SessionLocal, engine, get_session
 from .models import AdminUser, Base, ResponseBinding, UsageRecord, Worker, WorkerStatus
@@ -45,6 +45,22 @@ async def lifespan(app: FastAPI):
                     "ALTER TABLE workers ADD COLUMN IF NOT EXISTS recovered_at TIMESTAMPTZ",
                     "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ",
                     "CREATE INDEX IF NOT EXISTS ix_api_keys_deleted_at ON api_keys (deleted_at)",
+                    "ALTER TABLE response_bindings ADD COLUMN IF NOT EXISTS last_used_at TIMESTAMPTZ",
+                    "ALTER TABLE response_bindings ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ",
+                    "ALTER TABLE response_bindings ADD COLUMN IF NOT EXISTS status VARCHAR(16)",
+                    "ALTER TABLE response_bindings ADD COLUMN IF NOT EXISTS invalid_reason VARCHAR(500)",
+                    "UPDATE response_bindings SET last_used_at = COALESCE(last_used_at, created_at), expires_at = COALESCE(expires_at, created_at + INTERVAL '24 hours'), status = COALESCE(status, 'active')",
+                    "CREATE INDEX IF NOT EXISTS ix_response_bindings_last_used_at ON response_bindings (last_used_at)",
+                    "CREATE INDEX IF NOT EXISTS ix_response_bindings_expires_at ON response_bindings (expires_at)",
+                    "CREATE INDEX IF NOT EXISTS ix_response_bindings_status ON response_bindings (status)",
+                    "ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS endpoint VARCHAR(32)",
+                    "ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS previous_response_id VARCHAR(80)",
+                    "ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS thread_id VARCHAR(120)",
+                    "UPDATE usage_records SET endpoint = CASE WHEN request_id LIKE 'chatcmpl-%' THEN 'chat.completions' ELSE 'responses' END WHERE endpoint IS NULL",
+                    "UPDATE usage_records AS usage SET thread_id = binding.thread_id FROM response_bindings AS binding WHERE usage.request_id = binding.response_id AND usage.thread_id IS NULL",
+                    "CREATE INDEX IF NOT EXISTS ix_usage_records_endpoint ON usage_records (endpoint)",
+                    "CREATE INDEX IF NOT EXISTS ix_usage_records_previous_response_id ON usage_records (previous_response_id)",
+                    "CREATE INDEX IF NOT EXISTS ix_usage_records_thread_id ON usage_records (thread_id)",
                 ):
                     await connection.execute(text(ddl))
     async with SessionLocal() as session:
@@ -81,6 +97,43 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def binding_expiry(now: datetime | None = None) -> datetime:
+    return (now or utcnow()) + timedelta(hours=get_settings().response_binding_ttl_hours)
+
+
+async def expire_response_bindings(session: AsyncSession) -> int:
+    now = utcnow()
+    result = await session.execute(
+        update(ResponseBinding)
+        .where(ResponseBinding.status == "active", ResponseBinding.expires_at <= now)
+        .values(status="expired", invalid_reason="Session TTL expired")
+    )
+    return result.rowcount or 0
+
+
+async def touch_response_thread(session: AsyncSession, binding: ResponseBinding) -> None:
+    now = utcnow()
+    await session.execute(
+        update(ResponseBinding)
+        .where(
+            ResponseBinding.api_key_id == binding.api_key_id,
+            ResponseBinding.thread_id == binding.thread_id,
+            ResponseBinding.status == "active",
+        )
+        .values(last_used_at=now, expires_at=binding_expiry(now))
+    )
+
+
+async def invalidate_response_thread(api_key_id, thread_id: str, reason: str) -> None:
+    async with SessionLocal() as session:
+        await session.execute(
+            update(ResponseBinding)
+            .where(ResponseBinding.api_key_id == api_key_id, ResponseBinding.thread_id == thread_id)
+            .values(status="broken", invalid_reason=reason[:500])
+        )
+        await session.commit()
+
+
 async def quarantine_worker(worker_id, reason: str, kind: str = "connection") -> None:
     settings = get_settings()
     cooldown = settings.worker_limit_cooldown_seconds if kind == "limit" else settings.worker_failure_cooldown_seconds
@@ -104,12 +157,13 @@ async def recover_worker(worker: Worker) -> bool:
     try:
         async with open_app_server(worker.endpoint, settings.app_server_token.get_secret_value(), min(settings.app_server_timeout_seconds, 20)) as server:
             response = await server.call("account/read", {"refreshToken": True})
-        account = response.get("account") or {}
-        if not account:
-            worker.failure_kind = "logged_out"
-            worker.failure_reason = "Codex worker is not logged in"
-            worker.retry_after = utcnow() + timedelta(seconds=settings.worker_failure_cooldown_seconds)
-            return False
+            account = response.get("account") or {}
+            if not account:
+                worker.failure_kind = "logged_out"
+                worker.failure_reason = "Codex worker is not logged in"
+                worker.retry_after = utcnow() + timedelta(seconds=settings.worker_failure_cooldown_seconds)
+                return False
+            await run_healthcheck_turn(server, settings.upstream_model)
         worker.status = WorkerStatus.ready
         worker.auth_mode = account.get("type")
         worker.plan_type = account.get("planType")
@@ -121,8 +175,11 @@ async def recover_worker(worker: Worker) -> bool:
         worker.retry_after = None
         return True
     except Exception as exc:
+        kind = exc.kind if isinstance(exc, WorkerFailure) else classify_worker_failure(str(exc))
+        worker.failure_kind = kind
         worker.failure_reason = str(exc)[:500]
-        worker.retry_after = utcnow() + timedelta(seconds=settings.worker_failure_cooldown_seconds)
+        cooldown = settings.worker_limit_cooldown_seconds if kind == "limit" else settings.worker_failure_cooldown_seconds
+        worker.retry_after = utcnow() + timedelta(seconds=cooldown)
         return False
 
 
@@ -132,6 +189,7 @@ async def worker_recovery_loop() -> None:
         try:
             await asyncio.sleep(settings.worker_recovery_interval_seconds)
             async with SessionLocal() as session:
+                await expire_response_bindings(session)
                 workers = (await session.scalars(select(Worker).where(Worker.enabled.is_(True), Worker.status == WorkerStatus.error))).all()
                 now = utcnow()
                 for worker in workers:
@@ -269,7 +327,7 @@ async def choose_target(
         worker = await session.get(Worker, principal.pinned_worker_id)
         candidates = [worker] if worker else []
     else:
-        candidates = list((await session.scalars(select(Worker).where(Worker.enabled.is_(True), Worker.status.in_([WorkerStatus.ready, WorkerStatus.busy])).order_by(Worker.status, Worker.last_seen_at.desc().nullslast()))).all())
+        candidates = list((await session.scalars(select(Worker).where(Worker.enabled.is_(True), Worker.status.in_([WorkerStatus.ready, WorkerStatus.busy])).order_by(func.random()))).all())
     candidates = [worker for worker in candidates if worker.id not in excluded and worker.enabled and worker.status in {WorkerStatus.ready, WorkerStatus.busy}]
     if not candidates:
         raise worker_unavailable(bound=binding is not None)
@@ -293,10 +351,23 @@ async def retry_target(principal: ApiPrincipal, failed: BackendTarget) -> Backen
         return await choose_target(principal, session, exclude_worker_ids={failed.worker_id})
 
 
+async def release_request_session(session: AsyncSession) -> None:
+    """Do not hold a database connection while a long Codex turn is running."""
+    if session.in_transaction():
+        await session.commit()
+    await session.close()
+
+
 async def complete_with_failover(body: ResponseRequest, backend: CompletionBackend, principal: ApiPrincipal, target: BackendTarget, *, allow_retry: bool) -> tuple[BackendResult, BackendTarget]:
     try:
         return await backend.complete(body, target), target
     except WorkerFailure as exc:
+        if exc.kind == "request":
+            raise HTTPException(400, detail={"error": {"message": worker_failure_message(exc), "type": "invalid_request_error", "code": "invalid_request", "param": "model"}}) from exc
+        if exc.kind == "session":
+            raise HTTPException(404, detail={"error": {"message": "The previous response session is no longer available", "type": "invalid_request_error", "code": "previous_response_not_found", "param": "previous_response_id"}}) from exc
+        if exc.kind == "capacity":
+            raise HTTPException(503, detail={"error": {"message": "Timed out waiting for an available Codex worker connection", "type": "server_error", "code": "worker_capacity_exceeded", "param": None}}, headers={"Retry-After": "5"}) from exc
         if target.worker_id:
             await quarantine_worker(target.worker_id, str(exc), exc.kind)
         if not (allow_retry and exc.safe_to_retry):
@@ -305,16 +376,40 @@ async def complete_with_failover(body: ResponseRequest, backend: CompletionBacke
         try:
             return await backend.complete(body, replacement), replacement
         except WorkerFailure as retry_exc:
-            if replacement.worker_id:
+            if retry_exc.kind not in {"request", "session", "capacity"} and replacement.worker_id:
                 await quarantine_worker(replacement.worker_id, str(retry_exc), retry_exc.kind)
             raise
 
 
-async def save_usage(response_id: str, principal: ApiPrincipal, target: BackendTarget, model: str, status_code: int, started: float, result: BackendResult | None = None, error_code: str | None = None) -> None:
+def worker_failure_message(exc: Exception) -> str:
+    raw = str(exc)
+    try:
+        payload = json.loads(raw)
+        return payload.get("error", {}).get("message") or raw
+    except (ValueError, TypeError, AttributeError):
+        return raw
+
+
+async def save_usage(
+    response_id: str,
+    principal: ApiPrincipal,
+    target: BackendTarget,
+    model: str,
+    status_code: int,
+    started: float,
+    result: BackendResult | None = None,
+    error_code: str | None = None,
+    *,
+    persist_binding: bool = False,
+    previous_response_id: str | None = None,
+    thread_id: str | None = None,
+) -> None:
     async with SessionLocal() as session:
-        session.add(UsageRecord(request_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, model=model, status_code=status_code, input_tokens=result.input_tokens if result else 0, output_tokens=result.output_tokens if result else 0, duration_ms=int((time.monotonic() - started) * 1000), error_code=error_code))
-        if result and principal.key_id and result.thread_id and target.worker_id:
-            session.add(ResponseBinding(response_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, thread_id=result.thread_id))
+        endpoint = "chat.completions" if response_id.startswith("chatcmpl-") else "responses"
+        session.add(UsageRecord(request_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, model=model, status_code=status_code, input_tokens=result.input_tokens if result else 0, output_tokens=result.output_tokens if result else 0, duration_ms=int((time.monotonic() - started) * 1000), error_code=error_code, endpoint=endpoint, previous_response_id=previous_response_id, thread_id=thread_id or (result.thread_id if result else None)))
+        if persist_binding and result and principal.key_id and result.thread_id and target.worker_id:
+            now = utcnow()
+            session.add(ResponseBinding(response_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, thread_id=result.thread_id, last_used_at=now, expires_at=binding_expiry(now), status="active"))
         await session.commit()
 
 
@@ -342,7 +437,7 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
                         yield sse({"type": "response.output_text.delta", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "delta": event.delta}); sequence += 1
                 break
             except WorkerFailure as exc:
-                if target.worker_id:
+                if exc.kind not in {"request", "session", "capacity"} and target.worker_id:
                     await quarantine_worker(target.worker_id, str(exc), exc.kind)
                 # Retry once only when Codex confirms the turn could not have begun and
                 # no model content has reached the client.
@@ -350,12 +445,22 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
                     raise
                 target = await retry_target(principal, target)
                 retried = True
-    except Exception:
-        error = {"code": "backend_error", "message": "The Codex backend could not complete the request"}
+    except Exception as exc:
+        session_failure = isinstance(exc, WorkerFailure) and exc.kind == "session"
+        capacity_failure = isinstance(exc, WorkerFailure) and exc.kind == "capacity"
+        if session_failure and principal.key_id and public_previous_id:
+            async with SessionLocal() as session:
+                previous = await session.scalar(select(ResponseBinding).where(ResponseBinding.response_id == public_previous_id, ResponseBinding.api_key_id == principal.key_id))
+                if previous:
+                    await invalidate_response_thread(previous.api_key_id, previous.thread_id, str(exc))
+        error = {
+            "code": "previous_response_not_found" if session_failure else "worker_capacity_exceeded" if capacity_failure else "backend_error",
+            "message": "The previous response session is no longer available" if session_failure else "Timed out waiting for an available Codex worker connection" if capacity_failure else "The Codex backend could not complete the request",
+        }
         yield sse({"type": "error", "sequence_number": sequence, **error, "param": None}); sequence += 1
         failed = {**created, "status": "failed", "error": error}
         yield sse({"type": "response.failed", "sequence_number": sequence, "response": failed})
-        await save_usage(response_id, principal, target, body.model, 502, started, error_code="backend_error")
+        await save_usage(response_id, principal, target, body.model, 404 if session_failure else 503 if capacity_failure else 502, started, error_code=error["code"], previous_response_id=public_previous_id, thread_id=body.previous_response_id)
         return
     text = "".join(chunks).rstrip()
     yield sse({"type": "response.output_text.done", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "text": text}); sequence += 1
@@ -365,7 +470,7 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
     yield sse({"type": "response.output_item.done", "sequence_number": sequence, "output_index": 0, "item": item}); sequence += 1
     result = BackendResult(text=text, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens)
     yield sse({"type": "response.completed", "sequence_number": sequence, "response": response_object(response_id, body, result, message_id=message_id, previous_response_id=public_previous_id)})
-    await save_usage(response_id, principal, target, body.model, 200, started, result)
+    await save_usage(response_id, principal, target, body.model, 200, started, result, persist_binding=True, previous_response_id=public_previous_id)
 
 
 async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseRequest, backend: CompletionBackend, principal: ApiPrincipal, target: BackendTarget, allow_retry: bool = True) -> AsyncIterator[str]:
@@ -400,16 +505,19 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
                         yield chat_sse(chunk({"content": event.delta}))
                 break
             except WorkerFailure as exc:
-                if target.worker_id:
+                if exc.kind not in {"request", "capacity"} and target.worker_id:
                     await quarantine_worker(target.worker_id, str(exc), exc.kind)
                 if retried or content_emitted or not allow_retry or not exc.safe_to_retry:
                     raise
                 target = await retry_target(principal, target)
                 retried = True
-    except Exception:
-        yield chat_sse({"error": {"message": "The Codex backend could not complete the request", "type": "server_error", "code": "backend_error"}})
+    except Exception as exc:
+        capacity_failure = isinstance(exc, WorkerFailure) and exc.kind == "capacity"
+        error_code = "worker_capacity_exceeded" if capacity_failure else "backend_error"
+        error_message = "Timed out waiting for an available Codex worker connection" if capacity_failure else "The Codex backend could not complete the request"
+        yield chat_sse({"error": {"message": error_message, "type": "server_error", "code": error_code}})
         yield chat_sse("[DONE]")
-        await save_usage(completion_id, principal, target, body.model, 502, started, error_code="backend_error")
+        await save_usage(completion_id, principal, target, body.model, 503 if capacity_failure else 502, started, error_code=error_code)
         return
     result = BackendResult(text="", thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens)
     yield chat_sse(chunk({}, "stop"))
@@ -446,12 +554,16 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
         return openai_error(400, unsupported[1], "unsupported_parameter", param=unsupported[0])
     request = body.to_response_request()
     target = await choose_target(principal, session)
+    await release_request_session(session)
     if body.stream:
         return StreamingResponse(chat_completion_stream(body, request, backend, principal, target, principal.pinned_worker_id is None), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
     started = time.monotonic()
     completion_id, created = f"chatcmpl-{uuid4().hex}", int(time.time())
     try:
         result, target = await complete_with_failover(request, backend, principal, target, allow_retry=principal.pinned_worker_id is None)
+    except HTTPException as exc:
+        await save_usage(completion_id, principal, target, body.model, exc.status_code, started, error_code="invalid_request")
+        raise
     except Exception:
         await save_usage(completion_id, principal, target, body.model, 502, started, error_code="backend_error")
         raise
@@ -474,17 +586,31 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
         binding = await session.scalar(select(ResponseBinding).where(ResponseBinding.response_id == public_previous_id, ResponseBinding.api_key_id == principal.key_id))
         if not binding:
             return openai_error(404, "previous_response_id was not found", "previous_response_not_found")
+        if binding.status != "active" or binding.expires_at <= utcnow():
+            if binding.status == "active":
+                binding.status = "expired"
+                binding.invalid_reason = "Session TTL expired"
+                await session.commit()
+            return openai_error(404, "previous_response_id has expired or is no longer available", "previous_response_not_found", param="previous_response_id")
+        await touch_response_thread(session, binding)
         body = body.model_copy(update={"previous_response_id": binding.thread_id})
     target = await choose_target(principal, session, binding)
+    await release_request_session(session)
     if body.stream:
         return StreamingResponse(response_stream(body, backend, principal, target, public_previous_id, binding is None and principal.pinned_worker_id is None), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
     started = time.monotonic()
     try:
         result, target = await complete_with_failover(body, backend, principal, target, allow_retry=binding is None and principal.pinned_worker_id is None)
+    except HTTPException as exc:
+        response_id = f"resp_{uuid4().hex}"
+        if binding and exc.status_code == 404:
+            await invalidate_response_thread(binding.api_key_id, binding.thread_id, "Codex thread could not be resumed")
+        await save_usage(response_id, principal, target, body.model, exc.status_code, started, error_code="invalid_request", previous_response_id=public_previous_id, thread_id=body.previous_response_id)
+        raise
     except Exception:
         response_id = f"resp_{uuid4().hex}"
-        await save_usage(response_id, principal, target, body.model, 502, started, error_code="backend_error")
+        await save_usage(response_id, principal, target, body.model, 502, started, error_code="backend_error", previous_response_id=public_previous_id, thread_id=body.previous_response_id)
         raise
     response_id = f"resp_{uuid4().hex}"
-    await save_usage(response_id, principal, target, body.model, 200, started, result)
+    await save_usage(response_id, principal, target, body.model, 200, started, result, persist_binding=True, previous_response_id=public_previous_id)
     return response_object(response_id, body, result, previous_response_id=public_previous_id)

@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     model_name: str = "codex"
     upstream_model: str = "gpt-6-sol"
     allowed_models: str = "gpt-6-sol,gpt-6-astra,gpt-6-luna,gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna,gpt-5.6"
+    model_aliases: str = "gpt-5.6:gpt-5.6-sol"
     app_server_url: str = "ws://worker-1:4500"
     app_server_token: SecretStr = SecretStr("development-worker-token-change-me")
     app_server_timeout_seconds: float = 300.0
@@ -28,10 +29,26 @@ class Settings(BaseSettings):
     worker_recovery_interval_seconds: float = 30.0
     worker_failure_cooldown_seconds: int = 300
     worker_limit_cooldown_seconds: int = 1800
+    response_binding_ttl_hours: int = 24
+    max_ws_per_key_worker: int = 10
+    max_ws_per_worker: int = 40
+    ws_idle_ttl_seconds: float = 600.0
+    ws_acquire_timeout_seconds: float = 30.0
+    database_pool_size: int = 20
+    database_max_overflow: int = 30
+    database_pool_timeout_seconds: float = 10.0
 
     def public_models(self) -> list[str]:
         configured = [model.strip() for model in self.allowed_models.split(",") if model.strip()]
         return list(dict.fromkeys([self.model_name, *configured]))
+
+    def model_alias_map(self) -> dict[str, str]:
+        aliases: dict[str, str] = {}
+        for item in self.model_aliases.split(","):
+            public, separator, upstream = item.strip().partition(":")
+            if separator and public and upstream:
+                aliases[public] = upstream
+        return aliases
 
 @lru_cache
 def get_settings() -> Settings:

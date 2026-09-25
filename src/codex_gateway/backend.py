@@ -1,9 +1,11 @@
+import asyncio
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
-from .app_server import AppServerError, AppServerPool
+from .app_server import AppServerCapacityError, AppServerError, AppServerPool
 from .config import Settings
 from .schemas import BackendResult, BackendStreamEvent, ResponseRequest
 
@@ -27,11 +29,46 @@ class WorkerFailure(RuntimeError):
 
 def classify_worker_failure(message: str) -> str:
     lowered = message.lower().replace("_", " ").replace("-", " ")
+    if any(term in lowered for term in ("invalid request", "model is not supported", "model is unsupported", "unsupported model")):
+        return "request"
     if any(term in lowered for term in ("not logged in", "login", "auth", "unauthorized", "401")):
         return "logged_out"
     if any(term in lowered for term in ("usage limit", "rate limit", "limit reached", "quota", "too many requests", "429", "5 hour", "five hour")):
         return "limit"
     return "connection"
+
+
+async def run_healthcheck_turn(app_server: Any, model: str, cwd: str = "/workspace") -> None:
+    """Run a minimal real turn; account/read alone cannot detect exhausted quota."""
+    result = await app_server.call(
+        "thread/start",
+        {"model": model, "cwd": cwd, "approvalPolicy": "never", "sandbox": "workspace-write", "serviceName": "codex_gateway_healthcheck"},
+    )
+    thread_id = result["thread"]["id"]
+    await app_server.call(
+        "turn/start",
+        {
+            "threadId": thread_id,
+            "input": [{"type": "text", "text": "Reply with OK only."}],
+            "cwd": cwd,
+            "approvalPolicy": "never",
+            "sandboxPolicy": {"type": "workspaceWrite", "writableRoots": [cwd], "networkAccess": False},
+            "model": model,
+            "effort": "low",
+        },
+    )
+    async for message in app_server.messages():
+        method, params = message.get("method"), message.get("params", {})
+        if message.get("id") is not None and method:
+            await app_server.reject_server_request(message)
+        elif method == "turn/completed":
+            turn = params.get("turn", {})
+            if turn.get("status") == "failed":
+                error = turn.get("error") or {}
+                detail = error.get("message", error) if isinstance(error, dict) else error
+                detail = str(detail or "Codex health-check turn failed")
+                raise WorkerFailure(detail, kind=classify_worker_failure(detail), safe_to_retry=False)
+            return
 
 
 class CompletionBackend(Protocol):
@@ -71,65 +108,106 @@ class AppServerBackend:
         self.timeout = settings.app_server_timeout_seconds
         self.public_model = settings.model_name
         self.upstream_model = settings.upstream_model
-        self.pool = AppServerPool(self.token, self.timeout)
+        self.model_aliases = settings.model_alias_map()
+        self.pool = AppServerPool(
+            self.token, self.timeout,
+            max_per_group=settings.max_ws_per_key_worker,
+            max_per_worker=settings.max_ws_per_worker,
+            idle_ttl=settings.ws_idle_ttl_seconds,
+            acquire_timeout=settings.ws_acquire_timeout_seconds,
+        )
+        self._thread_locks: dict[str, tuple[asyncio.Lock, int]] = {}
+        self._thread_locks_guard = asyncio.Lock()
+
+    @asynccontextmanager
+    async def _thread_guard(self, thread_id: str | None):
+        if not thread_id:
+            yield
+            return
+        async with self._thread_locks_guard:
+            lock, users = self._thread_locks.get(thread_id, (asyncio.Lock(), 0))
+            self._thread_locks[thread_id] = (lock, users + 1)
+        acquired = False
+        try:
+            await lock.acquire()
+            acquired = True
+            yield
+        finally:
+            if acquired:
+                lock.release()
+            async with self._thread_locks_guard:
+                current_lock, users = self._thread_locks[thread_id]
+                if users <= 1:
+                    self._thread_locks.pop(thread_id, None)
+                else:
+                    self._thread_locks[thread_id] = (current_lock, users - 1)
 
     def model(self, requested: str) -> str:
-        return self.upstream_model if requested == self.public_model else requested
+        if requested == self.public_model:
+            return self.upstream_model
+        return self.model_aliases.get(requested, requested)
 
     async def _start_thread(self, app_server, request: ResponseRequest, workspace: str) -> str:
         if request.previous_response_id:
-            result = await app_server.call("thread/resume", {"threadId": request.previous_response_id})
+            try:
+                result = await app_server.call("thread/resume", {"threadId": request.previous_response_id})
+            except AppServerError as exc:
+                raise WorkerFailure("The previous response session can no longer be resumed", kind="session", safe_to_retry=False) from exc
         else:
             result = await app_server.call("thread/start", {"model": self.model(request.model), "cwd": workspace, "approvalPolicy": "never", "sandbox": "workspace-write", "serviceName": "codex_gateway"})
         return result["thread"]["id"]
 
     async def _turn(self, request: ResponseRequest, target: BackendTarget) -> AsyncIterator[BackendStreamEvent]:
-        async with self.pool.lock(target.connection_key):
+        worker_key = str(target.worker_id or target.endpoint)
+        slot_id: int | None = None
+        async with self._thread_guard(request.previous_response_id):
             turn_may_have_started = False
             try:
-                app_server = await self.pool.session(target.connection_key, target.endpoint)
-                account = await app_server.call("account/read", {"refreshToken": False})
-                if account.get("requiresOpenaiAuth") and not account.get("account"):
-                    raise WorkerFailure("Codex worker is not logged in", kind="logged_out", safe_to_retry=True)
-                thread_id = await self._start_thread(app_server, request, target.workspace)
-                turn_params = {
-                    "threadId": thread_id, "input": [{"type": "text", "text": request.input_text()}],
-                    "cwd": target.workspace, "approvalPolicy": "never",
-                    "sandboxPolicy": {"type": "workspaceWrite", "writableRoots": [target.workspace], "networkAccess": False},
-                    "model": self.model(request.model),
-                }
-                effort = (request.reasoning or {}).get("effort")
-                if effort:
-                    turn_params["effort"] = effort
-                if output_schema := request.output_schema():
-                    turn_params["outputSchema"] = output_schema
-                # Once turn/start is sent, a timeout or disconnect is ambiguous: Codex may
-                # already be executing it, so the gateway must never replay it elsewhere.
-                turn_may_have_started = True
-                await app_server.call("turn/start", turn_params)
-                input_tokens = output_tokens = 0
-                async for message in app_server.messages():
-                    method, params = message.get("method"), message.get("params", {})
-                    if message.get("id") is not None and method:
-                        await app_server.reject_server_request(message)
-                    elif method == "item/agentMessage/delta":
-                        yield BackendStreamEvent(delta=params.get("delta", ""), thread_id=thread_id)
-                    elif method == "thread/tokenUsage/updated":
-                        input_tokens, output_tokens = _token_counts(params)
-                    elif method == "turn/completed":
-                        turn = params.get("turn", {})
-                        if turn.get("status") == "failed":
-                            error = turn.get("error") or {}
-                            message = error.get("message", "Codex turn failed")
-                            raise WorkerFailure(message, kind=classify_worker_failure(message), safe_to_retry=False)
-                        yield BackendStreamEvent(thread_id=thread_id, done=True, input_tokens=input_tokens, output_tokens=output_tokens)
-                        return
+                async with self.pool.lease(target.connection_key, worker_key, target.endpoint) as (app_server, slot_id):
+                    workspace = f"{target.workspace}/ws-{slot_id}"
+                    account = await app_server.call("account/read", {"refreshToken": False})
+                    if account.get("requiresOpenaiAuth") and not account.get("account"):
+                        raise WorkerFailure("Codex worker is not logged in", kind="logged_out", safe_to_retry=True)
+                    thread_id = await self._start_thread(app_server, request, workspace)
+                    turn_params = {
+                        "threadId": thread_id, "input": [{"type": "text", "text": request.input_text()}],
+                        "cwd": workspace, "approvalPolicy": "never",
+                        "sandboxPolicy": {"type": "workspaceWrite", "writableRoots": [workspace], "networkAccess": False},
+                        "model": self.model(request.model),
+                    }
+                    effort = (request.reasoning or {}).get("effort")
+                    if effort:
+                        turn_params["effort"] = effort
+                    if output_schema := request.output_schema():
+                        turn_params["outputSchema"] = output_schema
+                    turn_may_have_started = True
+                    await app_server.call("turn/start", turn_params)
+                    input_tokens = output_tokens = 0
+                    async for message in app_server.messages():
+                        method, params = message.get("method"), message.get("params", {})
+                        if message.get("id") is not None and method:
+                            await app_server.reject_server_request(message)
+                        elif method == "item/agentMessage/delta":
+                            yield BackendStreamEvent(delta=params.get("delta", ""), thread_id=thread_id)
+                        elif method == "thread/tokenUsage/updated":
+                            input_tokens, output_tokens = _token_counts(params)
+                        elif method == "turn/completed":
+                            turn = params.get("turn", {})
+                            if turn.get("status") == "failed":
+                                error = turn.get("error") or {}
+                                message = error.get("message", "Codex turn failed")
+                                raise WorkerFailure(message, kind=classify_worker_failure(message), safe_to_retry=False)
+                            yield BackendStreamEvent(thread_id=thread_id, done=True, input_tokens=input_tokens, output_tokens=output_tokens)
+                            return
             except WorkerFailure:
                 raise
+            except AppServerCapacityError as exc:
+                raise WorkerFailure(str(exc), kind="capacity", safe_to_retry=False) from exc
             except AppServerError as exc:
                 raise WorkerFailure(str(exc), kind=classify_worker_failure(str(exc)), safe_to_retry=not turn_may_have_started) from exc
             except Exception as exc:
-                await self.pool.invalidate(target.connection_key)
+                if slot_id is not None:
+                    await self.pool.invalidate(target.connection_key, slot_id)
                 raise WorkerFailure(f"Codex worker connection failed: {exc}", kind="connection", safe_to_retry=not turn_may_have_started) from exc
 
     async def complete(self, request: ResponseRequest, target: BackendTarget) -> BackendResult:

@@ -79,7 +79,8 @@ Raspberry Pi -> HTTPS/Bearer -> FastAPI -> PostgreSQL
 ## API 与会话
 
 - 实现 Responses API 与 Chat Completions API 的文本兼容层，并支持 `stream=true`；请求对象对官方可选字段和后续扩展保持兼容，后端无法兑现的能力返回带准确 `param` 的 OpenAI 风格错误。
-- 默认每次请求新建 thread；用 `previous_response_id` 映射和复用会话。
+- `/v1/responses` 默认每次请求新建 thread；用 `previous_response_id` 映射和复用会话。会话采用滑动 24 小时 TTL，每次成功续接都会刷新整条 thread 的到期时间；过期或无法恢复的会话返回 `previous_response_not_found`。
+- `/v1/chat/completions` 保持与官方接口一致的无状态语义：调用方每次重发完整 `messages`，网关不为 Chat Completions 保存 thread 绑定。
 - 每个 Key 在一个 worker 上维护一个连接；连接内可管理多个 thread。
 - worker 是 Codex 账号隔离边界；测试时允许多个 worker 登录同一个订阅账号。
 - 每个 WebSocket/会话使用独立临时工作目录；可按任务需要读写该目录，但不能读取其他连接的目录。
@@ -210,11 +211,23 @@ Raspberry Pi -> HTTPS/Bearer -> FastAPI -> PostgreSQL
 - 会话绑定 Worker 不可用时返回 `session_worker_unavailable`，不会静默丢失上下文。
 - 后台按冷却周期探测隔离 Worker；连接正常且账号仍已登录后恢复为 `ready`。
 - 管理页面显示隔离类型、故障原因、隔离时间、下次探测时间和最近恢复时间。
+- 手动探测和后台恢复均执行一个最小真实 Codex turn；仅登录状态正常但已达到用量限额的 Worker 不会被恢复。
+- API 请求在进入耗时的 Codex turn 前释放数据库事务和连接，避免并发请求耗尽连接池；池化调度随机分散到健康 Worker。
 
 ### 管理端审计与会话管理（已完成）
 
 - 请求历史页面分页展示全部请求，可展开查看 Key、Worker、模型、状态码、耗时、Token 和错误代码，不保存输入输出正文。
 - Key 活动会话按 Codex thread 聚合，展示对应 Worker；支持删除单个 thread 的全部响应绑定或清空某个 Key 的全部绑定。
+- 活动会话页只展示未过期且状态正常的 Responses 会话，并显示最近使用时间和 TTL 到期时间；后台定时将超过 24 小时未使用的绑定标记为过期。
 - 支持修改 Key 名称以及自动池化/固定 Worker 调度策略；已有会话不会因策略修改而迁移。
 - 删除 Key 采用软删除：Key 立即失效并释放活动会话，请求历史和审计关联继续保留。
 - 管理员可在控制台验证当前密码后自助修改密码；凭据使用 PBKDF2-SHA256 加盐存储，改密会使其他旧登录会话立即失效。
+
+### App-server WebSocket 并发池
+
+- 优先复用同一 Key、同一 Worker 的空闲 WS；没有空闲连接且尚未达到上限时创建新 WS。
+- 同一 Key、同一 Worker 最多保留 10 条 WS；单 Worker 所有 Key 合计最多保留 40 条 WS。
+- 达到任一连接上限后排队等待，超过 30 秒返回 HTTP 503 和 `worker_capacity_exceeded`。
+- 空闲超过 600 秒的 WS 由后台回收。
+- `previous_response_id` 固定原 Worker，但可通过该 Key 在该 Worker 上任一空闲 WS 恢复；同一 Codex thread 使用独立锁保持 turn 串行。
+- 每个 WS 使用 `/{key_id}/ws-{slot_id}` 独立工作目录。

@@ -47,6 +47,7 @@ services:
       CODEX_WORKER_TOKEN: ${CODEX_WORKER_TOKEN:?CODEX_WORKER_TOKEN must be set}
       CODEX_WORKER_IMAGE: codex-gateway-worker:0.157.0
       CODEX_DOCKER_NETWORK: codex-app-server_default
+      CODEX_MAX_WS_PER_KEY_WORKER: ${CODEX_GATEWAY_MAX_WS_PER_KEY_WORKER:-10}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     read_only: true

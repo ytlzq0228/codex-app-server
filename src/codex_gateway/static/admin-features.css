@@ -81,6 +81,55 @@
   color: var(--muted);
 }
 
+.worker-health {
+  width: 230px;
+  min-width: 180px;
+  max-width: 230px;
+}
+
+.worker-health > strong,
+.worker-health > span,
+.worker-health-times small {
+  display: block;
+}
+
+.worker-error-reason {
+  display: -webkit-box !important;
+  margin-top: 5px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.worker-health-times {
+  display: grid;
+  gap: 2px;
+  margin-top: 7px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* Keep action cells in the table formatting context. Making a td itself flex
+   gives it an independent height and causes row borders to split on tall rows. */
+td.row-actions {
+  display: table-cell;
+  vertical-align: middle;
+}
+
+td.row-actions form {
+  display: inline-block;
+  margin: 2px 4px 2px 0;
+  vertical-align: middle;
+}
+
+#workers td {
+  vertical-align: middle;
+}
+
 @media (max-width: 760px) {
   .history-detail dl {
     grid-template-columns: 1fr;

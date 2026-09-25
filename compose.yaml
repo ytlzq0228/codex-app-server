@@ -1,0 +1,65 @@
+services:
+  gateway:
+    build: .
+    env_file: .env
+    ports: ["0.0.0.0:8000:8000"]
+    depends_on:
+      db: {condition: service_healthy}
+      worker-1: {condition: service_healthy}
+      worker-manager: {condition: service_started}
+    read_only: true
+    tmpfs: ["/tmp:size=32m,noexec,nosuid"]
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    restart: unless-stopped
+  worker-1:
+    image: codex-gateway-worker:0.157.0
+    build:
+      context: .
+      dockerfile: worker/Dockerfile
+      args: {CODEX_VERSION: "0.157.0"}
+    environment:
+      CODEX_WORKER_TOKEN: ${CODEX_WORKER_TOKEN:?CODEX_WORKER_TOKEN must be set}
+    volumes:
+      - worker-1-codex-home:/home/codex/.codex
+      - worker-1-workspaces:/workspace
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,nosuid,nodev
+      - /run/codex:size=1m,noexec,nosuid,nodev,uid=10001,gid=10001
+    security_opt: ["no-new-privileges:true"]
+    cap_drop: ["ALL"]
+    pids_limit: 256
+    mem_limit: 4g
+    cpus: 2
+    healthcheck: {test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4500/readyz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"], interval: 5s, timeout: 3s, retries: 20}
+    restart: unless-stopped
+    labels:
+      io.codex-gateway.managed: "true"
+      io.codex-gateway.worker: "worker-1"
+    container_name: codex-worker-1
+  worker-manager:
+    build: .
+    command: ["uvicorn", "codex_gateway.manager:app", "--host", "0.0.0.0", "--port", "4600"]
+    user: "0:0"
+    environment:
+      CODEX_MANAGER_TOKEN: ${CODEX_MANAGER_TOKEN:?CODEX_MANAGER_TOKEN must be set}
+      CODEX_WORKER_TOKEN: ${CODEX_WORKER_TOKEN:?CODEX_WORKER_TOKEN must be set}
+      CODEX_WORKER_IMAGE: codex-gateway-worker:0.157.0
+      CODEX_DOCKER_NETWORK: codex-app-server_default
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    read_only: true
+    tmpfs: ["/tmp:size=16m,noexec,nosuid"]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+  db:
+    image: postgres:16-alpine
+    environment: {POSTGRES_DB: codex_gateway, POSTGRES_USER: codex, POSTGRES_PASSWORD: codex}
+    volumes: ["postgres-data:/var/lib/postgresql/data"]
+    healthcheck: {test: ["CMD-SHELL", "pg_isready -U codex -d codex_gateway"], interval: 5s, timeout: 3s, retries: 10}
+    restart: unless-stopped
+volumes:
+  postgres-data:
+  worker-1-codex-home:
+  worker-1-workspaces:

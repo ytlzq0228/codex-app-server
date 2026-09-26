@@ -19,16 +19,16 @@
     meter.className = 'usage-meter';
     const progress = document.createElement('progress');
     progress.max = 100;
-    progress.value = window?.used ?? 0;
+    progress.value = window.used;
     progress.className = usageClass(progress.value);
     progress.setAttribute('aria-label', `${label}已用额度`);
     const caption = document.createElement('span');
     caption.className = 'usage-caption';
-    caption.textContent = window ? `${label}：已用 ${window.used}%` : `${label}：暂无数据`;
+    caption.textContent = `${label}：已用 ${window.used}%`;
     meter.append(progress, caption);
     const reset = document.createElement('span');
     reset.className = 'usage-reset';
-    reset.textContent = `重置：${window?.resets_at != null ? resetTime(window.resets_at) : '—'}`;
+    reset.textContent = `重置：${window.resets_at != null ? resetTime(window.resets_at) : '—'}`;
     line.append(meter, reset);
     return line;
   };
@@ -44,8 +44,10 @@
         const data = await response.json();
         if (!response.ok) throw new Error('读取失败');
         const bucket = data.buckets.find(item => item.five_hour || item.week);
-        if (!bucket) throw new Error('暂无额度数据');
-        content.replaceChildren(renderWindow('5 小时', bucket.five_hour), renderWindow('周窗口', bucket.week));
+        const windows = [];
+        if (bucket?.five_hour) windows.push(renderWindow('5 小时', bucket.five_hour));
+        if (bucket?.week) windows.push(renderWindow('周窗口', bucket.week));
+        content.replaceChildren(...windows);
       } catch (error) {
         content.textContent = error.message || '额度读取失败';
       }

@@ -24,8 +24,8 @@ def test_browser_forbidden_page_and_json_contracts():
         assert response.headers['content-type'] == 'text/html; charset=utf-8'
         assert response.headers['cache-control'] == 'no-store'
         assert '无权访问此页面' in response.text
-        assert 'href="/account"' in response.text
-        assert 'href="/login"' in response.text
+        assert 'href="/user/account"' in response.text
+        assert 'href="/user/login"' in response.text
         for path, headers in [
             ('/admin/users', {'Accept': 'application/json'}),
             ('/admin/users', {'Accept': 'text/html', 'X-Requested-With': 'XMLHttpRequest'}),

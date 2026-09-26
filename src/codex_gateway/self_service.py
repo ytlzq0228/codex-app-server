@@ -35,10 +35,8 @@ def render(request, identity, **context):
         "identity": request.state.user, "csrf_token": identity.csrf_token, **context})
 
 
-@router.get("/overview")
+@router.get("/user/overview")
 async def overview(request: Request, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
-    if request.state.user.role != "user":
-        return RedirectResponse("/admin", 302)
     from .quota import quota_summary
     workers = (await db.scalars(select(Worker).where(Worker.owner_username == identity.username,
         Worker.endpoint != "removed://worker").order_by(Worker.created_at))).all()
@@ -66,14 +64,14 @@ async def overview(request: Request, identity=Depends(require_user), db: AsyncSe
                   quota=await quota_summary(db, identity.username))
 
 
-@router.get("/account")
+@router.get("/user/account")
 async def account(request: Request, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     keys = (await db.scalars(select(ApiKey).where(ApiKey.owner_username == identity.username, ApiKey.deleted_at.is_(None)))).all()
     from .quota import quota_summary
     return render(request, identity, page="account", keys=keys, quota=await quota_summary(db, identity.username))
 
 
-@router.post("/account/key")
+@router.post("/user/account/key")
 async def personal_key(request: Request, name: str = Form("", max_length=120), csrf_token: str = Form(...), identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     verify_csrf(request, identity, csrf_token)
     await lock_available_owner(db, identity.username)
@@ -85,7 +83,7 @@ async def personal_key(request: Request, name: str = Form("", max_length=120), c
     return {"secret": raw, "key_id": str(record.id), "message": "Key 仅显示一次，请妥善保存"}
 
 
-@router.post("/account/keys/{key_id}/rotate")
+@router.post("/user/account/keys/{key_id}/rotate")
 async def rotate_key(request: Request, key_id: UUID, csrf_token: str = Form(...), identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     verify_csrf(request, identity, csrf_token)
     key = await db.scalar(select(ApiKey).where(ApiKey.id == key_id).with_for_update())
@@ -173,7 +171,7 @@ async def edit_user(request: Request, username: str, role: str = Form(...), emai
     return {"message": "用户已更新，旧会话已失效", "secret": password}
 
 
-@router.get("/auth/google")
+@router.get("/user/auth/google")
 async def google_start(db: AsyncSession = Depends(get_session)):
     settings = get_settings()
     config = await google_config(db)
@@ -187,7 +185,7 @@ async def google_start(db: AsyncSession = Depends(get_session)):
     return response
 
 
-@router.get("/auth/google/callback")
+@router.get("/user/auth/google/callback")
 async def google_callback(request: Request, state: str = "", code: str = "", db: AsyncSession = Depends(get_session)):
     if not state or not secrets.compare_digest(state, request.cookies.get("google_state", "")):
         raise HTTPException(400, "Google 登录状态无效")
@@ -230,7 +228,7 @@ async def google_callback(request: Request, state: str = "", code: str = "", db:
                 raise HTTPException(409, "账号创建冲突，请重试")
     if not user.enabled:
         raise HTTPException(403, "账号已停用")
-    response = RedirectResponse("/account" if user.must_change_password else ("/overview" if user.role == "user" else "/admin"), 302)
+    response = RedirectResponse("/user/account" if user.must_change_password else ("/user/overview" if user.role == "user" else "/admin"), 302)
     response.delete_cookie("google_state")
     return await issue_session(db, user, settings, response)
 
@@ -258,7 +256,7 @@ async def save_google_settings(request: Request, client_id: str = Form("", max_l
         config = GoogleAuthConfig(id=1, client_secret="")
         db.add(config)
     uri = urlparse(redirect_uri.strip())
-    if redirect_uri and (uri.scheme not in {"http", "https"} or not uri.netloc or uri.username or uri.password or uri.fragment or uri.query or uri.path != "/auth/google/callback"):
+    if redirect_uri and (uri.scheme not in {"http", "https"} or not uri.netloc or uri.username or uri.password or uri.fragment or uri.query or uri.path not in {"/user/auth/google/callback", "/auth/google/callback"}):
         raise HTTPException(400, "请输入完整回调地址，路径必须为 /auth/google/callback")
     if enabled and (not client_id.strip() or not (client_secret.strip() or config.client_secret) or not redirect_uri.strip()):
         raise HTTPException(400, "启用 Google 登录需要完整的 Client ID、Secret 和回调地址")
@@ -287,7 +285,7 @@ async def grant_quota(request: Request, username: str, amount: int = Form(..., g
     return {"message": f"已增加 {amount} 个 Key 额度"}
 
 
-@router.post("/account/keys/{key_id}/toggle")
+@router.post("/user/account/keys/{key_id}/toggle")
 async def personal_toggle(request: Request, key_id: UUID, csrf_token: str = Form(...), identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     from .quota import quota_lock, ensure_capacity
     verify_csrf(request, identity, csrf_token)
@@ -302,7 +300,7 @@ async def personal_toggle(request: Request, key_id: UUID, csrf_token: str = Form
     return {"message": "Key 已启用" if key.enabled else "Key 已停用，额度已释放"}
 
 
-@router.post("/account/keys/{key_id}/delete")
+@router.post("/user/account/keys/{key_id}/delete")
 async def personal_delete(request: Request, key_id: UUID, csrf_token: str = Form(...), identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     from .quota import quota_lock
     from .models import ResponseBinding

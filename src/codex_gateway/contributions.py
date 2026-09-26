@@ -59,7 +59,7 @@ async def next_worker_suffix(db, username):
     return f"{number:02d}" if number <= 99 else ""
 
 
-@router.get("/workers")
+@router.get("/user/workers")
 async def workers_page(request: Request, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     query = select(Worker).where(Worker.endpoint != "removed://worker")
     if not is_admin(request):
@@ -73,7 +73,7 @@ async def workers_page(request: Request, identity=Depends(require_user), db: Asy
                   creation_blocked=blocked, next_suffix=suffix)
 
 
-@router.post("/workers")
+@router.post("/user/workers")
 async def contribute_worker(request: Request, name: str = Form("", max_length=80), suffix: str = Form(""), csrf_token: str = Form(...), identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     verify_csrf(request, identity, csrf_token)
     # Names passed to Docker are server-generated, preventing name collisions or
@@ -121,18 +121,18 @@ async def contribute_worker(request: Request, name: str = Form("", max_length=80
     return {"message": "Worker 已创建，请登录账号后探测状态", "worker_id": str(worker.id)}
 
 
-@router.post("/workers/{worker_id}/login")
+@router.post("/user/workers/{worker_id}/login")
 async def contributor_login(request: Request, worker_id: UUID, force: bool = Form(False), csrf_token: str = Form(...), identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     from .admin import relogin_worker_record
     verify_csrf(request, identity, csrf_token)
     worker = await owned_worker(request, db, worker_id)
     result = await relogin_worker_record(worker, db, get_settings(), force=force,
-        poll_url=f"/workers/{worker.id}/probe")
+        poll_url=f"/user/workers/{worker.id}/probe")
     await db.commit()
     return result
 
 
-@router.post("/workers/{worker_id}/probe")
+@router.post("/user/workers/{worker_id}/probe")
 async def contributor_probe(request: Request, worker_id: UUID, csrf_token: str = Form(...), identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     from .admin import probe_worker_record
     verify_csrf(request, identity, csrf_token)
@@ -140,7 +140,7 @@ async def contributor_probe(request: Request, worker_id: UUID, csrf_token: str =
     return await probe_worker_record(worker, db, get_settings())
 
 
-@router.post("/workers/{worker_id}/account")
+@router.post("/user/workers/{worker_id}/account")
 async def contributor_account(request: Request, worker_id: UUID, csrf_token: str = Form(...), identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     verify_csrf(request, identity, csrf_token)
     worker = await owned_worker(request, db, worker_id)
@@ -165,7 +165,7 @@ async def contributor_account(request: Request, worker_id: UUID, csrf_token: str
     return {"message": "账号信息已更新", "account": {"email": worker.account_email, "type": worker.auth_mode, "plan": worker.plan_type}, "logged_in": bool(account)}
 
 
-@router.post("/workers/{worker_id}/delete")
+@router.post("/user/workers/{worker_id}/delete")
 async def contributor_delete(request: Request, worker_id: UUID, csrf_token: str = Form(...), identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     from .admin import delete_worker
     verify_csrf(request, identity, csrf_token)
@@ -243,3 +243,22 @@ async def account_monitor_loop():
         except Exception:
             logging.getLogger(__name__).exception("Worker contribution monitor failed")
         await asyncio.sleep(settings.worker_recovery_interval_seconds)
+
+
+@router.post('/user/workers/{worker_id}/rate-limits')
+async def worker_rate_limits(request: Request, worker_id: UUID, csrf_token: str = Form(...), identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
+    from .rate_limits import summarize_windows
+    verify_csrf(request, identity, csrf_token)
+    worker = await owned_worker(request, db, worker_id, lock=False)
+    endpoint = worker.endpoint
+    if not worker.auth_mode or worker.failure_kind == 'logged_out':
+        raise HTTPException(409, 'Worker 未登录，请先登录并探测')
+    # Release the read transaction before waiting on the external Worker.
+    await db.rollback()
+    settings = get_settings()
+    try:
+        async with open_app_server(endpoint, settings.app_server_token.get_secret_value(), 20) as server:
+            payload = await server.call('account/rateLimits/read', {'excludeResetCreditDetails': True})
+        return summarize_windows(payload)
+    except Exception:
+        raise HTTPException(502, '暂时无法读取账号额度，请稍后重试')

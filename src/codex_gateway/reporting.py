@@ -36,7 +36,7 @@ def date_boundary(value, label):
         raise HTTPException(400, f"{label}日期格式应为 YYYY-MM-DD")
 
 
-@router.get("/usage")
+@router.get("/user/usage")
 async def usage(request: Request, q: str = "", model: str = "", status: str = "", start: str = "", end: str = "", page: int = 1, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     query = usage_query(request.state.user)
     if q:
@@ -55,7 +55,7 @@ async def usage(request: Request, q: str = "", model: str = "", status: str = ""
     return render(request, identity, page="usage", records=records, total=total, number=page, pages=max(1,(total+29)//30))
 
 
-@router.get("/usage/{request_id}")
+@router.get("/user/usage/{request_id}")
 async def detail(request: Request, request_id: str, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     record = await db.scalar(usage_query(request.state.user).where(UsageRecord.request_id == request_id))
     if not record:
@@ -178,6 +178,6 @@ async def subscription_cost(request: Request, month: str = Form(...), amount: De
     return {"message": "当月订阅成本已保存"}
 
 
-@router.get("/debug")
+@router.get("/user/debug")
 async def debug(request: Request, identity=Depends(require_user)):
     return render(request, identity, page="debug")

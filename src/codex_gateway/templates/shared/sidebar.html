@@ -1,29 +1,33 @@
 {% set nav_user = identity if identity is defined else request.state.user %}
 {% set is_admin = nav_user.role in ['admin', 'superadmin'] %}
-{% set navigation = [
-  ('overview' if is_admin else 'self_overview', '/admin' if is_admin else '/overview', '概览' if is_admin else '自助服务概览', false),
-  ('keys', '/admin/api-keys', 'API Keys', true),
-  ('sessions', '/admin/sessions', 'Key 活动会话', true),
-  ('history', '/admin/history', '请求历史', true),
-  ('account', '/account', '我的账户', false),
-  ('workers', '/workers', '贡献 Worker', false),
-  ('users', '/admin/users', '用户管理', true),
-  ('usage', '/usage', '用量详单', false),
-  ('finance', '/admin/finance', '价格配置', true),
-  ('reports', '/admin/reports', '财务报表', true),
-  ('debug', '/debug', '查询与调试', false),
-  ('google', '/admin/google', 'Google 登录配置', true)
+{% set user_navigation = [
+  ('self_overview', '/user/overview', '自助服务概览'),
+  ('account', '/user/account', '我的账户'),
+  ('workers', '/user/workers', '贡献 Worker'),
+  ('usage', '/user/usage', '用量详单'),
+  ('debug', '/user/debug', '查询与调试')
 ] %}
+{% set admin_navigation = [
+  ('overview', '/admin', '管理概览'),
+  ('keys', '/admin/api-keys', 'API Keys'),
+  ('sessions', '/admin/sessions', 'Key 活动会话'),
+  ('history', '/admin/history', '请求历史'),
+  ('users', '/admin/users', '用户管理'),
+  ('finance', '/admin/finance', '价格配置'),
+  ('reports', '/admin/reports', '财务报表'),
+  ('google', '/admin/google', 'Google 登录配置')
+] %}
+{% macro nav_links(items) %}
+{% for nav_page, href, label in items %}
+{% set active = page == nav_page or (page == 'detail' and nav_page == 'usage') %}
+<a class="{{ 'active' if active else '' }}" href="{{ href }}"{% if active %} aria-current="page"{% endif %}>{{ label }}</a>
+{% endfor %}
+{% endmacro %}
 <aside class="sidebar">
   <div class="brand"><div class="brand-mark">C</div><div><strong>Codex Gateway</strong><span>{{ 'Admin Console' if is_admin else 'User Console' }}</span></div></div>
   <nav aria-label="主导航">
-    {% for nav_page, href, label, admin_only in navigation if not admin_only or is_admin %}
-    {% set active = page == nav_page or (page == 'detail' and nav_page == 'usage') %}
-    <a class="{{ 'active' if active else '' }}" href="{{ href }}"{% if active %} aria-current="page"{% endif %}>{{ label }}</a>
-    {% endfor %}
+    <section class="nav-section" aria-labelledby="user-nav-heading"><h2 id="user-nav-heading">用户自助服务</h2>{{ nav_links(user_navigation) }}</section>
+    {% if is_admin %}<section class="nav-section" aria-labelledby="admin-nav-heading"><h2 id="admin-nav-heading">系统管理</h2>{{ nav_links(admin_navigation) }}</section>{% endif %}
   </nav>
-  <form method="post" action="/logout" class="logout-form">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <button type="submit">退出登录</button>
-  </form>
+  <form method="post" action="/user/logout" class="logout-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">退出登录</button></form>
 </aside>

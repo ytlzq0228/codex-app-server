@@ -22,8 +22,8 @@ def test_email_username_creation_and_login():
         assert response.json()['username']==name
         password=response.json()['secret']
         for login in [name,email]:
-            assert client.post('/login',data={'username':login,'password':password},follow_redirects=False).status_code==302
-        assert client.post('/login',data={'username':name+'@another.test','password':password},follow_redirects=False).status_code==401
+            assert client.post('/user/login',data={'username':login,'password':password},follow_redirects=False).status_code==302
+        assert client.post('/user/login',data={'username':name+'@another.test','password':password},follow_redirects=False).status_code==401
         token=admin_login(client)
         assert client.post('/admin/users',data={'csrf_token':token,'username':name+'@another.test'},headers=AJAX).status_code==409
 

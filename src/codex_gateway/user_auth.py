@@ -36,8 +36,8 @@ async def require_user(request: Request, db: AsyncSession = Depends(get_session)
     if not stored or not user or not user.enabled or stored.expires_at <= datetime.now(timezone.utc) or stored.session_version != user.session_version:
         if request.headers.get("x-requested-with") == "XMLHttpRequest":
             raise HTTPException(401, "登录已过期")
-        raise HTTPException(303, headers={"Location": "/login?next=" + quote(request.url.path, safe="/")})
-    if user.must_change_password and request.url.path not in {"/account", "/account/password", "/logout"}:
-        raise HTTPException(403 if request.method != "GET" else 303, "请先修改初始密码", headers={"Location": "/account"})
+        raise HTTPException(303, headers={"Location": "/user/login?next=" + quote(request.url.path, safe="/")})
+    if user.must_change_password and request.url.path not in {"/user/account", "/user/account/password", "/user/logout"}:
+        raise HTTPException(403 if request.method != "GET" else 303, "请先修改初始密码", headers={"Location": "/user/account"})
     request.state.user = user
     return AdminSession(user.username, stored.csrf_token, stored.session_version)

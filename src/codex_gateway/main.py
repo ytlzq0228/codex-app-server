@@ -571,6 +571,21 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
     await save_usage(completion_id, principal, target, body.model, 200, started, result, request_params=body.model_dump(mode="json"))
 
 
+@app.middleware("http")
+async def legacy_user_routes(request: Request, call_next):
+    # Preserve bookmarked URLs, form methods and existing Google callback URLs.
+    from urllib.parse import quote
+    from fastapi.responses import RedirectResponse
+    path = request.url.path
+    roots = ("/login", "/logout", "/account", "/overview", "/workers", "/usage", "/debug", "/auth/google")
+    if any(path == root or path.startswith(root + "/") for root in roots):
+        target = "/user" + quote(path, safe="/")
+        if request.url.query:
+            target += "?" + request.url.query
+        return RedirectResponse(target, status_code=307)
+    return await call_next(request)
+
+
 @app.get("/healthz")
 async def health() -> dict[str, str]:
     return {"status": "ok"}

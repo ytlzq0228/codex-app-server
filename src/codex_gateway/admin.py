@@ -24,7 +24,7 @@ from .quota import quota_lock, ensure_capacity, reconcile_worker
 from .user_auth import issue_session, require_user, digest
 from .security import generate_api_key, hash_api_key, hash_password, verify_password
 
-auth_router = APIRouter(tags=["admin-auth"])
+auth_router = APIRouter(prefix="/user", tags=["user-auth"])
 router = APIRouter(prefix="/admin", tags=["admin"])
 WORKER_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
 
@@ -64,7 +64,7 @@ async def login(
             {"next": safe_next_url(next), "error": "用户名或密码错误", "google_enabled": bool(google and google.enabled)},
             status_code=401,
         )
-    destination = "/account" if user.must_change_password else ("/overview" if user.role == "user" else safe_next_url(next))
+    destination = "/user/account" if user.must_change_password else ("/user/overview" if user.role == "user" else safe_next_url(next))
     return await issue_session(session, user, settings, RedirectResponse(destination, status_code=302))
 
 
@@ -104,7 +104,7 @@ async def logout(
     verify_csrf(request, admin, csrf_token)
     await session.execute(delete(UserSession).where(UserSession.token_hash == digest(request.cookies.get(SESSION_COOKIE, ""))))
     await session.commit()
-    response = RedirectResponse("/login", status_code=302)
+    response = RedirectResponse("/user/login", status_code=302)
     response.delete_cookie(SESSION_COOKIE, path="/")
     return response
 

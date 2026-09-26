@@ -95,3 +95,5 @@ mock 模式测试通过 fixture 模拟 Worker manager 的工作区接口，实�
 已登录 Worker 的“重新登录”在概览与贡献 Worker 页面均先弹出确认。取消时不发送请求；确认后，通过同一 WebSocket 连接依次执行 account/read、account/logout（params 为 null）、account/login/start。退出失败不会继续登录；退出成功后即清除本地账号状态并重算贡献额度，即使后续新登录失败也保留该状态。重复账号仍有其他有效 Worker 时保留其贡献额度。
 
 贡献额度不再使用套餐白名单：套餐名称去除首尾空格并忽略大小写后，只要非空且不是 free，就按非免费套餐计算，包括 self_serve_business_prolite 和后续新增套餐。未识别套餐仍不提供额度；登录、健康、启用及同用户账号去重条件保持有效。
+
+个人 Key 表格将脱敏前缀放入独立列，操作按钮放在单元格内部，保持行线对齐。贡献 Worker 页面与管理员概览显示账号 5 小时 / 周窗口剩余百分比、重置时间（浏览器本地时区）和读取时间，加载页面自动读取，也可手动刷新。通过 account/rateLimits/read 只读查询，按 windowDurationMins 区分 300 分钟和 10080 分钟，支持多个额度桶；缺失窗口显示暂无数据。查询失败不改变 Worker 状态或 Key quota，普通用户仅能查询自己的 Worker。

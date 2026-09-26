@@ -16,7 +16,7 @@ from codex_gateway.main import app
 def login(client: TestClient) -> str:
     settings = get_settings()
     response = client.post(
-        "/login",
+        "/user/login",
         data={"username": settings.admin_username, "password": settings.admin_password.get_secret_value(), "next": "/admin"},
         follow_redirects=False,
     )
@@ -33,8 +33,8 @@ def test_admin_redirects_to_login_without_cookie() -> None:
     with TestClient(app) as client:
         response = client.get("/admin", follow_redirects=False)
         assert response.status_code == 303
-        assert response.headers["location"].startswith("/login?next=/admin")
-        assert 'name="password"' in client.get("/login").text
+        assert response.headers["location"].startswith("/user/login?next=/admin")
+        assert 'name="password"' in client.get("/user/login").text
         assert "[hidden]{display:none!important}" in client.get("/static/admin.css").text
 
 
@@ -47,13 +47,13 @@ def test_admin_cookie_login_dashboard_and_logout() -> None:
         assert "Key 活动会话" in dashboard.text
         assert "请求历史" in dashboard.text
         assert "/static/admin-features.css" in dashboard.text
-        assert 'href="/account"' in dashboard.text
+        assert 'href="/user/account"' in dashboard.text
         assert 'id="password-dialog"' not in dashboard.text
         assert "HTTPBasic" not in dashboard.text
 
-        response = client.post("/logout", data={"csrf_token": csrf}, follow_redirects=False)
+        response = client.post("/user/logout", data={"csrf_token": csrf}, follow_redirects=False)
         assert response.status_code == 302
-        assert response.headers["location"] == "/login"
+        assert response.headers["location"] == "/user/login"
 
 
 def test_admin_navigation_uses_four_isolated_pages() -> None:
@@ -95,8 +95,8 @@ def test_admin_can_change_password_and_invalidate_old_session() -> None:
         assert changed.status_code == 200
         assert SESSION_COOKIE in changed.headers["set-cookie"]
         assert client.get("/admin", headers={"cookie": f"{SESSION_COOKIE}={old_cookie}"}, follow_redirects=False).status_code == 303
-        assert client.post("/login", data={"username": settings.admin_username, "password": old_password, "next": "/admin"}, follow_redirects=False).status_code == 401
-        assert client.post("/login", data={"username": settings.admin_username, "password": new_password, "next": "/admin"}, follow_redirects=False).status_code == 302
+        assert client.post("/user/login", data={"username": settings.admin_username, "password": old_password, "next": "/admin"}, follow_redirects=False).status_code == 401
+        assert client.post("/user/login", data={"username": settings.admin_username, "password": new_password, "next": "/admin"}, follow_redirects=False).status_code == 302
 
         dashboard = client.get("/admin")
         new_csrf = re.search(r'name="csrf_token" value="([^"]+)"', dashboard.text).group(1)

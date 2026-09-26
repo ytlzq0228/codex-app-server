@@ -97,3 +97,5 @@ mock 模式测试通过 fixture 模拟 Worker manager 的工作区接口，实�
 贡献额度不再使用套餐白名单：套餐名称去除首尾空格并忽略大小写后，只要非空且不是 free，就按非免费套餐计算，包括 self_serve_business_prolite 和后续新增套餐。未识别套餐仍不提供额度；登录、健康、启用及同用户账号去重条件保持有效。
 
 个人 Key 表格将脱敏前缀放入独立列，操作按钮放在单元格内部，保持行线对齐。贡献 Worker 页面与管理员概览显示账号 5 小时 / 周窗口剩余百分比、重置时间（浏览器本地时区）和读取时间，加载页面自动读取，也可手动刷新。通过 account/rateLimits/read 只读查询，按 windowDurationMins 区分 300 分钟和 10080 分钟，支持多个额度桶；缺失窗口显示暂无数据。查询失败不改变 Worker 状态或 Key quota，普通用户仅能查询自己的 Worker。
+
+导航分为“用户自助服务”（所有用户可见）与“系统管理”（admin / superadmin 可见）。用户页面统一为 `/user/overview`、`/user/account`、`/user/workers`、`/user/usage`、`/user/debug`；登录/退出为 `/auth/login`、`/auth/logout`，Google 登录入口与回调为 `/auth/google`、`/auth/google/callback`。管理功能继续使用 `/admin` 前缀。管理员也可使用自己的自助服务概览。旧用户路由通过 307 跳转到新路由，保留请求方法和查询参数；旧 Google 回调配置继续兼容，不自动修改已登记的回调地址。模型 API `/v1` 与内部 Worker Manager 路由不变。

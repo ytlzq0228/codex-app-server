@@ -15,7 +15,7 @@ const requestJson = async (url, body) => {
     headers: {'X-Requested-With': 'XMLHttpRequest'},
   });
   if (response.status === 401) {
-    location.href = '/user/login?next=/admin';
+    location.href = '/auth/login?next=/admin';
     throw new Error('登录已过期');
   }
   const data = await response.json();

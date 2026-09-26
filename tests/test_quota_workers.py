@@ -31,7 +31,7 @@ def grant(client,name,amount):
 
 
 def signin(client,name,pw):
-    response=client.post('/user/login',data={'username':name,'password':'changed-'+pw},follow_redirects=False)
+    response=client.post('/auth/login',data={'username':name,'password':'changed-'+pw},follow_redirects=False)
     assert response.status_code==302
     return csrf(client)
 
@@ -157,7 +157,7 @@ def test_owner_isolation_account_read_and_admin_transfer(worker_services):
         worker=contribute(client,token)
         probe(client,token,worker)
         assert new_key(client,token).status_code == 200
-        r=client.post('/user/workers/'+worker+'/user/account',data={'csrf_token':token},headers=AJAX)
+        r=client.post('/user/workers/'+worker+'/account',data={'csrf_token':token},headers=AJAX)
         assert r.json()['account']['email']=='contributor@example.com'
         page=client.get('/user/workers')
         assert page.status_code==200 and 'contributor@example.com' in page.text and '+1 额度' in page.text
@@ -174,7 +174,7 @@ def test_owner_isolation_account_read_and_admin_transfer(worker_services):
         assert client.portal.call(summary,alice)['used']==0
         assert client.portal.call(summary,bob)['total']==1
         token=signin(client,alice,pw)
-        assert client.post('/user/workers/'+worker+'/user/account',data={'csrf_token':token},headers=AJAX).status_code==404
+        assert client.post('/user/workers/'+worker+'/account',data={'csrf_token':token},headers=AJAX).status_code==404
 
 
 def test_failed_account_read_removes_credit(worker_services):
@@ -184,7 +184,7 @@ def test_failed_account_read_removes_credit(worker_services):
         worker=contribute(client,token);probe(client,token,worker)
         key=new_key(client,token).json()
         worker_services['failure']=True
-        assert client.post('/user/workers/'+worker+'/user/account',data={'csrf_token':token},headers=AJAX).status_code==502
+        assert client.post('/user/workers/'+worker+'/account',data={'csrf_token':token},headers=AJAX).status_code==502
         assert client.portal.call(summary,name)['total']==0
         assert client.portal.call(summary,name)['used']==0
         assert client.get('/v1/models',headers={'Authorization':'Bearer '+key['secret']}).status_code==401
@@ -331,7 +331,7 @@ def test_relogin_logout_order_and_failure_state(worker_services, monkeypatch, fa
         assert new_key(client,token).status_code==200
         assert '是否退出当前账号并重新登录' in client.get('/user/workers').text
         monkeypatch.setattr(admin,'open_app_server',opened)
-        response=client.post('/user/workers/'+worker+'/user/login',data={'csrf_token':token,'force':'true'},headers=AJAX)
+        response=client.post('/user/workers/'+worker+'/login',data={'csrf_token':token,'force':'true'},headers=AJAX)
         assert response.status_code==(502 if failure else 200)
         expected=['account/read','account/logout']
         if failure!='account/logout':expected+=['account/login/start']

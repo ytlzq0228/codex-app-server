@@ -29,5 +29,5 @@
     <section class="nav-section" aria-labelledby="user-nav-heading"><h2 id="user-nav-heading">用户自助服务</h2>{{ nav_links(user_navigation) }}</section>
     {% if is_admin %}<section class="nav-section" aria-labelledby="admin-nav-heading"><h2 id="admin-nav-heading">系统管理</h2>{{ nav_links(admin_navigation) }}</section>{% endif %}
   </nav>
-  <form method="post" action="/user/logout" class="logout-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">退出登录</button></form>
+  <form method="post" action="/auth/logout" class="logout-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">退出登录</button></form>
 </aside>

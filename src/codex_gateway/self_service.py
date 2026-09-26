@@ -171,7 +171,7 @@ async def edit_user(request: Request, username: str, role: str = Form(...), emai
     return {"message": "用户已更新，旧会话已失效", "secret": password}
 
 
-@router.get("/user/auth/google")
+@router.get("/auth/google")
 async def google_start(db: AsyncSession = Depends(get_session)):
     settings = get_settings()
     config = await google_config(db)
@@ -185,7 +185,7 @@ async def google_start(db: AsyncSession = Depends(get_session)):
     return response
 
 
-@router.get("/user/auth/google/callback")
+@router.get("/auth/google/callback")
 async def google_callback(request: Request, state: str = "", code: str = "", db: AsyncSession = Depends(get_session)):
     if not state or not secrets.compare_digest(state, request.cookies.get("google_state", "")):
         raise HTTPException(400, "Google 登录状态无效")
@@ -256,8 +256,8 @@ async def save_google_settings(request: Request, client_id: str = Form("", max_l
         config = GoogleAuthConfig(id=1, client_secret="")
         db.add(config)
     uri = urlparse(redirect_uri.strip())
-    if redirect_uri and (uri.scheme not in {"http", "https"} or not uri.netloc or uri.username or uri.password or uri.fragment or uri.query or uri.path not in {"/user/auth/google/callback", "/auth/google/callback"}):
-        raise HTTPException(400, "请输入完整回调地址，路径必须为 /auth/google/callback")
+    if redirect_uri and (uri.scheme not in {"http", "https"} or not uri.netloc or uri.username or uri.password or uri.fragment or uri.query or uri.path not in {"/auth/google/callback", "/user/auth/google/callback"}):
+        raise HTTPException(400, "请输入完整回调地址，路径应为 /auth/google/callback（兼容旧 /user/auth/google/callback）")
     if enabled and (not client_id.strip() or not (client_secret.strip() or config.client_secret) or not redirect_uri.strip()):
         raise HTTPException(400, "启用 Google 登录需要完整的 Client ID、Secret 和回调地址")
     domains = [domain.strip().lower().lstrip("@") for domain in trusted_domains.split(",") if domain.strip()]

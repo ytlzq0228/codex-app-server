@@ -12,7 +12,7 @@ def test_overview_lifecycle_and_isolation(worker_services):
         alice,pw=create_person(client)
         bob,bpw=create_person(client)
         token=user_login(client,alice,pw)
-        response=client.post('/user/login',data={'username':alice,'password':'changed-'+pw},follow_redirects=False)
+        response=client.post('/auth/login',data={'username':alice,'password':'changed-'+pw},follow_redirects=False)
         assert response.headers['location']=='/user/overview'
         token=signin(client,alice,pw)
         page=client.get('/user/overview')
@@ -42,12 +42,12 @@ def test_overview_lifecycle_and_isolation(worker_services):
         assert '尚未创建 Worker' in page and '尚未生成 Key' in page
         assert 'href="/user/overview"' in client.get('/user/account').text
         admin_login(client)
-        assert client.get('/user/overview',follow_redirects=False).headers['location']=='/admin'
+        assert client.get('/user/overview',follow_redirects=False).status_code==200
 
 
 def test_initial_password_keeps_required_password_change():
     with TestClient(app) as client:
         name,pw=create_person(client)
-        response=client.post('/user/login',data={'username':name,'password':pw},follow_redirects=False)
+        response=client.post('/auth/login',data={'username':name,'password':pw},follow_redirects=False)
         assert response.headers['location']=='/user/account'
         assert client.get('/user/overview',follow_redirects=False).headers['location']=='/user/account'

@@ -21,7 +21,7 @@ def csrf(client, path="/user/account"):
 
 def admin_login(client):
     settings = get_settings()
-    assert client.post("/user/login", data={"username":settings.admin_username, "password":settings.admin_password.get_secret_value()}, follow_redirects=False).status_code == 302
+    assert client.post("/auth/login", data={"username":settings.admin_username, "password":settings.admin_password.get_secret_value()}, follow_redirects=False).status_code == 302
     return csrf(client)
 
 
@@ -34,7 +34,7 @@ def new_user(client, token, role="user"):
 
 
 def user_login(client, username, password):
-    response = client.post("/user/login", data={"username":username,"password":password}, follow_redirects=False)
+    response = client.post("/auth/login", data={"username":username,"password":password}, follow_redirects=False)
     assert response.status_code == 302
     token = csrf(client)
     changed = client.post("/user/account/password", data={"csrf_token":token,"current_password":password,"new_password":"changed-"+password,"confirm_password":"changed-"+password}, headers=AJAX)
@@ -46,7 +46,7 @@ def test_forced_password_and_role_boundaries():
     with TestClient(app) as client:
         token = admin_login(client)
         username,password = new_user(client,token)
-        client.post("/user/login",data={"username":username,"password":password})
+        client.post("/auth/login",data={"username":username,"password":password})
         user_csrf = csrf(client)
         assert client.post("/user/account/key",data={"csrf_token":user_csrf},headers=AJAX).status_code == 403
         token = user_login(client,username,password)
@@ -88,7 +88,7 @@ def test_session_restart_logout_revocation():
     with TestClient(app) as client:
         client.cookies.set(SESSION_COOKIE,cookie)
         token = csrf(client)
-        assert client.post('/user/logout',data={'csrf_token':token},follow_redirects=False).status_code == 302
+        assert client.post('/auth/logout',data={'csrf_token':token},follow_redirects=False).status_code == 302
         client.cookies.set(SESSION_COOKIE,cookie)
         assert client.get('/user/account',follow_redirects=False).status_code == 303
 
@@ -111,7 +111,7 @@ def test_finance_snapshot_and_transfer_keeps_history():
         assert client.get('/admin/finance').status_code == 200
         assert client.get('/admin/users').status_code == 200
         assert client.get('/user/debug').status_code == 200
-        client.post('/user/login',data={'username':first,'password':'changed-'+pw})
+        client.post('/auth/login',data={'username':first,'password':'changed-'+pw})
         assert client.get('/user/usage/'+request_id).status_code == 200
 
 
@@ -140,15 +140,15 @@ def test_google_state_verified_identity_and_replay(monkeypatch):
     monkeypatch.setattr(httpx.AsyncClient,'get',get)
     with TestClient(app) as client:
         token = admin_login(client)
-        saved = client.post('/admin/google',data={'csrf_token':token,'enabled':'true','client_id':'test-client','client_secret':'test-secret','redirect_uri':'http://testserver/user/auth/google/callback'},headers=AJAX)
+        saved = client.post('/admin/google',data={'csrf_token':token,'enabled':'true','client_id':'test-client','client_secret':'test-secret','redirect_uri':'http://testserver/auth/google/callback'},headers=AJAX)
         assert saved.status_code == 200, saved.text
         assert 'test-secret' not in client.get('/admin/google').text
-        response = client.get('/user/auth/google',follow_redirects=False)
+        response = client.get('/auth/google',follow_redirects=False)
         params = parse_qs(urlparse(response.headers['location']).query)
         assert params['code_challenge_method'] == ['S256']
         state = params['state'][0]
-        assert client.get('/user/auth/google/callback?state=wrong&code=test').status_code == 400
-        callback = '/user/auth/google/callback?state='+state+'&code=test'
+        assert client.get('/auth/google/callback?state=wrong&code=test').status_code == 400
+        callback = '/auth/google/callback?state='+state+'&code=test'
         callback_response = client.get(callback,follow_redirects=False)
         assert callback_response.status_code == 302
         assert callback_response.headers['location'] == '/user/overview'
@@ -163,9 +163,9 @@ def test_google_state_verified_identity_and_replay(monkeypatch):
                 assert user and user.google_sub==subject and user.email==email
         client.portal.call(verify_username)
         subject=uuid4().hex
-        response=client.get('/user/auth/google',follow_redirects=False)
+        response=client.get('/auth/google',follow_redirects=False)
         state=parse_qs(urlparse(response.headers['location']).query)['state'][0]
-        assert client.get('/user/auth/google/callback?state='+state+'&code=test',follow_redirects=False).status_code==409
+        assert client.get('/auth/google/callback?state='+state+'&code=test',follow_redirects=False).status_code==409
 
 
 def test_rejected_requests_are_audited_with_original_params():
@@ -184,16 +184,16 @@ def test_rejected_requests_are_audited_with_original_params():
 def test_google_config_database_update_preserves_secret_and_permissions():
     with TestClient(app) as client:
         token = admin_login(client)
-        data = {'csrf_token':token,'enabled':'true','client_id':'configured-client','client_secret':'private-test-value','redirect_uri':'https://gateway.example.com/user/auth/google/callback','trusted_domains':'example.com'}
+        data = {'csrf_token':token,'enabled':'true','client_id':'configured-client','client_secret':'private-test-value','redirect_uri':'https://gateway.example.com/auth/google/callback','trusted_domains':'example.com'}
         assert client.post('/admin/google',data=data,headers=AJAX).status_code == 200
         data.update(client_id='updated-client',client_secret='')
         assert client.post('/admin/google',data=data,headers=AJAX).status_code == 200
         page = client.get('/admin/google').text
         assert 'updated-client' in page and 'private-test-value' not in page and '已配置，留空保留' in page
-        assert 'client_id=updated-client' in client.get('/user/auth/google',follow_redirects=False).headers['location']
+        assert 'client_id=updated-client' in client.get('/auth/google',follow_redirects=False).headers['location']
         data['enabled'] = 'false'
         assert client.post('/admin/google',data=data,headers=AJAX).status_code == 200
-        assert client.get('/user/auth/google',follow_redirects=False).status_code == 503
+        assert client.get('/auth/google',follow_redirects=False).status_code == 503
         user,password = new_user(client,token)
         user_login(client,user,password)
         assert client.get('/admin/google',headers=AJAX).status_code == 403
@@ -211,4 +211,4 @@ def test_disable_user_revokes_cookie_and_key():
         assert response.status_code == 200
         assert client.get('/v1/models',headers={'Authorization':'Bearer '+key}).status_code == 401
         assert client.get('/user/account',headers={'cookie':SESSION_COOKIE+'='+cookie},follow_redirects=False).status_code == 303
-        assert client.post('/user/login',data={'username':username,'password':'changed-'+pw},follow_redirects=False).status_code == 401
+        assert client.post('/auth/login',data={'username':username,'password':'changed-'+pw},follow_redirects=False).status_code == 401

@@ -24,7 +24,8 @@ from .quota import quota_lock, ensure_capacity, reconcile_worker
 from .user_auth import issue_session, require_user, digest
 from .security import generate_api_key, hash_api_key, hash_password, verify_password
 
-auth_router = APIRouter(prefix="/user", tags=["user-auth"])
+auth_router = APIRouter(prefix="/auth", tags=["auth"])
+user_router = APIRouter(prefix="/user", tags=["user-auth"])
 router = APIRouter(prefix="/admin", tags=["admin"])
 WORKER_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
 
@@ -68,7 +69,7 @@ async def login(
     return await issue_session(session, user, settings, RedirectResponse(destination, status_code=302))
 
 
-@auth_router.post("/account/password")
+@user_router.post("/account/password")
 @router.post("/password")
 async def change_password(
     request: Request,
@@ -104,7 +105,7 @@ async def logout(
     verify_csrf(request, admin, csrf_token)
     await session.execute(delete(UserSession).where(UserSession.token_hash == digest(request.cookies.get(SESSION_COOKIE, ""))))
     await session.commit()
-    response = RedirectResponse("/user/login", status_code=302)
+    response = RedirectResponse("/auth/login", status_code=302)
     response.delete_cookie(SESSION_COOKIE, path="/")
     return response
 

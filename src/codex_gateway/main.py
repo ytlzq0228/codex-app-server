@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .admin import auth_router as admin_auth_router
 from .admin import router as admin_router
+from .admin import user_router as admin_user_router
 from .auth import ApiPrincipal, require_api_key
 from .app_server import open_app_server
 from .backend import AppServerBackend, BackendTarget, CompletionBackend, MockBackend, WorkerFailure, classify_worker_failure, run_healthcheck_turn
@@ -101,6 +102,7 @@ app = FastAPI(title="Codex App Server Gateway", version="0.4.0", lifespan=lifesp
 app.state.templates = Jinja2Templates(directory=PACKAGE_ROOT / "templates")
 app.mount("/static", StaticFiles(directory=PACKAGE_ROOT / "static"), name="static")
 app.include_router(admin_auth_router)
+app.include_router(admin_user_router)
 app.include_router(admin_router)
 from .self_service import router as self_service_router
 from .reporting import router as reporting_router
@@ -577,7 +579,24 @@ async def legacy_user_routes(request: Request, call_next):
     from urllib.parse import quote
     from fastapi.responses import RedirectResponse
     path = request.url.path
-    roots = ("/login", "/logout", "/account", "/overview", "/workers", "/usage", "/debug", "/auth/google")
+    legacy_root_auth = ("/login", "/logout")
+    legacy_user_auth = ("/user/login", "/user/logout")
+    if any(path == root or path.startswith(root + "/") for root in legacy_root_auth):
+        target = "/auth" + quote(path, safe="/")
+        if request.url.query:
+            target += "?" + request.url.query
+        return RedirectResponse(target, status_code=307)
+    if any(path == root or path.startswith(root + "/") for root in legacy_user_auth):
+        target = "/auth" + quote(path.removeprefix("/user"), safe="/")
+        if request.url.query:
+            target += "?" + request.url.query
+        return RedirectResponse(target, status_code=307)
+    if path == "/user/auth/google" or path.startswith("/user/auth/google/"):
+        target = quote(path.removeprefix("/user"), safe="/")
+        if request.url.query:
+            target += "?" + request.url.query
+        return RedirectResponse(target, status_code=307)
+    roots = ("/account", "/overview", "/workers", "/usage", "/debug")
     if any(path == root or path.startswith(root + "/") for root in roots):
         target = "/user" + quote(path, safe="/")
         if request.url.query:

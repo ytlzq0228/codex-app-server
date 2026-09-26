@@ -17,9 +17,9 @@
     </section>
     <section class="login-card">
       <div>
-        <p class="eyebrow">ADMIN CONSOLE</p>
+        <p class="eyebrow">ACCOUNT LOGIN</p>
         <h2>欢迎回来</h2>
-        <p class="muted">使用管理员凭据继续。</p>
+        <p class="muted">使用用户名密码或 Google 登录。</p>
       </div>
       {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
       <form method="post" action="/login" class="stack-form">
@@ -28,6 +28,7 @@
         <label>密码<input type="password" name="password" autocomplete="current-password" required></label>
         <button class="button button-primary button-wide" type="submit">登录控制台</button>
       </form>
+      {% if google_enabled %}<a class="button button-wide" href="/auth/google">使用 Google 登录</a>{% else %}<button class="button button-wide" disabled>Google 登录尚未启用</button>{% endif %}
       <p class="login-foot">会话将在 12 小时后自动失效</p>
     </section>
   </main>

@@ -47,6 +47,8 @@ def test_admin_cookie_login_dashboard_and_logout() -> None:
         assert "Key 活动会话" in dashboard.text
         assert "请求历史" in dashboard.text
         assert "/static/admin-features.css" in dashboard.text
+        assert 'href="/account"' in dashboard.text
+        assert 'id="password-dialog"' not in dashboard.text
         assert "HTTPBasic" not in dashboard.text
 
         response = client.post("/logout", data={"csrf_token": csrf}, follow_redirects=False)

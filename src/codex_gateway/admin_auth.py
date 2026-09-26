@@ -61,19 +61,15 @@ def decode_admin_session(token: str, settings: Settings) -> AdminSession | None:
 
 
 def safe_next_url(value: str, default: str = "/admin") -> str:
-    return value if value.startswith("/") and not value.startswith("//") else default
+    return value if value.startswith("/") and not value.startswith("//") and "\\" not in value and not any(ord(c) < 32 for c in value) else default
 
 
 async def require_admin(request: Request, settings: Settings = Depends(get_settings), db: AsyncSession = Depends(get_session)) -> AdminSession:
-    admin_session = decode_admin_session(request.cookies.get(SESSION_COOKIE, ""), settings)
-    if admin_session:
-        user = await db.get(AdminUser, admin_session.username)
-        if user and user.session_version == admin_session.session_version:
-            return admin_session
-    if request.headers.get("x-requested-with") == "XMLHttpRequest":
-        raise HTTPException(401, detail="Admin session expired")
-    next_url = quote(request.url.path, safe="/")
-    raise HTTPException(303, detail="Login required", headers={"Location": f"/login?next={next_url}"})
+    from .user_auth import require_user
+    identity = await require_user(request, db)
+    if request.state.user.role not in {"admin", "superadmin"}:
+        raise HTTPException(403, "需要管理员权限")
+    return identity
 
 
 def verify_csrf(request: Request, session: AdminSession, supplied: str) -> None:

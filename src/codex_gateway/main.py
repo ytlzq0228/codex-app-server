@@ -1,4 +1,5 @@
 import json
+from decimal import Decimal
 import asyncio
 import time
 from collections.abc import AsyncIterator
@@ -23,8 +24,9 @@ from .app_server import open_app_server
 from .backend import AppServerBackend, BackendTarget, CompletionBackend, MockBackend, WorkerFailure, classify_worker_failure, run_healthcheck_turn
 from .config import get_settings
 from .database import SessionLocal, engine, get_session
-from .models import AdminUser, Base, ResponseBinding, UsageRecord, Worker, WorkerStatus
-from .security import hash_password
+from .models import ModelPrice, Base, ResponseBinding, UsageRecord, Worker, WorkerStatus
+from .audit import RequestAuditMiddleware, current_audit, request_params as captured_params
+from .migrations import upgrade, bootstrap_users
 from .schemas import BackendResult, ChatCompletionRequest, ResponseRequest
 
 
@@ -63,10 +65,9 @@ async def lifespan(app: FastAPI):
                     "CREATE INDEX IF NOT EXISTS ix_usage_records_thread_id ON usage_records (thread_id)",
                 ):
                     await connection.execute(text(ddl))
+                await upgrade(connection)
     async with SessionLocal() as session:
-        admin_user = await session.get(AdminUser, settings.admin_username)
-        if not admin_user:
-            session.add(AdminUser(username=settings.admin_username, password_hash=hash_password(settings.admin_password.get_secret_value()), session_version=1))
+        await bootstrap_users(session, settings)
         worker = await session.scalar(select(Worker).where(Worker.name == "worker-1"))
         if not worker:
             worker = Worker(name="worker-1", container_name="codex-worker-1", endpoint=settings.app_server_url, status=WorkerStatus.ready)
@@ -91,6 +92,11 @@ app.state.templates = Jinja2Templates(directory=PACKAGE_ROOT / "templates")
 app.mount("/static", StaticFiles(directory=PACKAGE_ROOT / "static"), name="static")
 app.include_router(admin_auth_router)
 app.include_router(admin_router)
+from .self_service import router as self_service_router
+from .reporting import router as reporting_router
+app.include_router(self_service_router)
+app.include_router(reporting_router)
+app.add_middleware(RequestAuditMiddleware)
 
 
 def utcnow() -> datetime:
@@ -400,17 +406,27 @@ async def save_usage(
     result: BackendResult | None = None,
     error_code: str | None = None,
     *,
+    request_params: dict | None = None,
     persist_binding: bool = False,
     previous_response_id: str | None = None,
     thread_id: str | None = None,
 ) -> None:
     async with SessionLocal() as session:
         endpoint = "chat.completions" if response_id.startswith("chatcmpl-") else "responses"
-        session.add(UsageRecord(request_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, model=model, status_code=status_code, input_tokens=result.input_tokens if result else 0, output_tokens=result.output_tokens if result else 0, duration_ms=int((time.monotonic() - started) * 1000), error_code=error_code, endpoint=endpoint, previous_response_id=previous_response_id, thread_id=thread_id or (result.thread_id if result else None)))
+        audit = current_audit.get()
+        if audit is not None:
+            request_params = captured_params(audit)
+        price = await session.get(ModelPrice, model)
+        if audit is None and request_params is not None and endpoint == "responses":
+            request_params = {**request_params, "previous_response_id": previous_response_id}
+        cost = ((Decimal(result.input_tokens) * price.input_price + Decimal(result.output_tokens) * price.output_price) / Decimal(1_000_000)) if price and result else (Decimal(0) if price else None)
+        session.add(UsageRecord(owner_username=principal.owner_username, request_params=request_params, input_price=price.input_price if price else None, output_price=price.output_price if price else None, cost_usd=cost, request_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, model=model, status_code=status_code, input_tokens=result.input_tokens if result else 0, output_tokens=result.output_tokens if result else 0, duration_ms=int((time.monotonic() - started) * 1000), error_code=error_code, endpoint=endpoint, previous_response_id=previous_response_id, thread_id=thread_id or (result.thread_id if result else None)))
         if persist_binding and result and principal.key_id and result.thread_id and target.worker_id:
             now = utcnow()
             session.add(ResponseBinding(response_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, thread_id=result.thread_id, last_used_at=now, expires_at=binding_expiry(now), status="active"))
         await session.commit()
+        if audit is not None:
+            audit["saved"] = True
 
 
 async def response_stream(body: ResponseRequest, backend: CompletionBackend, principal: ApiPrincipal, target: BackendTarget, public_previous_id: str | None, allow_retry: bool = True) -> AsyncIterator[str]:
@@ -460,7 +476,7 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
         yield sse({"type": "error", "sequence_number": sequence, **error, "param": None}); sequence += 1
         failed = {**created, "status": "failed", "error": error}
         yield sse({"type": "response.failed", "sequence_number": sequence, "response": failed})
-        await save_usage(response_id, principal, target, body.model, 404 if session_failure else 503 if capacity_failure else 502, started, error_code=error["code"], previous_response_id=public_previous_id, thread_id=body.previous_response_id)
+        await save_usage(response_id, principal, target, body.model, 404 if session_failure else 503 if capacity_failure else 502, started, error_code=error["code"], previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))
         return
     text = "".join(chunks).rstrip()
     yield sse({"type": "response.output_text.done", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "text": text}); sequence += 1
@@ -470,7 +486,7 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
     yield sse({"type": "response.output_item.done", "sequence_number": sequence, "output_index": 0, "item": item}); sequence += 1
     result = BackendResult(text=text, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens)
     yield sse({"type": "response.completed", "sequence_number": sequence, "response": response_object(response_id, body, result, message_id=message_id, previous_response_id=public_previous_id)})
-    await save_usage(response_id, principal, target, body.model, 200, started, result, persist_binding=True, previous_response_id=public_previous_id)
+    await save_usage(response_id, principal, target, body.model, 200, started, result, persist_binding=True, previous_response_id=public_previous_id, request_params=body.model_dump(mode="json"))
 
 
 async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseRequest, backend: CompletionBackend, principal: ApiPrincipal, target: BackendTarget, allow_retry: bool = True) -> AsyncIterator[str]:
@@ -517,14 +533,14 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
         error_message = "Timed out waiting for an available Codex worker connection" if capacity_failure else "The Codex backend could not complete the request"
         yield chat_sse({"error": {"message": error_message, "type": "server_error", "code": error_code}})
         yield chat_sse("[DONE]")
-        await save_usage(completion_id, principal, target, body.model, 503 if capacity_failure else 502, started, error_code=error_code)
+        await save_usage(completion_id, principal, target, body.model, 503 if capacity_failure else 502, started, error_code=error_code, request_params=body.model_dump(mode="json"))
         return
     result = BackendResult(text="", thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens)
     yield chat_sse(chunk({}, "stop"))
     if body.stream_options and body.stream_options.include_usage:
         yield chat_sse(chunk({}, usage={"prompt_tokens": input_tokens, "completion_tokens": output_tokens, "total_tokens": input_tokens + output_tokens}))
     yield chat_sse("[DONE]")
-    await save_usage(completion_id, principal, target, body.model, 200, started, result)
+    await save_usage(completion_id, principal, target, body.model, 200, started, result, request_params=body.model_dump(mode="json"))
 
 
 @app.get("/healthz")
@@ -562,12 +578,12 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
     try:
         result, target = await complete_with_failover(request, backend, principal, target, allow_retry=principal.pinned_worker_id is None)
     except HTTPException as exc:
-        await save_usage(completion_id, principal, target, body.model, exc.status_code, started, error_code="invalid_request")
+        await save_usage(completion_id, principal, target, body.model, exc.status_code, started, error_code="invalid_request", request_params=body.model_dump(mode="json"))
         raise
     except Exception:
-        await save_usage(completion_id, principal, target, body.model, 502, started, error_code="backend_error")
+        await save_usage(completion_id, principal, target, body.model, 502, started, error_code="backend_error", request_params=body.model_dump(mode="json"))
         raise
-    await save_usage(completion_id, principal, target, body.model, 200, started, result)
+    await save_usage(completion_id, principal, target, body.model, 200, started, result, request_params=body.model_dump(mode="json"))
     return chat_completion_object(completion_id, created, body, result)
 
 
@@ -605,12 +621,12 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
         response_id = f"resp_{uuid4().hex}"
         if binding and exc.status_code == 404:
             await invalidate_response_thread(binding.api_key_id, binding.thread_id, "Codex thread could not be resumed")
-        await save_usage(response_id, principal, target, body.model, exc.status_code, started, error_code="invalid_request", previous_response_id=public_previous_id, thread_id=body.previous_response_id)
+        await save_usage(response_id, principal, target, body.model, exc.status_code, started, error_code="invalid_request", previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))
         raise
     except Exception:
         response_id = f"resp_{uuid4().hex}"
-        await save_usage(response_id, principal, target, body.model, 502, started, error_code="backend_error", previous_response_id=public_previous_id, thread_id=body.previous_response_id)
+        await save_usage(response_id, principal, target, body.model, 502, started, error_code="backend_error", previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))
         raise
     response_id = f"resp_{uuid4().hex}"
-    await save_usage(response_id, principal, target, body.model, 200, started, result, persist_binding=True, previous_response_id=public_previous_id)
+    await save_usage(response_id, principal, target, body.model, 200, started, result, persist_binding=True, previous_response_id=public_previous_id, request_params=body.model_dump(mode="json"))
     return response_object(response_id, body, result, previous_response_id=public_previous_id)

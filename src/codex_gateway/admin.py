@@ -10,9 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .admin_auth import (
     SESSION_COOKIE,
-    SESSION_MAX_AGE,
     AdminSession,
-    create_admin_session,
     require_admin,
     safe_next_url,
     verify_csrf,
@@ -21,7 +19,8 @@ from .app_server import AppServerError, open_app_server
 from .backend import WorkerFailure, classify_worker_failure, run_healthcheck_turn
 from .config import Settings, get_settings
 from .database import get_session
-from .models import AdminUser, ApiKey, ResponseBinding, UsageRecord, Worker, WorkerStatus
+from .models import GoogleAuthConfig, User, UserSession, ApiKey, ResponseBinding, UsageRecord, Worker, WorkerStatus
+from .user_auth import issue_session, require_user, digest
 from .security import generate_api_key, hash_api_key, hash_password, verify_password
 
 auth_router = APIRouter(tags=["admin-auth"])
@@ -35,13 +34,8 @@ def templates(request: Request):
 
 @auth_router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request, next: str = "", session: AsyncSession = Depends(get_session)):
-    if request.cookies.get(SESSION_COOKIE):
-        from .admin_auth import decode_admin_session
-        admin_session = decode_admin_session(request.cookies[SESSION_COOKIE], get_settings())
-        user = await session.get(AdminUser, admin_session.username) if admin_session else None
-        if user and user.session_version == admin_session.session_version:
-            return RedirectResponse(safe_next_url(next), status_code=302)
-    return templates(request).TemplateResponse(request, "login.html", {"next": safe_next_url(next), "error": None})
+    google = await session.get(GoogleAuthConfig, 1)
+    return templates(request).TemplateResponse(request, "login.html", {"next": safe_next_url(next), "error": None, "google_enabled": bool(google and google.enabled)})
 
 
 @auth_router.post("/login", response_class=HTMLResponse)
@@ -53,28 +47,20 @@ async def login(
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_session),
 ):
-    user = await session.get(AdminUser, username)
-    if not user or not verify_password(password, user.password_hash):
+    user = await session.get(User, username)
+    google = await session.get(GoogleAuthConfig, 1)
+    if not user or not user.enabled or not user.password_hash or not verify_password(password, user.password_hash):
         return templates(request).TemplateResponse(
             request,
             "login.html",
-            {"next": safe_next_url(next), "error": "用户名或密码错误"},
+            {"next": safe_next_url(next), "error": "用户名或密码错误", "google_enabled": bool(google and google.enabled)},
             status_code=401,
         )
-    token, _ = create_admin_session(settings, user.username, user.session_version)
-    response = RedirectResponse(safe_next_url(next), status_code=302)
-    response.set_cookie(
-        SESSION_COOKIE,
-        token,
-        httponly=True,
-        samesite="lax",
-        secure=settings.admin_cookie_secure,
-        max_age=SESSION_MAX_AGE,
-        path="/",
-    )
-    return response
+    destination = "/account" if user.must_change_password or user.role == "user" else safe_next_url(next)
+    return await issue_session(session, user, settings, RedirectResponse(destination, status_code=302))
 
 
+@auth_router.post("/account/password")
 @router.post("/password")
 async def change_password(
     request: Request,
@@ -82,13 +68,13 @@ async def change_password(
     new_password: str = Form(min_length=12, max_length=256),
     confirm_password: str = Form(...),
     csrf_token: str = Form(...),
-    admin: AdminSession = Depends(require_admin),
+    admin: AdminSession = Depends(require_user),
     session: AsyncSession = Depends(get_session),
     settings: Settings = Depends(get_settings),
 ):
     verify_csrf(request, admin, csrf_token)
-    user = await session.get(AdminUser, admin.username)
-    if not user or not verify_password(current_password, user.password_hash):
+    user = await session.get(User, admin.username)
+    if not user or (user.password_hash and not verify_password(current_password, user.password_hash)):
         raise HTTPException(400, "当前密码不正确")
     if new_password != confirm_password:
         raise HTTPException(400, "两次输入的新密码不一致")
@@ -96,28 +82,20 @@ async def change_password(
         raise HTTPException(400, "新密码不能与当前密码相同")
     user.password_hash = hash_password(new_password)
     user.session_version += 1
-    await session.commit()
-    token, _ = create_admin_session(settings, user.username, user.session_version)
-    response = result("密码已更新", "管理员密码已修改，其他已登录会话均已失效。")
-    response.set_cookie(
-        SESSION_COOKIE,
-        token,
-        httponly=True,
-        samesite="lax",
-        secure=settings.admin_cookie_secure,
-        max_age=SESSION_MAX_AGE,
-        path="/",
-    )
-    return response
+    user.must_change_password = False
+    return await issue_session(session, user, settings, result("密码已更新", "密码已修改，其他会话已失效。"))
 
 
 @auth_router.post("/logout")
 async def logout(
     request: Request,
     csrf_token: str = Form(...),
-    admin: AdminSession = Depends(require_admin),
+    admin: AdminSession = Depends(require_user),
+    session: AsyncSession = Depends(get_session),
 ):
     verify_csrf(request, admin, csrf_token)
+    await session.execute(delete(UserSession).where(UserSession.token_hash == digest(request.cookies.get(SESSION_COOKIE, ""))))
+    await session.commit()
     response = RedirectResponse("/login", status_code=302)
     response.delete_cookie(SESSION_COOKIE, path="/")
     return response
@@ -224,7 +202,7 @@ async def render_admin_page(request: Request, page: str, history_page: int, admi
     return templates(request).TemplateResponse(
         request,
         "admin/dashboard.html",
-        {"page": page, "keys": keys, "workers": workers, "history_rows": history_rows, "history_groups": history_groups, "history_page": history_page, "history_pages": history_pages, "history_total": history_total, "history_session_total": history_session_total, "active_sessions": active_sessions, "sessions_by_key": sessions_by_key, "stats": stats, "csrf_token": admin.csrf_token},
+        {"users": (await session.scalars(select(User).order_by(User.username))).all(), "page": page, "keys": keys, "workers": workers, "history_rows": history_rows, "history_groups": history_groups, "history_page": history_page, "history_pages": history_pages, "history_total": history_total, "history_session_total": history_session_total, "active_sessions": active_sessions, "sessions_by_key": sessions_by_key, "stats": stats, "csrf_token": admin.csrf_token},
     )
 
 
@@ -259,14 +237,12 @@ async def create_key(
     session: AsyncSession = Depends(get_session),
 ):
     verify_csrf(request, admin, csrf_token)
-    if scheduling_mode not in {"pooled", "pinned"}:
-        raise HTTPException(400, "Invalid scheduling mode")
-    pinned_id = UUID(pinned_worker_id) if pinned_worker_id else None
-    if scheduling_mode == "pinned" and not pinned_id:
-        raise HTTPException(400, "固定调度必须选择 Worker")
+    pinned_id = await validate_key_schedule(session, scheduling_mode, pinned_worker_id)
+    from .self_service import lock_available_owner
+    await lock_available_owner(session, admin.username)
     raw_key, prefix = generate_api_key()
     settings = get_settings()
-    record = ApiKey(name=name, prefix=prefix, key_hash=hash_api_key(raw_key, settings.key_pepper.get_secret_value()), scheduling_mode=scheduling_mode, pinned_worker_id=pinned_id)
+    record = ApiKey(owner_username=admin.username, name=name, prefix=prefix, key_hash=hash_api_key(raw_key, settings.key_pepper.get_secret_value()), scheduling_mode=scheduling_mode, pinned_worker_id=pinned_id)
     session.add(record)
     await session.commit()
     return result("API Key 已创建", "密钥只显示这一次，请立即复制并妥善保存。", secret=raw_key, key_id=str(record.id))

@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 from uuid import UUID, uuid4
-from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Integer, String, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Integer, String, JSON, Numeric, func
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -22,6 +22,43 @@ class AdminUser(Base):
     password_hash: Mapped[str] = mapped_column(String(256))
     session_version: Mapped[int] = mapped_column(Integer, default=1)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+class User(Base):
+    __tablename__ = "users"
+    username: Mapped[str] = mapped_column(String(120), primary_key=True)
+    password_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    role: Mapped[str] = mapped_column(String(16), default="user")
+    email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    google_sub: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False)
+    session_version: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    username: Mapped[str] = mapped_column(ForeignKey("users.username"), index=True)
+    csrf_token: Mapped[str] = mapped_column(String(80))
+    session_version: Mapped[int] = mapped_column(Integer)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+class OAuthState(Base):
+    __tablename__ = "oauth_states"
+    state_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    verifier: Mapped[str] = mapped_column(String(128))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+class ModelPrice(Base):
+    __tablename__ = "model_prices"
+    model: Mapped[str] = mapped_column(String(120), primary_key=True)
+    input_price: Mapped[float] = mapped_column(Numeric(18, 6))
+    output_price: Mapped[float] = mapped_column(Numeric(18, 6))
+
+class SubscriptionCost(Base):
+    __tablename__ = "subscription_costs"
+    month: Mapped[str] = mapped_column(String(7), primary_key=True)
+    amount: Mapped[float] = mapped_column(Numeric(18, 6))
 
 class Worker(Base):
     __tablename__ = "workers"
@@ -44,6 +81,7 @@ class Worker(Base):
 class ApiKey(Base):
     __tablename__ = "api_keys"
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    owner_username: Mapped[str | None] = mapped_column(ForeignKey("users.username"), index=True)
     name: Mapped[str] = mapped_column(String(120))
     prefix: Mapped[str] = mapped_column(String(24), unique=True, index=True)
     key_hash: Mapped[str] = mapped_column(String(64), unique=True)
@@ -69,6 +107,11 @@ class ResponseBinding(Base):
 class UsageRecord(Base):
     __tablename__ = "usage_records"
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    owner_username: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
+    request_params: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    input_price: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    output_price: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    cost_usd: Mapped[float | None] = mapped_column(Numeric(24, 12), nullable=True)
     request_id: Mapped[str] = mapped_column(String(80), unique=True, index=True)
     api_key_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("api_keys.id"), nullable=True, index=True)
     worker_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("workers.id"), nullable=True, index=True)
@@ -82,3 +125,13 @@ class UsageRecord(Base):
     previous_response_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     thread_id: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class GoogleAuthConfig(Base):
+    __tablename__ = "google_auth_config"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    client_id: Mapped[str] = mapped_column(String(500), default="")
+    client_secret: Mapped[str] = mapped_column(String(1000), default="")
+    redirect_uri: Mapped[str] = mapped_column(String(1000), default="")
+    trusted_domains: Mapped[str] = mapped_column(String(2000), default="")

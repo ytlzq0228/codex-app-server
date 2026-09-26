@@ -61,15 +61,18 @@ def test_admin_navigation_uses_four_isolated_pages() -> None:
         login(client)
         overview = client.get("/admin").text
         keys = client.get("/admin/api-keys").text
+        workers = client.get("/admin/workers").text
         sessions = client.get("/admin/sessions").text
         history = client.get("/admin/history").text
 
         assert 'id="overview"' in overview and 'id="workers"' in overview and 'id="keys"' in overview
         assert 'id="sessions"' not in overview and 'id="history"' not in overview
         assert 'id="keys"' in keys and 'id="workers"' not in keys and 'id="overview"' not in keys
+        assert 'id="workers"' in workers and 'id="keys"' not in workers and 'Worker 管理' in workers
         assert 'id="sessions"' in sessions and 'id="keys"' not in sessions
         assert 'id="history"' in history and 'id="sessions"' not in history
         assert 'class="active" href="/admin/history"' in history
+        assert 'class="active" href="/admin/workers"' in workers
 
 
 def test_admin_can_change_password_and_invalidate_old_session() -> None:

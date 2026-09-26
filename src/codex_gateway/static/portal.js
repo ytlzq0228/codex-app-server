@@ -1,4 +1,11 @@
 const dialog = document.getElementById('portal-result');
+document.querySelectorAll('[data-quota-step]').forEach(button => button.addEventListener('click', () => {
+  const input = button.parentElement.querySelector('input[name="quota_granted"]');
+  const current = Number.parseInt(input.value, 10);
+  const value = Number.isFinite(current) ? current : 0;
+  input.value = String(Math.max(0, Math.min(10000, value + Number(button.dataset.quotaStep))));
+  input.dispatchEvent(new Event('input', {bubbles: true}));
+}));
 document.querySelectorAll('form[data-portal]').forEach(form => form.addEventListener('submit', async event => {
   event.preventDefault();
   if (form.dataset.confirm && !confirm(form.dataset.confirm)) return;

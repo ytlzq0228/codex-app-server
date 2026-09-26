@@ -7,12 +7,13 @@ from test_quota_workers import create_person
 def test_navigation_sections_and_canonical_routes():
     with TestClient(app) as client:
         admin_login(client)
-        for path in ['/admin','/admin/api-keys','/user/overview','/user/account','/user/workers','/user/usage','/user/debug']:
+        for path in ['/admin','/admin/api-keys','/admin/workers','/user/overview','/user/account','/user/workers','/user/usage','/user/debug']:
             response=client.get(path)
             assert response.status_code==200
             assert 'id="user-nav-heading"' in response.text
             assert 'id="admin-nav-heading"' in response.text
             assert 'href="/user/overview"' in response.text
+            assert 'href="/admin/workers"' in response.text
             assert 'action="/auth/logout"' in response.text
         name,pw=create_person(client)
         user_login(client,name,pw)

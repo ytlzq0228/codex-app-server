@@ -114,6 +114,43 @@ def test_default_zero_capacity_and_concurrent_enable():
         assert client.portal.call(summary,name)['used']==2
 
 
+def test_admin_sets_granted_quota_and_reduces_oldest_key():
+    with TestClient(app) as client:
+        name, password = create_person(client)
+        grant(client, name, 2)
+        token = user_login(client, name, password)
+        older = new_key(client, token).json()
+        newer = new_key(client, token).json()
+
+        async def mark_newer_used():
+            async with SessionLocal() as db:
+                key = await db.get(ApiKey, UUID(newer['key_id']))
+                key.last_used_at = datetime.now(timezone.utc)
+                await db.commit()
+
+        client.portal.call(mark_newer_used)
+        admin_token = admin_login(client)
+        page = client.get('/admin/users').text
+        assert '编辑 Quota' in page and 'name="quota_granted"' in page
+        response = client.post(f'/admin/users/{name}/quota', data={
+            'csrf_token': admin_token, 'quota_granted': 1}, headers=AJAX)
+        assert response.status_code == 200, response.text
+        assert '已停用 1 个' in response.json()['message']
+        assert client.portal.call(summary, name)['granted'] == 1
+        assert client.get('/v1/models', headers={'Authorization': 'Bearer ' + older['secret']}).status_code == 401
+        assert client.get('/v1/models', headers={'Authorization': 'Bearer ' + newer['secret']}).status_code == 200
+
+        response = client.post(f'/admin/users/{name}/quota', data={
+            'csrf_token': admin_token, 'quota_granted': 0}, headers=AJAX)
+        assert response.status_code == 200
+        assert client.portal.call(summary, name)['granted'] == 0
+        assert client.portal.call(summary, name)['used'] == 0
+        response = client.post(f'/admin/users/{name}/quota', data={
+            'csrf_token': admin_token, 'quota_granted': 3}, headers=AJAX)
+        assert response.status_code == 200
+        assert client.portal.call(summary, name)['granted'] == 3
+
+
 def test_worker_credit_lifecycle_and_lru(worker_services):
     with TestClient(app) as client:
         name,pw=create_person(client)
@@ -252,12 +289,19 @@ def test_worker_names_and_pending_login_guard(worker_services):
         assert client.post('/user/workers',data={'csrf_token':token},headers=AJAX).status_code==409
 
 
-def test_admin_exempt_from_pending_worker_guard(worker_services):
+def test_admin_worker_page_is_separate_from_contribution_page(worker_services):
     with TestClient(app) as client:
         token=admin_login(client)
-        for _ in range(2):
-            r=client.post('/user/workers',data={'csrf_token':token,'name':'Admin worker'},headers=AJAX)
+        assert client.post('/user/workers',data={'csrf_token':token},headers=AJAX).status_code==409
+        page=client.get('/user/workers').text
+        assert '我的 Worker' in page and '更改归属' not in page
+        names=[f"admin-system-{uuid4().hex[:8]}", f"admin-system-{uuid4().hex[:8]}"]
+        for name in names:
+            r=client.post('/admin/workers',data={'csrf_token':token,'name':name},headers=AJAX)
             assert r.status_code==200,r.text
+        admin_page=client.get('/admin/workers').text
+        assert 'Worker 管理' in admin_page and all(name in admin_page for name in names)
+        assert '进入 Worker 管理' in client.get('/admin').text
 
 
 def test_duplicate_account_quota_lifecycle_and_transfer(worker_services):

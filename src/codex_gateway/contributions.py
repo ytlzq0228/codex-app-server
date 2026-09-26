@@ -26,9 +26,9 @@ def is_admin(request):
     return request.state.user.role in {"admin", "superadmin"}
 
 
-async def owned_worker(request, db, worker_id, *, lock=True):
+async def owned_worker(request, db, worker_id, *, lock=True, allow_admin_all=False):
     query = select(Worker).where(Worker.id == worker_id, Worker.endpoint != "removed://worker")
-    if not is_admin(request):
+    if not (allow_admin_all and is_admin(request)):
         query = query.where(Worker.owner_username == request.state.user.username)
     if lock:
         query = query.with_for_update()
@@ -61,15 +61,12 @@ async def next_worker_suffix(db, username):
 
 @router.get("/user/workers")
 async def workers_page(request: Request, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
-    query = select(Worker).where(Worker.endpoint != "removed://worker")
-    if not is_admin(request):
-        query = query.where(Worker.owner_username == identity.username)
+    query = select(Worker).where(Worker.endpoint != "removed://worker", Worker.owner_username == identity.username)
     workers = (await db.scalars(query.order_by(Worker.created_at))).all()
-    users = (await db.scalars(select(User).where(User.enabled.is_(True)).order_by(User.username))).all() if is_admin(request) else []
-    credited, duplicates = await credited_workers(db, identity.username if not is_admin(request) else None)
-    blocked = not is_admin(request) and any(awaiting_login(worker) for worker in workers)
-    suffix = await next_worker_suffix(db, identity.username) if not is_admin(request) else ""
-    return render(request, identity, page="workers", workers=workers, users=users, credited=credited, duplicates=duplicates,
+    credited, duplicates = await credited_workers(db, identity.username)
+    blocked = any(awaiting_login(worker) for worker in workers)
+    suffix = await next_worker_suffix(db, identity.username)
+    return render(request, identity, page="workers", workers=workers, users=[], credited=credited, duplicates=duplicates,
                   creation_blocked=blocked, next_suffix=suffix)
 
 
@@ -80,26 +77,20 @@ async def contribute_worker(request: Request, name: str = Form("", max_length=80
     # access to another owner's retained Docker volumes.
     container_name = "contrib-" + uuid4().hex
     settings = get_settings()
-    if is_admin(request):
-        label = name.strip()
-        if not label:
-            raise HTTPException(400, "Worker 名称不能为空")
-        label += "-" + container_name[-8:]
-    else:
-        # Serialize creation for this user, including the login check and naming.
-        await db.scalar(select(User).where(User.username == identity.username).with_for_update())
-        existing = (await db.scalars(select(Worker).where(
-            Worker.owner_username == identity.username, Worker.endpoint != "removed://worker"))).all()
-        if any(awaiting_login(worker) for worker in existing):
-            raise HTTPException(409, "名下存在未登录或尚未确认登录的 Worker，请先登录并探测，或删除后再创建")
-        if name:
-            raise HTTPException(400, "名称前缀由当前用户名生成，只允许修改数字后缀")
-        suffix = suffix or await next_worker_suffix(db, identity.username)
-        if not re.fullmatch(r"[0-9]{1,2}", suffix) or not 1 <= int(suffix) <= 99:
-            raise HTTPException(400, "请输入 01–99 的数字后缀，最多两位；序号用尽时请选择未使用的序号")
-        label = f"{identity.username}-worker-{int(suffix):02d}"
-        if await db.scalar(select(Worker.id).where(Worker.name == label)):
-            raise HTTPException(409, "该 Worker 序号已经使用，请选择其他数字")
+    # Serialize creation for this user, including the login check and naming.
+    await db.scalar(select(User).where(User.username == identity.username).with_for_update())
+    existing = (await db.scalars(select(Worker).where(
+        Worker.owner_username == identity.username, Worker.endpoint != "removed://worker"))).all()
+    if any(awaiting_login(worker) for worker in existing):
+        raise HTTPException(409, "名下存在未登录或尚未确认登录的 Worker，请先登录并探测，或删除后再创建")
+    if name:
+        raise HTTPException(400, "名称前缀由当前用户名生成，只允许修改数字后缀")
+    suffix = suffix or await next_worker_suffix(db, identity.username)
+    if not re.fullmatch(r"[0-9]{1,2}", suffix) or not 1 <= int(suffix) <= 99:
+        raise HTTPException(400, "请输入 01–99 的数字后缀，最多两位；序号用尽时请选择未使用的序号")
+    label = f"{identity.username}-worker-{int(suffix):02d}"
+    if await db.scalar(select(Worker.id).where(Worker.name == label)):
+        raise HTTPException(409, "该 Worker 序号已经使用，请选择其他数字")
     worker = Worker(owner_username=identity.username, name=label,
                     container_name=container_name, endpoint=f"ws://{container_name}:4500", status=WorkerStatus.offline)
     db.add(worker)
@@ -176,7 +167,7 @@ async def contributor_delete(request: Request, worker_id: UUID, csrf_token: str 
 @router.post("/admin/workers/{worker_id}/owner")
 async def transfer_worker(request: Request, worker_id: UUID, username: str = Form(...), csrf_token: str = Form(...), identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
     verify_csrf(request, identity, csrf_token)
-    worker = await owned_worker(request, db, worker_id)
+    worker = await owned_worker(request, db, worker_id, allow_admin_all=True)
     user = await db.get(User, username)
     if not user or not user.enabled:
         raise HTTPException(400, "请选择已有且启用的用户")
@@ -245,11 +236,8 @@ async def account_monitor_loop():
         await asyncio.sleep(settings.worker_recovery_interval_seconds)
 
 
-@router.post('/user/workers/{worker_id}/rate-limits')
-async def worker_rate_limits(request: Request, worker_id: UUID, csrf_token: str = Form(...), identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
+async def read_worker_rate_limits(worker: Worker, db: AsyncSession):
     from .rate_limits import summarize_windows
-    verify_csrf(request, identity, csrf_token)
-    worker = await owned_worker(request, db, worker_id, lock=False)
     endpoint = worker.endpoint
     if not worker.auth_mode or worker.failure_kind == 'logged_out':
         raise HTTPException(409, 'Worker 未登录，请先登录并探测')
@@ -262,3 +250,17 @@ async def worker_rate_limits(request: Request, worker_id: UUID, csrf_token: str 
         return summarize_windows(payload)
     except Exception:
         raise HTTPException(502, '暂时无法读取账号额度，请稍后重试')
+
+
+@router.post('/user/workers/{worker_id}/rate-limits')
+async def worker_rate_limits(request: Request, worker_id: UUID, csrf_token: str = Form(...), identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
+    verify_csrf(request, identity, csrf_token)
+    worker = await owned_worker(request, db, worker_id, lock=False)
+    return await read_worker_rate_limits(worker, db)
+
+
+@router.post('/admin/workers/{worker_id}/rate-limits')
+async def admin_worker_rate_limits(request: Request, worker_id: UUID, csrf_token: str = Form(...), identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
+    verify_csrf(request, identity, csrf_token)
+    worker = await owned_worker(request, db, worker_id, lock=False, allow_admin_all=True)
+    return await read_worker_rate_limits(worker, db)

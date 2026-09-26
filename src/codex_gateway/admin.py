@@ -225,6 +225,11 @@ async def api_keys_page(request: Request, admin: AdminSession = Depends(require_
     return await render_admin_page(request, "keys", 1, admin, session)
 
 
+@router.get("/workers", response_class=HTMLResponse)
+async def workers_admin_page(request: Request, admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    return await render_admin_page(request, "admin_workers", 1, admin, session)
+
+
 @router.get("/sessions", response_class=HTMLResponse)
 async def sessions_page(request: Request, admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     return await render_admin_page(request, "sessions", 1, admin, session)

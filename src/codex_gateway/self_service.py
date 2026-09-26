@@ -272,17 +272,27 @@ async def save_google_settings(request: Request, client_id: str = Form("", max_l
 
 
 @router.post("/admin/users/{username}/quota")
-async def grant_quota(request: Request, username: str, amount: int = Form(..., ge=1, le=10000), csrf_token: str = Form(...), identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
-    from .quota import quota_lock
+async def grant_quota(request: Request, username: str, quota_granted: int | None = Form(None, ge=0, le=10000), amount: int | None = Form(None, ge=1, le=10000), csrf_token: str = Form(...), identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
+    from .quota import quota_lock, enforce_quota
     verify_csrf(request, identity, csrf_token)
     await quota_lock(db)
     user = await db.scalar(select(User).where(User.username == username).with_for_update().execution_options(populate_existing=True))
     if not user:
         raise HTTPException(404, "用户不存在")
     authorize_role(request.state.user, user.role, user.role)
-    user.quota_granted += amount
+    if quota_granted is None and amount is None:
+        raise HTTPException(422, "请输入管理员授予额度")
+    # Keep the old increment field for existing API clients; the UI sends an absolute value.
+    target = quota_granted if quota_granted is not None else user.quota_granted + amount
+    if target > 10000:
+        raise HTTPException(422, "管理员授予额度不能超过 10000")
+    user.quota_granted = target
+    disabled = await enforce_quota(db, username)
     await db.commit()
-    return {"message": f"已增加 {amount} 个 Key 额度"}
+    message = f"管理员授予额度已设为 {target}"
+    if disabled:
+        message += f"，额度不足，已停用 {disabled} 个最久未使用的 Key"
+    return {"message": message}
 
 
 @router.post("/user/account/keys/{key_id}/toggle")

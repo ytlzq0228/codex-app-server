@@ -7,45 +7,49 @@
       queue.shift()().finally(() => { running--; pump(); });
     }
   };
+  const usageClass = percent => percent >= 90 ? 'usage-danger' : (percent >= 60 ? 'usage-warn' : 'usage-ok');
+  const resetTime = seconds => new Date(seconds * 1000).toLocaleString('zh-CN', {
+    year: 'numeric', month: 'numeric', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+  });
+  const renderWindow = (label, window) => {
+    const line = document.createElement('div');
+    line.className = 'usage-window';
+    const meter = document.createElement('div');
+    meter.className = 'usage-meter';
+    const progress = document.createElement('progress');
+    progress.max = 100;
+    progress.value = window?.used ?? 0;
+    progress.className = usageClass(progress.value);
+    progress.setAttribute('aria-label', `${label}已用额度`);
+    const caption = document.createElement('span');
+    caption.className = 'usage-caption';
+    caption.textContent = window ? `${label}：已用 ${window.used}%` : `${label}：暂无数据`;
+    meter.append(progress, caption);
+    const reset = document.createElement('span');
+    reset.className = 'usage-reset';
+    reset.textContent = `重置：${window?.resets_at != null ? resetTime(window.resets_at) : '—'}`;
+    line.append(meter, reset);
+    return line;
+  };
   document.querySelectorAll('[data-rate-limits]').forEach(box => {
-    const button = box.querySelector('[data-rate-refresh]');
-    const status = box.querySelector('[data-rate-status]');
+    if (box.dataset.loggedIn !== 'true') return;
     const content = box.querySelector('[data-rate-content]');
-    const usageClass = percent => percent >= 90 ? 'usage-danger' : (percent >= 60 ? 'usage-warn' : 'usage-ok');
-    const refresh = () => {
-      if (button.disabled) return;
-      button.disabled = true;
-      status.textContent = '读取中…';
-      queue.push(async () => {
-        try {
-          const body = new FormData();
-          body.set('csrf_token', box.querySelector('[name=csrf_token]').value);
-          const response = await fetch(box.dataset.rateLimits, {method:'POST', body, headers:{'X-Requested-With':'XMLHttpRequest'}});
-          const data = await response.json();
-          if (!response.ok) throw new Error(data.error?.message || data.detail || '读取失败');
-          content.replaceChildren();
-          for (const bucket of data.buckets) {
-            const heading = document.createElement('strong'); heading.textContent = bucket.name; content.append(heading);
-            for (const [key,label] of [['five_hour','5 小时'],['week','周窗口']]) {
-              const window = bucket[key];
-              const line = document.createElement('div');
-              line.textContent = window ? `${label}：已用 ${window.used}%` : `${label}：暂无数据`;
-              if (window) {
-                const bar = document.createElement('progress'); bar.max=100; bar.value=window.used; bar.className=usageClass(window.used); bar.setAttribute('aria-label', `${label}已用额度`); line.append(bar);
-                if (window.resets_at != null) { const reset=document.createElement('small'); reset.textContent='重置：'+new Date(window.resets_at*1000).toLocaleString(); line.append(reset); }
-              }
-              content.append(line);
-            }
-          }
-          status.textContent='更新于 '+new Date(data.checked_at).toLocaleTimeString();
-        } catch (error) {
-          content.textContent='5 小时 / 周窗口：暂无数据'; status.textContent=error.message;
-        } finally { button.disabled=false; }
-      });
-      pump();
-    };
-    button.addEventListener('click', refresh);
-    if (box.dataset.loggedIn === 'true') refresh();
-    else status.textContent='未登录或未确认登录';
+    queue.push(async () => {
+      try {
+        const body = new FormData();
+        body.set('csrf_token', box.querySelector('[name=csrf_token]').value);
+        const response = await fetch(box.dataset.rateLimits, {method: 'POST', body,
+          headers: {'X-Requested-With': 'XMLHttpRequest'}});
+        const data = await response.json();
+        if (!response.ok) throw new Error('读取失败');
+        const bucket = data.buckets.find(item => item.five_hour || item.week);
+        if (!bucket) throw new Error('暂无额度数据');
+        content.replaceChildren(renderWindow('5 小时', bucket.five_hour), renderWindow('周窗口', bucket.week));
+      } catch (error) {
+        content.textContent = error.message || '额度读取失败';
+      }
+    });
+    pump();
   });
 })();

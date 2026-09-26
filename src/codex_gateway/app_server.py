@@ -33,7 +33,9 @@ class AppServerSession:
     async def send(self, method: str, params: dict[str, Any] | None = None) -> int:
         request_id = self.next_id
         self.next_id += 1
-        await self.websocket.send(json.dumps({"method": method, "id": request_id, "params": params or {}}))
+        # The account/logout RPC has a null parameter schema, unlike object RPCs.
+        rpc_params = None if method == "account/logout" else params or {}
+        await self.websocket.send(json.dumps({"method": method, "id": request_id, "params": rpc_params}))
         return request_id
 
     async def notify(self, method: str, params: dict[str, Any] | None = None) -> None:

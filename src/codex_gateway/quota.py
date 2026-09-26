@@ -3,8 +3,6 @@ from sqlalchemy import func, select, text
 from fastapi import HTTPException
 from .models import ApiKey, User, Worker, WorkerStatus
 
-PAID_PLANS = {"plus", "pro", "team", "business", "enterprise", "edu"}
-
 
 async def quota_lock(db):
     # A transaction-scoped advisory lock covers creation, enabling, transfer and
@@ -14,18 +12,35 @@ async def quota_lock(db):
 
 
 def contribution_filters(username=None):
+    plan = func.nullif(func.lower(func.trim(Worker.plan_type)), "")
     filters = [Worker.enabled.is_(True), Worker.endpoint != "removed://worker",
                Worker.status.in_([WorkerStatus.ready, WorkerStatus.busy]),
-               Worker.auth_mode == "chatgpt", func.lower(Worker.plan_type).in_(PAID_PLANS),
-               Worker.account_checked_at.is_not(None)]
+               Worker.auth_mode == "chatgpt", plan.is_not(None), plan != "free",
+               Worker.account_checked_at.is_not(None),
+               func.nullif(func.lower(func.trim(Worker.account_email)), "").is_not(None)]
     if username is not None:
         filters.append(Worker.owner_username == username)
     return filters
 
 
+async def credited_workers(db, username=None):
+    rows = (await db.execute(select(Worker.id, Worker.owner_username,
+        func.lower(func.trim(Worker.account_email))).where(*contribution_filters(username))
+        .order_by(Worker.created_at, Worker.id))).all()
+    seen, credited, duplicates = set(), set(), set()
+    for worker_id, owner, account in rows:
+        identity = (owner, account)
+        if identity in seen:
+            duplicates.add(worker_id)
+        else:
+            seen.add(identity)
+            credited.add(worker_id)
+    return credited, duplicates
+
+
 async def quota_summary(db, username):
     base = await db.scalar(select(User.quota_granted).where(User.username == username)) or 0
-    credits = await db.scalar(select(func.count()).select_from(Worker).where(*contribution_filters(username))) or 0
+    credits = await db.scalar(select(func.count(func.distinct(func.lower(func.trim(Worker.account_email))))).select_from(Worker).where(*contribution_filters(username))) or 0
     used = await db.scalar(select(func.count()).select_from(ApiKey).where(ApiKey.owner_username == username, ApiKey.enabled.is_(True), ApiKey.deleted_at.is_(None))) or 0
     return dict(granted=base, contributed=credits, total=base+credits, used=used, available=max(0,base+credits-used))
 

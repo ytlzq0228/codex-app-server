@@ -75,7 +75,9 @@ if (workerDialog) {
   let timer, activeController;
   workerDialog.addEventListener('close', () => { clearTimeout(timer); activeController?.abort(); if (workerDialog.dataset.reload === '1') location.reload(); });
   document.querySelectorAll('[data-worker-login], [data-worker-account]').forEach(form => form.addEventListener('submit', async event => {
-    event.preventDefault(); clearTimeout(timer); activeController?.abort();
+    event.preventDefault();
+    if (form.dataset.confirm && !confirm(form.dataset.confirm)) return;
+    clearTimeout(timer); activeController?.abort();
     activeController = new AbortController();
     const signal = activeController.signal;
     const message = document.getElementById('worker-login-message');

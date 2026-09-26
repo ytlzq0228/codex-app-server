@@ -16,7 +16,7 @@ from .config import get_settings
 from .database import get_session
 from .models import User, Worker, WorkerStatus
 from .self_service import render
-from .quota import reconcile_worker, contribution_filters
+from .quota import reconcile_worker, credited_workers
 from .user_auth import require_user
 
 router = APIRouter()
@@ -66,10 +66,10 @@ async def workers_page(request: Request, identity=Depends(require_user), db: Asy
         query = query.where(Worker.owner_username == identity.username)
     workers = (await db.scalars(query.order_by(Worker.created_at))).all()
     users = (await db.scalars(select(User).where(User.enabled.is_(True)).order_by(User.username))).all() if is_admin(request) else []
-    credited = set((await db.scalars(select(Worker.id).where(*contribution_filters(identity.username if not is_admin(request) else None)))).all())
+    credited, duplicates = await credited_workers(db, identity.username if not is_admin(request) else None)
     blocked = not is_admin(request) and any(awaiting_login(worker) for worker in workers)
     suffix = await next_worker_suffix(db, identity.username) if not is_admin(request) else ""
-    return render(request, identity, page="workers", workers=workers, users=users, credited=credited,
+    return render(request, identity, page="workers", workers=workers, users=users, credited=credited, duplicates=duplicates,
                   creation_blocked=blocked, next_suffix=suffix)
 
 
@@ -123,14 +123,11 @@ async def contribute_worker(request: Request, name: str = Form("", max_length=80
 
 @router.post("/workers/{worker_id}/login")
 async def contributor_login(request: Request, worker_id: UUID, force: bool = Form(False), csrf_token: str = Form(...), identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
-    from .admin import login_worker_endpoint
+    from .admin import relogin_worker_record
     verify_csrf(request, identity, csrf_token)
     worker = await owned_worker(request, db, worker_id)
-    result = await login_worker_endpoint(worker.endpoint, get_settings(), force=force, poll_url=f"/workers/{worker.id}/probe")
-    if force:
-        update_account(worker, None)
-        worker.status = WorkerStatus.offline
-        await reconcile_worker(db, worker)
+    result = await relogin_worker_record(worker, db, get_settings(), force=force,
+        poll_url=f"/workers/{worker.id}/probe")
     await db.commit()
     return result
 

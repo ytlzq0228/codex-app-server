@@ -255,3 +255,17 @@ async def test_app_server_pool_returns_capacity_error_after_timeout(monkeypatch)
             async with pool.lease("key:worker", "worker", "ws://worker"):
                 pass
     await pool.close()
+
+
+@pytest.mark.asyncio
+async def test_logout_rpc_serializes_null_params():
+    import json
+    from codex_gateway.app_server import AppServerSession
+    sent=[]
+    class Socket:
+        async def send(self,body):sent.append(json.loads(body))
+    session=AppServerSession(Socket(),10)
+    await session.send('account/logout')
+    await session.send('account/login/start',{'type':'chatgptDeviceCode'})
+    assert sent[0]['params'] is None
+    assert sent[1]['params']=={'type':'chatgptDeviceCode'}

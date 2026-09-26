@@ -26,7 +26,7 @@ from .config import get_settings
 from .database import SessionLocal, engine, get_session
 from .models import ModelPrice, Base, ResponseBinding, UsageRecord, Worker, WorkerStatus
 from .audit import RequestAuditMiddleware, current_audit, request_params as captured_params
-from .quota import reconcile_worker
+from .quota import reconcile_worker, enforce_quota
 from .contributions import account_monitor_loop, update_account
 from .migrations import upgrade, bootstrap_users
 from .schemas import BackendResult, ChatCompletionRequest, ResponseRequest
@@ -77,6 +77,10 @@ async def lifespan(app: FastAPI):
         elif worker.endpoint != "removed://worker":
             worker.container_name = "codex-worker-1"
             worker.endpoint = settings.app_server_url
+        # Apply contribution rule changes to existing users before serving traffic.
+        from .models import User
+        for username in (await session.scalars(select(User.username).order_by(User.username))).all():
+            await enforce_quota(session, username)
         await session.commit()
     app.state.backend = MockBackend() if settings.backend == "mock" else AppServerBackend(settings)
     recovery_task = asyncio.create_task(worker_recovery_loop(), name="worker-recovery")

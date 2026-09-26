@@ -482,17 +482,43 @@ async def probe_selected_worker(request: Request, worker_id: UUID, csrf_token: s
     return JSONResponse(await probe_worker_record(worker, session, settings))
 
 
-async def login_worker_endpoint(endpoint: str, settings: Settings, *, force: bool = False, poll_url: str | None = None) -> dict:
+async def login_worker_endpoint(endpoint: str, settings: Settings, *, force: bool = False, poll_url: str | None = None, on_logout=None) -> dict:
     try:
         async with open_app_server(endpoint, settings.app_server_token.get_secret_value(), settings.app_server_timeout_seconds) as app_server:
             account_response = await app_server.call("account/read", {"refreshToken": False})
             account = account_response.get("account") or {}
             if account and not force:
                 return {"title": "Codex 已登录", "message": f"当前账户类型：{account.get('type') or 'chatgpt'}；套餐：{account.get('planType') or '—'}。无需重复登录。", "logged_in": True}
+            if force:
+                await app_server.call("account/logout", None)
+                if on_logout:
+                    await on_logout()
             response = await app_server.call("account/login/start", {"type": "chatgptDeviceCode"})
     except AppServerError as exc:
         raise HTTPException(502, str(exc)) from exc
     return {"title": "登录 Codex 账号", "message": "在 OpenAI 页面输入下方设备码。此窗口会自动检测登录结果。", "login_url": response.get("verificationUrl", ""), "user_code": response.get("userCode", ""), "logged_in": False, "poll_url": poll_url}
+
+
+async def relogin_worker_record(worker, session, settings, *, force, poll_url):
+    logged_out = False
+
+    async def record_logout():
+        nonlocal logged_out
+        from .contributions import update_account
+        update_account(worker, None)
+        worker.status = WorkerStatus.offline
+        worker.failure_kind = "logged_out"
+        await reconcile_worker(session, worker)
+        logged_out = True
+
+    try:
+        return await login_worker_endpoint(worker.endpoint, settings, force=force,
+            poll_url=poll_url, on_logout=record_logout)
+    finally:
+        # Logout is an external side effect: preserve it even if starting the
+        # new login fails, retaining the worker row lock until the RPCs finish.
+        if logged_out:
+            await session.commit()
 
 
 @router.post("/workers/login")
@@ -508,11 +534,7 @@ async def login_selected_worker(request: Request, worker_id: UUID, csrf_token: s
     worker = await session.scalar(select(Worker).where(Worker.id == worker_id).with_for_update().execution_options(populate_existing=True))
     if not worker or worker.endpoint == "removed://worker":
         raise HTTPException(404, "Worker not found")
-    payload = await login_worker_endpoint(worker.endpoint, settings, force=force, poll_url=f"/admin/workers/{worker.id}/probe")
-    if force:
-        from .contributions import update_account
-        update_account(worker, None)
-        worker.status = WorkerStatus.offline
-        await reconcile_worker(session, worker)
+    payload = await relogin_worker_record(worker, session, settings, force=force,
+        poll_url=f"/admin/workers/{worker.id}/probe")
     await session.commit()
     return JSONResponse(payload)

@@ -258,3 +258,101 @@ def test_admin_exempt_from_pending_worker_guard(worker_services):
         for _ in range(2):
             r=client.post('/workers',data={'csrf_token':token,'name':'Admin worker'},headers=AJAX)
             assert r.status_code==200,r.text
+
+
+def test_duplicate_account_quota_lifecycle_and_transfer(worker_services):
+    with TestClient(app) as client:
+        alice,pw=create_person(client)
+        bob,bpw=create_person(client)
+        token=user_login(client,alice,pw)
+        first=contribute(client,token);probe(client,token,first)
+        second=contribute(client,token)
+        worker_services['account']['email']='  CONTRIBUTOR@example.com  '
+        probe(client,token,second)
+        assert client.portal.call(summary,alice)['contributed']==1
+        assert '重复账号，不增加额度' in client.get('/workers').text
+        older=new_key(client,token).json()['key_id']
+        assert new_key(client,token).status_code==409
+        worker_services['account']['email']='another@example.com'
+        probe(client,token,second)
+        assert client.portal.call(summary,alice)['contributed']==2
+        newer=new_key(client,token).json()['key_id']
+        async def mark_used():
+            async with SessionLocal() as db:
+                key=await db.get(ApiKey,UUID(newer));key.last_used_at=datetime.now(timezone.utc)
+                await db.commit()
+        client.portal.call(mark_used)
+        worker_services['account']['email']='contributor@example.com'
+        probe(client,token,second)
+        assert client.portal.call(summary,alice)['used']==1
+        async def check_keys():
+            async with SessionLocal() as db:
+                assert not (await db.get(ApiKey,UUID(older))).enabled
+                assert (await db.get(ApiKey,UUID(newer))).enabled
+        client.portal.call(check_keys)
+        worker_services['account']=None
+        probe(client,token,first)
+        assert client.portal.call(summary,alice)['contributed']==1
+        worker_services['account']={'type':'chatgpt','email':'contributor@example.com','planType':'plus'}
+        probe(client,token,first)
+        token=admin_login(client)
+        assert client.post('/admin/workers/'+second+'/owner',data={'csrf_token':token,'username':bob},headers=AJAX).status_code==200
+        assert client.portal.call(summary,alice)['contributed']==1
+        assert client.portal.call(summary,bob)['contributed']==1
+        assert client.post('/admin/workers/'+second+'/owner',data={'csrf_token':token,'username':alice},headers=AJAX).status_code==200
+        assert client.portal.call(summary,bob)['contributed']==0
+        assert client.portal.call(summary,alice)['contributed']==1
+        token=signin(client,alice,pw)
+        assert client.post('/workers/'+first+'/delete',data={'csrf_token':token},headers=AJAX).status_code==200
+        assert client.portal.call(summary,alice)['contributed']==1
+        worker_services['account']['email']=None
+        probe(client,token,second)
+        assert client.portal.call(summary,alice)['contributed']==0
+        assert client.portal.call(summary,alice)['used']==0
+
+
+@pytest.mark.parametrize('failure', [None, 'account/logout', 'account/login/start'])
+def test_relogin_logout_order_and_failure_state(worker_services, monkeypatch, failure):
+    import codex_gateway.admin as admin
+    from codex_gateway.app_server import AppServerError
+    calls=[]
+    class Server:
+        async def call(self,method,params):
+            calls.append(method)
+            if method==failure:raise AppServerError('test failure')
+            if method=='account/read':return {'account':worker_services['account']}
+            return {'verificationUrl':'https://example.test/device','userCode':'TEST'}
+    @asynccontextmanager
+    async def opened(*args,**kwargs):yield Server()
+    with TestClient(app) as client:
+        name,pw=create_person(client)
+        token=user_login(client,name,pw)
+        worker=contribute(client,token);probe(client,token,worker)
+        assert new_key(client,token).status_code==200
+        assert '是否退出当前账号并重新登录' in client.get('/workers').text
+        monkeypatch.setattr(admin,'open_app_server',opened)
+        response=client.post('/workers/'+worker+'/login',data={'csrf_token':token,'force':'true'},headers=AJAX)
+        assert response.status_code==(502 if failure else 200)
+        expected=['account/read','account/logout']
+        if failure!='account/logout':expected+=['account/login/start']
+        assert calls==expected
+        quota=client.portal.call(summary,name)
+        assert quota['contributed']==(1 if failure=='account/logout' else 0)
+        assert quota['used']==(1 if failure=='account/logout' else 0)
+
+
+def test_any_identified_non_free_plan_contributes(worker_services):
+    with TestClient(app) as client:
+        name,pw=create_person(client)
+        token=user_login(client,name,pw)
+        worker=contribute(client,token)
+        for plan,expected in [('self_serve_business_prolite',1),('future_subscription',1),
+                              (' Pro ',1),('free',0),(' FREE ',0),(None,0),('',0),('  ',0)]:
+            worker_services['account']['planType']=plan
+            probe(client,token,worker)
+            assert client.portal.call(summary,name)['contributed']==expected,plan
+        worker_services['account']['planType']='self_serve_business_prolite'
+        probe(client,token,worker)
+        second=contribute(client,token);probe(client,token,second)
+        assert client.portal.call(summary,name)['contributed']==1
+        assert '重复账号，不增加额度' in client.get('/workers').text

@@ -111,6 +111,7 @@ def test_admin_can_change_password_and_invalidate_old_session() -> None:
 def test_key_can_be_edited_and_soft_deleted_without_losing_history() -> None:
     with TestClient(app) as client:
         csrf = login(client)
+        assert client.post("/admin/users/"+get_settings().admin_username+"/quota", data={"csrf_token":csrf,"amount":1}, headers={"X-Requested-With":"XMLHttpRequest"}).status_code == 200
         original_name = f"admin-lifecycle-{uuid4().hex[:8]}"
         renamed = f"admin-renamed-{uuid4().hex[:8]}"
         created = client.post(
@@ -132,7 +133,7 @@ def test_key_can_be_edited_and_soft_deleted_without_losing_history() -> None:
         assert renamed in client.get("/admin").text
 
         assert client.get("/v1/models", headers={"Authorization": f"Bearer {raw_key}"}).status_code == 200
-        api_response = client.post("/v1/responses", headers={"Authorization": f"Bearer {raw_key}"}, json={"model": "codex", "input": "history retention test"})
+        api_response = client.post("/v1/responses", headers={"Authorization": f"Bearer {raw_key}"}, json={"model": "gpt-6-sol", "input": "history retention test"})
         assert api_response.status_code == 200
         request_id = api_response.json()["id"]
         released = client.post(
@@ -141,7 +142,7 @@ def test_key_can_be_edited_and_soft_deleted_without_losing_history() -> None:
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
         assert released.status_code == 200
-        second_response = client.post("/v1/responses", headers={"Authorization": f"Bearer {raw_key}"}, json={"model": "codex", "input": "second session"})
+        second_response = client.post("/v1/responses", headers={"Authorization": f"Bearer {raw_key}"}, json={"model": "gpt-6-sol", "input": "second session"})
         assert second_response.status_code == 200
         cleared = client.post(
             f"/admin/keys/{key_id}/sessions/clear",

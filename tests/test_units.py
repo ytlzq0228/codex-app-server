@@ -28,13 +28,13 @@ def test_admin_password_hashing() -> None:
 
 
 def test_input_messages_are_flattened() -> None:
-    request = ResponseRequest(model="codex", instructions="be terse", input=[{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}])
+    request = ResponseRequest(model="gpt-6-sol", instructions="be terse", input=[{"role": "user", "content": [{"type": "input_text", "text": "hello"}]}])
     assert request.input_text() == "be terse\n\nUSER:\nhello"
 
 
 def test_empty_input_is_rejected() -> None:
     with pytest.raises(ValueError):
-        ResponseRequest(model="codex", input="  ")
+        ResponseRequest(model="gpt-6-sol", input="  ")
 
 
 @pytest.mark.parametrize(("payload", "expected"), [
@@ -59,6 +59,8 @@ def test_worker_failure_classification(message: str, kind: str) -> None:
 def test_generic_gpt_56_client_name_maps_to_codex_variant() -> None:
     backend = AppServerBackend(get_settings())
     assert backend.model("gpt-5.6") == "gpt-5.6-sol"
+    assert backend.model("gpt-6-sol") == "gpt-6-sol"
+    assert backend.model("codex") == "codex"
 
 
 @pytest.mark.asyncio
@@ -84,7 +86,7 @@ async def test_safe_failure_retries_once_on_another_worker(monkeypatch) -> None:
 
     monkeypatch.setattr(main_module, "quarantine_worker", fake_quarantine)
     monkeypatch.setattr(main_module, "retry_target", fake_retry)
-    result, selected = await complete_with_failover(ResponseRequest(model="codex", input="hello"), Backend(), ApiPrincipal(None, "test"), first, allow_retry=True)
+    result, selected = await complete_with_failover(ResponseRequest(model="gpt-6-sol", input="hello"), Backend(), ApiPrincipal(None, "test"), first, allow_retry=True)
     assert result.text == "ok"
     assert selected.worker_id == second_id
     assert calls == [first_id, second_id]
@@ -111,7 +113,7 @@ async def test_ambiguous_started_turn_is_never_replayed(monkeypatch) -> None:
     monkeypatch.setattr(main_module, "quarantine_worker", fake_quarantine)
     monkeypatch.setattr(main_module, "retry_target", fake_retry)
     with pytest.raises(WorkerFailure):
-        await complete_with_failover(ResponseRequest(model="codex", input="hello"), Backend(), ApiPrincipal(None, "test"), target, allow_retry=True)
+        await complete_with_failover(ResponseRequest(model="gpt-6-sol", input="hello"), Backend(), ApiPrincipal(None, "test"), target, allow_retry=True)
     assert retry_called is False
 
 
@@ -173,7 +175,7 @@ async def test_failed_thread_resume_is_a_session_failure() -> None:
             raise AppServerError("thread not found")
 
     backend = AppServerBackend(get_settings())
-    request = ResponseRequest(model="codex", input="continue", previous_response_id="thread-missing")
+    request = ResponseRequest(model="gpt-6-sol", input="continue", previous_response_id="thread-missing")
     with pytest.raises(WorkerFailure) as exc:
         await backend._start_thread(FakeServer(), request, "/workspace/key")
     assert exc.value.kind == "session"
@@ -202,7 +204,7 @@ async def test_session_failure_does_not_quarantine_or_retry(monkeypatch) -> None
     monkeypatch.setattr(main_module, "quarantine_worker", fake_quarantine)
     monkeypatch.setattr(main_module, "retry_target", fake_retry)
     with pytest.raises(Exception) as exc:
-        await complete_with_failover(ResponseRequest(model="codex", input="continue"), Backend(), ApiPrincipal(None, "test"), target, allow_retry=True)
+        await complete_with_failover(ResponseRequest(model="gpt-6-sol", input="continue"), Backend(), ApiPrincipal(None, "test"), target, allow_retry=True)
     assert getattr(exc.value, "status_code", None) == 404
     assert quarantined is False
     assert retried is False

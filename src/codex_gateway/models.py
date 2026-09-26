@@ -25,6 +25,7 @@ class AdminUser(Base):
 
 class User(Base):
     __tablename__ = "users"
+    quota_granted: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     username: Mapped[str] = mapped_column(String(120), primary_key=True)
     password_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)
     role: Mapped[str] = mapped_column(String(16), default="user")
@@ -55,6 +56,11 @@ class ModelPrice(Base):
     input_price: Mapped[float] = mapped_column(Numeric(18, 6))
     output_price: Mapped[float] = mapped_column(Numeric(18, 6))
 
+class SubscriptionPlan(Base):
+    __tablename__ = "subscription_plans"
+    name: Mapped[str] = mapped_column(String(120), primary_key=True)
+    monthly_price: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+
 class SubscriptionCost(Base):
     __tablename__ = "subscription_costs"
     month: Mapped[str] = mapped_column(String(7), primary_key=True)
@@ -62,8 +68,11 @@ class SubscriptionCost(Base):
 
 class Worker(Base):
     __tablename__ = "workers"
+    owner_username: Mapped[str | None] = mapped_column(ForeignKey("users.username"), index=True)
+    account_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    account_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
-    name: Mapped[str] = mapped_column(String(120), unique=True)
+    name: Mapped[str] = mapped_column(String(180), unique=True)
     container_name: Mapped[str] = mapped_column(String(180), unique=True)
     endpoint: Mapped[str] = mapped_column(String(500))
     status: Mapped[WorkerStatus] = mapped_column(Enum(WorkerStatus), default=WorkerStatus.offline)

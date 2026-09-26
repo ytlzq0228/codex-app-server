@@ -106,8 +106,6 @@ class AppServerBackend:
     def __init__(self, settings: Settings) -> None:
         self.token = settings.app_server_token.get_secret_value()
         self.timeout = settings.app_server_timeout_seconds
-        self.public_model = settings.model_name
-        self.upstream_model = settings.upstream_model
         self.model_aliases = settings.model_alias_map()
         self.pool = AppServerPool(
             self.token, self.timeout,
@@ -143,8 +141,6 @@ class AppServerBackend:
                     self._thread_locks[thread_id] = (current_lock, users - 1)
 
     def model(self, requested: str) -> str:
-        if requested == self.public_model:
-            return self.upstream_model
         return self.model_aliases.get(requested, requested)
 
     async def _start_thread(self, app_server, request: ResponseRequest, workspace: str) -> str:

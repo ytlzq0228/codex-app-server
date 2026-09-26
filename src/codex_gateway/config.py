@@ -1,6 +1,6 @@
 from functools import lru_cache
 from typing import Literal
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     admin_session_secret: SecretStr | None = None
     admin_cookie_secure: bool = False
     auto_create_schema: bool = True
-    model_name: str = "codex"
+    model_name: str = ""  # Legacy environment setting; no longer exposes a model alias.
     upstream_model: str = "gpt-6-sol"
     allowed_models: str = "gpt-6-sol,gpt-6-astra,gpt-6-luna,gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna,gpt-5.6"
     model_aliases: str = "gpt-5.6:gpt-5.6-sol"
@@ -38,9 +38,15 @@ class Settings(BaseSettings):
     database_max_overflow: int = 30
     database_pool_timeout_seconds: float = 10.0
 
+    @field_validator("admin_username")
+    @classmethod
+    def normalize_admin_username(cls, value):
+        from .usernames import username_prefix
+        return username_prefix(value)
+
     def public_models(self) -> list[str]:
         configured = [model.strip() for model in self.allowed_models.split(",") if model.strip()]
-        return list(dict.fromkeys([self.model_name, *configured]))
+        return list(dict.fromkeys(configured))
 
     def model_alias_map(self) -> dict[str, str]:
         aliases: dict[str, str] = {}

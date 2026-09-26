@@ -1,14 +1,16 @@
 {% set nav_user = identity if identity is defined else request.state.user %}
 {% set is_admin = nav_user.role in ['admin', 'superadmin'] %}
 {% set navigation = [
-  ('overview', '/admin', '概览', true),
+  ('overview' if is_admin else 'self_overview', '/admin' if is_admin else '/overview', '概览' if is_admin else '自助服务概览', false),
   ('keys', '/admin/api-keys', 'API Keys', true),
   ('sessions', '/admin/sessions', 'Key 活动会话', true),
   ('history', '/admin/history', '请求历史', true),
   ('account', '/account', '我的账户', false),
+  ('workers', '/workers', '贡献 Worker', false),
   ('users', '/admin/users', '用户管理', true),
   ('usage', '/usage', '用量详单', false),
-  ('finance', '/admin/finance', '财务与价格', true),
+  ('finance', '/admin/finance', '价格配置', true),
+  ('reports', '/admin/reports', '财务报表', true),
   ('debug', '/debug', '查询与调试', false),
   ('google', '/admin/google', 'Google 登录配置', true)
 ] %}

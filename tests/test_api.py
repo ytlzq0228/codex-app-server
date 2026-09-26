@@ -28,7 +28,7 @@ def test_models_include_direct_codex_models() -> None:
 
 def test_response() -> None:
     with TestClient(app) as client:
-        response = client.post("/v1/responses", headers=AUTH, json={"model": "codex", "input": "hello world"})
+        response = client.post("/v1/responses", headers=AUTH, json={"model": "gpt-6-sol", "input": "hello world"})
         payload = response.json()
         assert response.status_code == 200
         assert payload["object"] == "response"
@@ -37,7 +37,7 @@ def test_response() -> None:
 
 def test_streaming_response() -> None:
     with TestClient(app) as client:
-        with client.stream("POST", "/v1/responses", headers=AUTH, json={"model": "codex", "input": "hello", "stream": True}) as response:
+        with client.stream("POST", "/v1/responses", headers=AUTH, json={"model": "gpt-6-sol", "input": "hello", "stream": True}) as response:
             body = "".join(response.iter_text())
         assert response.status_code == 200
         assert "event: response.created" in body
@@ -49,7 +49,7 @@ def test_streaming_response() -> None:
 
 def test_chat_completion() -> None:
     with TestClient(app) as client:
-        response = client.post("/v1/chat/completions", headers=AUTH, json={"model": "codex", "messages": [{"role": "system", "content": "Be terse"}, {"role": "user", "content": "hello"}]})
+        response = client.post("/v1/chat/completions", headers=AUTH, json={"model": "gpt-6-sol", "messages": [{"role": "system", "content": "Be terse"}, {"role": "user", "content": "hello"}]})
         payload = response.json()
         assert response.status_code == 200
         assert payload["object"] == "chat.completion"
@@ -68,7 +68,7 @@ def test_chat_completion_accepts_direct_model_name() -> None:
 
 def test_streaming_chat_completion() -> None:
     with TestClient(app) as client:
-        with client.stream("POST", "/v1/chat/completions", headers=AUTH, json={"model": "codex", "messages": [{"role": "user", "content": "hello"}], "stream": True, "stream_options": {"include_usage": True}}) as response:
+        with client.stream("POST", "/v1/chat/completions", headers=AUTH, json={"model": "gpt-6-sol", "messages": [{"role": "user", "content": "hello"}], "stream": True, "stream_options": {"include_usage": True}}) as response:
             body = "".join(response.iter_text())
         assert response.status_code == 200
         assert '"object":"chat.completion.chunk"' in body
@@ -81,7 +81,7 @@ def test_streaming_chat_completion() -> None:
 def test_chatbox_style_official_options_are_accepted() -> None:
     with TestClient(app) as client:
         response = client.post("/v1/chat/completions", headers=AUTH, json={
-            "model": "codex",
+            "model": "gpt-6-sol",
             "messages": [{"role": "developer", "content": "Be concise"}, {"role": "user", "content": [{"type": "text", "text": "hello"}]}],
             "temperature": 0.7,
             "top_p": 1,
@@ -102,7 +102,7 @@ def test_chatbox_style_official_options_are_accepted() -> None:
 def test_advertised_tools_are_accepted_but_forced_tool_choice_is_rejected() -> None:
     with TestClient(app) as client:
         payload = {
-            "model": "codex", "messages": [{"role": "user", "content": "hello"}],
+            "model": "gpt-6-sol", "messages": [{"role": "user", "content": "hello"}],
             "tools": [{"type": "function", "function": {"name": "weather", "parameters": {"type": "object"}}}],
         }
         response = client.post("/v1/chat/completions", headers=AUTH, json=payload)
@@ -117,7 +117,7 @@ def test_advertised_tools_are_accepted_but_forced_tool_choice_is_rejected() -> N
 
 def test_validation_error_identifies_parameter() -> None:
     with TestClient(app) as client:
-        response = client.post("/v1/chat/completions", headers=AUTH, json={"model": "codex", "messages": [], "n": 0})
+        response = client.post("/v1/chat/completions", headers=AUTH, json={"model": "gpt-6-sol", "messages": [], "n": 0})
         assert response.status_code == 400
         assert response.json()["error"]["param"] == "n"
 
@@ -125,7 +125,7 @@ def test_validation_error_identifies_parameter() -> None:
 def test_response_echoes_official_configuration_fields() -> None:
     with TestClient(app) as client:
         response = client.post("/v1/responses", headers=AUTH, json={
-            "model": "codex", "input": "hello", "instructions": "Be concise",
+            "model": "gpt-6-sol", "input": "hello", "instructions": "Be concise",
             "metadata": {"job": "test"}, "max_output_tokens": 100,
             "reasoning": {"effort": "medium"}, "truncation": "auto", "store": False,
             "future_sdk_field": True,
@@ -143,7 +143,7 @@ def test_response_echoes_official_configuration_fields() -> None:
 def test_responses_accepts_native_input_item_variants() -> None:
     with TestClient(app) as client:
         response = client.post("/v1/responses", headers=AUTH, json={
-            "model": "codex",
+            "model": "gpt-6-sol",
             "input": [
                 {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "Find the result"}]},
                 {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{\"q\":\"x\"}"},
@@ -159,7 +159,7 @@ def test_responses_accepts_native_input_item_variants() -> None:
 
 def test_structured_output_and_reasoning_are_mapped_to_backend_request() -> None:
     chat = ChatCompletionRequest.model_validate({
-        "model": "codex",
+        "model": "gpt-6-sol",
         "messages": [{"role": "user", "content": "Return an object"}],
         "reasoning_effort": "high",
         "response_format": {"type": "json_schema", "json_schema": {"name": "answer", "schema": {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}}},
@@ -167,3 +167,15 @@ def test_structured_output_and_reasoning_are_mapped_to_backend_request() -> None
     request = chat.to_response_request()
     assert request.reasoning == {"effort": "high"}
     assert request.output_schema() == {"type": "object", "properties": {"answer": {"type": "string"}}, "required": ["answer"]}
+
+
+def test_removed_codex_alias_is_not_available() -> None:
+    with TestClient(app) as client:
+        models = client.get('/v1/models', headers=AUTH).json()['data']
+        assert 'codex' not in {model['id'] for model in models}
+        assert client.get('/v1/models/codex', headers=AUTH).status_code == 404
+        for path, body in [('/v1/responses', {'input':'hello'}),
+                           ('/v1/chat/completions', {'messages':[{'role':'user','content':'hello'}]})]:
+            response = client.post(path, headers=AUTH, json={'model':'codex', **body})
+            assert response.status_code == 400
+            assert response.json()['error']['code'] == 'model_not_found'

@@ -29,6 +29,7 @@ def new_user(client, token, role="user"):
     username = "test-" + uuid4().hex[:12]
     response = client.post("/admin/users", data={"csrf_token":token,"username":username,"role":role}, headers=AJAX)
     assert response.status_code == 200, response.text
+    assert client.post("/admin/users/"+username+"/quota", data={"csrf_token":token,"amount":1}, headers=AJAX).status_code == 200
     return username, response.json()["secret"]
 
 
@@ -68,7 +69,7 @@ def test_one_key_concurrency_rotation_and_request_details():
         rotated = client.post(f'/account/keys/{key["key_id"]}/rotate',data={"csrf_token":token},headers=AJAX).json()["secret"]
         assert before.split('_')[1] == rotated.split('_')[1]
         assert client.get('/v1/models',headers={'Authorization':'Bearer '+before}).status_code == 401
-        response = client.post('/v1/responses',headers={'Authorization':'Bearer '+rotated},json={'model':'codex','input':'private request <script>alert(1)</script>'})
+        response = client.post('/v1/responses',headers={'Authorization':'Bearer '+rotated},json={'model':'gpt-6-sol','input':'private request <script>alert(1)</script>'})
         assert response.status_code == 200, response.text
         detail = client.get('/usage/'+response.json()['id'])
         assert 'private request' in detail.text and '&lt;script&gt;' in detail.text
@@ -97,14 +98,14 @@ def test_finance_snapshot_and_transfer_keeps_history():
         token = admin_login(client)
         first,pw = new_user(client,token)
         second,_ = new_user(client,token)
-        assert client.post('/admin/prices',data={'csrf_token':token,'model':'codex','input_price':'2','output_price':'8'},headers=AJAX).status_code == 200
+        assert client.post('/admin/prices',data={'csrf_token':token,'model':'gpt-6-sol','input_price':'2','output_price':'8'},headers=AJAX).status_code == 200
         user_token = user_login(client,first,pw)
         key = client.post('/account/key',data={'csrf_token':user_token},headers=AJAX).json()
-        response = client.post('/v1/responses',headers={'Authorization':'Bearer '+key['secret']},json={'model':'codex','input':'hello world'}).json()
+        response = client.post('/v1/responses',headers={'Authorization':'Bearer '+key['secret']},json={'model':'gpt-6-sol','input':'hello world'}).json()
         request_id = response['id']
         assert '0.000028000000' in client.get('/usage/'+request_id).text
         token = admin_login(client)
-        assert client.post('/admin/prices',data={'csrf_token':token,'model':'codex','input_price':'200','output_price':'800'},headers=AJAX).status_code == 200
+        assert client.post('/admin/prices',data={'csrf_token':token,'model':'gpt-6-sol','input_price':'200','output_price':'800'},headers=AJAX).status_code == 200
         assert '0.000028000000' in client.get('/usage/'+request_id).text
         assert client.post('/admin/keys/'+key['key_id']+'/owner',data={'csrf_token':token,'username':second},headers=AJAX).status_code == 200
         assert client.get('/admin/finance').status_code == 200
@@ -125,6 +126,7 @@ def test_admin_cannot_promote_or_edit_superadmin():
 
 def test_google_state_verified_identity_and_replay(monkeypatch):
     subject = uuid4().hex
+    email = subject+'@example.com'
     original_post,original_get = httpx.AsyncClient.post,httpx.AsyncClient.get
     async def post(client,url,**kwargs):
         if url == 'https://oauth2.googleapis.com/token':
@@ -132,7 +134,7 @@ def test_google_state_verified_identity_and_replay(monkeypatch):
         return await original_post(client,url,**kwargs)
     async def get(client,url,**kwargs):
         if url == 'https://openidconnect.googleapis.com/v1/userinfo':
-            return httpx.Response(200,json={'sub':subject,'email':subject+'@example.com','email_verified':True},request=httpx.Request('GET',url))
+            return httpx.Response(200,json={'sub':subject,'email':email,'email_verified':True},request=httpx.Request('GET',url))
         return await original_get(client,url,**kwargs)
     monkeypatch.setattr(httpx.AsyncClient,'post',post)
     monkeypatch.setattr(httpx.AsyncClient,'get',get)
@@ -147,10 +149,23 @@ def test_google_state_verified_identity_and_replay(monkeypatch):
         state = params['state'][0]
         assert client.get('/auth/google/callback?state=wrong&code=test').status_code == 400
         callback = '/auth/google/callback?state='+state+'&code=test'
-        assert client.get(callback,follow_redirects=False).status_code == 302
+        callback_response = client.get(callback,follow_redirects=False)
+        assert callback_response.status_code == 302
+        assert callback_response.headers['location'] == '/overview'
         assert client.get('/account').status_code == 200
         assert client.get('/admin/users',headers=AJAX).status_code == 403
         assert client.get(callback,follow_redirects=False).status_code == 400
+        from codex_gateway.database import SessionLocal
+        from codex_gateway.models import User
+        async def verify_username():
+            async with SessionLocal() as db:
+                user=await db.get(User,email.split('@')[0])
+                assert user and user.google_sub==subject and user.email==email
+        client.portal.call(verify_username)
+        subject=uuid4().hex
+        response=client.get('/auth/google',follow_redirects=False)
+        state=parse_qs(urlparse(response.headers['location']).query)['state'][0]
+        assert client.get('/auth/google/callback?state='+state+'&code=test',follow_redirects=False).status_code==409
 
 
 def test_rejected_requests_are_audited_with_original_params():

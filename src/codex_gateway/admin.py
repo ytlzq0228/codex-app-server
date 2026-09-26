@@ -20,6 +20,7 @@ from .backend import WorkerFailure, classify_worker_failure, run_healthcheck_tur
 from .config import Settings, get_settings
 from .database import get_session
 from .models import GoogleAuthConfig, User, UserSession, ApiKey, ResponseBinding, UsageRecord, Worker, WorkerStatus
+from .quota import quota_lock, ensure_capacity, reconcile_worker
 from .user_auth import issue_session, require_user, digest
 from .security import generate_api_key, hash_api_key, hash_password, verify_password
 
@@ -47,7 +48,14 @@ async def login(
     settings: Settings = Depends(get_settings),
     session: AsyncSession = Depends(get_session),
 ):
-    user = await session.get(User, username)
+    username = username.strip()
+    # Full-email login is permitted only for the exact stored email, never by
+    # dropping a supplied domain and authenticating an unrelated prefix owner.
+    if "@" in username:
+        matches = (await session.scalars(select(User).where(func.lower(User.email) == username.lower()))).all()
+        user = matches[0] if len(matches) == 1 else None
+    else:
+        user = await session.get(User, username)
     google = await session.get(GoogleAuthConfig, 1)
     if not user or not user.enabled or not user.password_hash or not verify_password(password, user.password_hash):
         return templates(request).TemplateResponse(
@@ -56,7 +64,7 @@ async def login(
             {"next": safe_next_url(next), "error": "用户名或密码错误", "google_enabled": bool(google and google.enabled)},
             status_code=401,
         )
-    destination = "/account" if user.must_change_password or user.role == "user" else safe_next_url(next)
+    destination = "/account" if user.must_change_password else ("/overview" if user.role == "user" else safe_next_url(next))
     return await issue_session(session, user, settings, RedirectResponse(destination, status_code=302))
 
 
@@ -251,9 +259,12 @@ async def create_key(
 @router.post("/keys/{key_id}/toggle")
 async def toggle_key(request: Request, key_id: UUID, csrf_token: str = Form(...), admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     verify_csrf(request, admin, csrf_token)
-    record = await session.get(ApiKey, key_id)
+    await quota_lock(session)
+    record = await session.scalar(select(ApiKey).where(ApiKey.id == key_id).with_for_update().execution_options(populate_existing=True))
     if not record or record.deleted_at:
         raise HTTPException(404, "API key not found")
+    if not record.enabled:
+        await ensure_capacity(session, record.owner_username)
     record.enabled = not record.enabled
     await session.commit()
     return result("Key 状态已更新", f"{record.name} 已{'启用' if record.enabled else '停用'}。")
@@ -301,7 +312,8 @@ async def edit_key(
 @router.post("/keys/{key_id}/delete")
 async def delete_key(request: Request, key_id: UUID, csrf_token: str = Form(...), admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     verify_csrf(request, admin, csrf_token)
-    record = await session.get(ApiKey, key_id)
+    await quota_lock(session)
+    record = await session.scalar(select(ApiKey).where(ApiKey.id == key_id).with_for_update())
     if not record or record.deleted_at:
         raise HTTPException(404, "API key not found")
     record.enabled = False
@@ -334,11 +346,13 @@ async def delete_active_session(request: Request, response_id: str, csrf_token: 
 
 
 async def default_worker(session: AsyncSession, settings: Settings) -> Worker:
-    worker = await session.scalar(select(Worker).where(Worker.name == "worker-1"))
+    worker = await session.scalar(select(Worker).where(Worker.name == "worker-1").with_for_update())
     if not worker:
-        worker = Worker(name="worker-1", container_name="codex-worker-1", endpoint=settings.app_server_url)
+        worker = Worker(owner_username=settings.admin_username, name="worker-1", container_name="codex-worker-1", endpoint=settings.app_server_url)
         session.add(worker)
         await session.flush()
+    if worker.endpoint == "removed://worker":
+        raise HTTPException(404, "默认 Worker 已删除")
     return worker
 
 
@@ -358,7 +372,7 @@ async def create_worker(request: Request, name: str = Form(min_length=1, max_len
         status_code = response.status_code if 400 <= response.status_code < 500 else 502
         raise HTTPException(status_code, manager_message)
     data = response.json()
-    session.add(Worker(name=name, container_name=data["name"], endpoint=data["endpoint"], status=WorkerStatus.offline))
+    session.add(Worker(owner_username=admin.username, name=name, container_name=data["name"], endpoint=data["endpoint"], status=WorkerStatus.offline))
     await session.commit()
     return result("Worker 已创建", f"{name} 的容器已经创建，可在列表中登录并探测状态。")
 
@@ -366,16 +380,18 @@ async def create_worker(request: Request, name: str = Form(min_length=1, max_len
 @router.post("/workers/{worker_id}/state")
 async def toggle_worker_state(request: Request, worker_id: UUID, csrf_token: str = Form(...), admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     verify_csrf(request, admin, csrf_token)
-    worker = await session.get(Worker, worker_id)
-    if not worker:
+    worker = await session.scalar(select(Worker).where(Worker.id == worker_id).with_for_update().execution_options(populate_existing=True))
+    if not worker or worker.endpoint == "removed://worker":
         raise HTTPException(404, "Worker not found")
     worker.status = WorkerStatus.draining if worker.status in {WorkerStatus.ready, WorkerStatus.busy} else WorkerStatus.ready
     worker.enabled = worker.status == WorkerStatus.ready
     if worker.status == WorkerStatus.ready:
+        worker.account_checked_at = None
         worker.failure_kind = None
         worker.failure_reason = None
         worker.quarantined_at = None
         worker.retry_after = None
+    await reconcile_worker(session, worker)
     await session.commit()
     return result("Worker 状态已更新", f"{worker.name} 当前状态：{worker.status.value}。")
 
@@ -383,8 +399,8 @@ async def toggle_worker_state(request: Request, worker_id: UUID, csrf_token: str
 @router.post("/workers/{worker_id}/delete")
 async def delete_worker(request: Request, worker_id: UUID, csrf_token: str = Form(...), admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
     verify_csrf(request, admin, csrf_token)
-    worker = await session.get(Worker, worker_id)
-    if not worker or worker.name == "worker-1":
+    worker = await session.scalar(select(Worker).where(Worker.id == worker_id).with_for_update().execution_options(populate_existing=True))
+    if not worker or worker.endpoint == "removed://worker":
         raise HTTPException(404, "Worker not found")
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.delete(f"{settings.manager_url}/workers/{worker.container_name}", headers={"Authorization": f"Bearer {settings.manager_token.get_secret_value()}"})
@@ -398,6 +414,7 @@ async def delete_worker(request: Request, worker_id: UUID, csrf_token: str = For
     worker.enabled = False
     worker.status = WorkerStatus.offline
     worker.endpoint = "removed://worker"
+    await reconcile_worker(session, worker)
     await session.commit()
     message = (
         f"{worker.name} 的容器已经不存在；活动记录已清理，历史记录仍保留用于审计。"
@@ -408,17 +425,20 @@ async def delete_worker(request: Request, worker_id: UUID, csrf_token: str = For
 
 
 async def probe_worker_record(worker: Worker, session: AsyncSession, settings: Settings) -> dict:
+    from .contributions import update_account
     try:
         async with open_app_server(worker.endpoint, settings.app_server_token.get_secret_value(), settings.app_server_timeout_seconds) as app_server:
             response = await app_server.call("account/read", {"refreshToken": False})
             account = response.get("account") or {}
             if not account:
                 raise WorkerFailure("Codex worker is not logged in", kind="logged_out", safe_to_retry=True)
+            update_account(worker, account)
             await run_healthcheck_turn(app_server, settings.upstream_model)
         was_error = worker.status == WorkerStatus.error
         worker.status = WorkerStatus.ready
         worker.auth_mode = account.get("type")
         worker.plan_type = account.get("planType")
+        update_account(worker, account)
         worker.last_seen_at = datetime.now(timezone.utc)
         worker.recovered_at = datetime.now(timezone.utc) if was_error else worker.recovered_at
         worker.failure_kind = None
@@ -432,13 +452,16 @@ async def probe_worker_record(worker: Worker, session: AsyncSession, settings: S
         worker.status = WorkerStatus.error
         message = f"Worker 探测失败：{exc}"
         kind = exc.kind if isinstance(exc, WorkerFailure) else classify_worker_failure(str(exc))
+        if kind == "logged_out":
+            update_account(worker, None)
         worker.failure_kind = kind
         worker.failure_reason = str(exc)[:500]
         worker.quarantined_at = datetime.now(timezone.utc)
         cooldown = settings.worker_limit_cooldown_seconds if kind == "limit" else settings.worker_failure_cooldown_seconds
         worker.retry_after = datetime.now(timezone.utc) + timedelta(seconds=cooldown)
         ok = False
-        logged_in = False
+        logged_in = bool(worker.auth_mode)
+    await reconcile_worker(session, worker)
     await session.commit()
     return {"title": "探测完成" if ok else "探测失败", "message": message, "ok": ok, "logged_in": logged_in, "auth_mode": worker.auth_mode, "plan_type": worker.plan_type}
 
@@ -453,8 +476,8 @@ async def probe_worker(request: Request, csrf_token: str = Form(...), admin: Adm
 @router.post("/workers/{worker_id}/probe")
 async def probe_selected_worker(request: Request, worker_id: UUID, csrf_token: str = Form(...), admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
     verify_csrf(request, admin, csrf_token)
-    worker = await session.get(Worker, worker_id)
-    if not worker:
+    worker = await session.scalar(select(Worker).where(Worker.id == worker_id).with_for_update().execution_options(populate_existing=True))
+    if not worker or worker.endpoint == "removed://worker":
         raise HTTPException(404, "Worker not found")
     return JSONResponse(await probe_worker_record(worker, session, settings))
 
@@ -473,15 +496,23 @@ async def login_worker_endpoint(endpoint: str, settings: Settings, *, force: boo
 
 
 @router.post("/workers/login")
-async def login_worker(request: Request, csrf_token: str = Form(...), force: bool = Form(False), admin: AdminSession = Depends(require_admin), settings: Settings = Depends(get_settings)):
+async def login_worker(request: Request, csrf_token: str = Form(...), force: bool = Form(False), admin: AdminSession = Depends(require_admin), settings: Settings = Depends(get_settings), session: AsyncSession = Depends(get_session)):
     verify_csrf(request, admin, csrf_token)
-    return JSONResponse(await login_worker_endpoint(settings.app_server_url, settings, force=force, poll_url="/admin/workers/probe"))
+    worker = await default_worker(session, settings)
+    return await login_selected_worker(request, worker.id, csrf_token, force, admin, session, settings)
 
 
 @router.post("/workers/{worker_id}/login")
 async def login_selected_worker(request: Request, worker_id: UUID, csrf_token: str = Form(...), force: bool = Form(False), admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
     verify_csrf(request, admin, csrf_token)
-    worker = await session.get(Worker, worker_id)
-    if not worker:
+    worker = await session.scalar(select(Worker).where(Worker.id == worker_id).with_for_update().execution_options(populate_existing=True))
+    if not worker or worker.endpoint == "removed://worker":
         raise HTTPException(404, "Worker not found")
-    return JSONResponse(await login_worker_endpoint(worker.endpoint, settings, force=force, poll_url=f"/admin/workers/{worker.id}/probe"))
+    payload = await login_worker_endpoint(worker.endpoint, settings, force=force, poll_url=f"/admin/workers/{worker.id}/probe")
+    if force:
+        from .contributions import update_account
+        update_account(worker, None)
+        worker.status = WorkerStatus.offline
+        await reconcile_worker(session, worker)
+    await session.commit()
+    return JSONResponse(payload)

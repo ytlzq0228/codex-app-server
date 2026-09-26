@@ -16,23 +16,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .admin_auth import AdminSession, require_admin, verify_csrf
 from .config import get_settings
 from .database import get_session
-from .models import ApiKey, GoogleAuthConfig, OAuthState, User
+from .models import ApiKey, GoogleAuthConfig, OAuthState, User, Worker, WorkerStatus
 from .security import generate_api_key, hash_api_key, hash_password
 from .user_auth import digest, issue_session, require_user
+
+from .usernames import username_prefix
 
 router = APIRouter()
 
 
 async def lock_available_owner(db, username, key_id=None):
-    user = await db.scalar(select(User).where(User.username == username).with_for_update())
-    if not user or not user.enabled:
-        raise HTTPException(400, "请选择已存在且启用的用户")
-    query = select(ApiKey.id).where(ApiKey.owner_username == username, ApiKey.deleted_at.is_(None))
-    if key_id:
-        query = query.where(ApiKey.id != key_id)
-    if await db.scalar(query):
-        raise HTTPException(409, "该用户已有 Key，请刷新现有 Key")
-    return user
+    from .quota import ensure_capacity
+    return await ensure_capacity(db, username, key_id)
 
 
 def render(request, identity, **context):
@@ -40,18 +35,50 @@ def render(request, identity, **context):
         "identity": request.state.user, "csrf_token": identity.csrf_token, **context})
 
 
+@router.get("/overview")
+async def overview(request: Request, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
+    if request.state.user.role != "user":
+        return RedirectResponse("/admin", 302)
+    from .quota import quota_summary
+    workers = (await db.scalars(select(Worker).where(Worker.owner_username == identity.username,
+        Worker.endpoint != "removed://worker").order_by(Worker.created_at))).all()
+    keys = (await db.scalars(select(ApiKey).where(ApiKey.owner_username == identity.username,
+        ApiKey.deleted_at.is_(None)))).all()
+    logged = [w for w in workers if w.auth_mode and w.account_checked_at and w.failure_kind != "logged_out"]
+    attention = []
+    for worker in workers:
+        if worker not in logged:
+            reason = "未登录或尚未确认登录，请登录后探测"
+        elif not worker.enabled:
+            reason = "已停用，请联系管理员确认"
+        elif worker.failure_kind == "limit":
+            reason = "账号已超限额，请等待额度恢复后探测"
+        elif worker.status not in {WorkerStatus.ready, WorkerStatus.busy}:
+            reason = "状态异常或离线，请探测并检查账号"
+        else:
+            continue
+        attention.append({"name": worker.name, "reason": reason})
+    healthy = bool(workers) and not attention
+    completed = int(bool(logged)) + int(bool(keys)) + int(healthy)
+    return render(request, identity, page="self_overview", workers=workers, logged_count=len(logged),
+                  key_count=len(keys), enabled_key_count=sum(k.enabled for k in keys),
+                  attention=attention, healthy=healthy, completed=completed,
+                  quota=await quota_summary(db, identity.username))
+
+
 @router.get("/account")
 async def account(request: Request, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     keys = (await db.scalars(select(ApiKey).where(ApiKey.owner_username == identity.username, ApiKey.deleted_at.is_(None)))).all()
-    return render(request, identity, page="account", keys=keys)
+    from .quota import quota_summary
+    return render(request, identity, page="account", keys=keys, quota=await quota_summary(db, identity.username))
 
 
 @router.post("/account/key")
-async def personal_key(request: Request, csrf_token: str = Form(...), identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
+async def personal_key(request: Request, name: str = Form("", max_length=120), csrf_token: str = Form(...), identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     verify_csrf(request, identity, csrf_token)
     await lock_available_owner(db, identity.username)
     raw, prefix = generate_api_key()
-    record = ApiKey(owner_username=identity.username, name=identity.username, prefix=prefix,
+    record = ApiKey(owner_username=identity.username, name=name.strip() or identity.username, prefix=prefix,
                     key_hash=hash_api_key(raw, get_settings().key_pepper.get_secret_value()))
     db.add(record)
     await db.commit()
@@ -73,10 +100,17 @@ async def rotate_key(request: Request, key_id: UUID, csrf_token: str = Form(...)
 @router.post("/admin/keys/{key_id}/owner")
 async def transfer_key(request: Request, key_id: UUID, username: str = Form(...), csrf_token: str = Form(...), identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
     verify_csrf(request, identity, csrf_token)
-    await lock_available_owner(db, username, key_id)
-    key = await db.scalar(select(ApiKey).where(ApiKey.id == key_id).with_for_update())
+    from .quota import quota_lock, ensure_capacity
+    await quota_lock(db)
+    key = await db.scalar(select(ApiKey).where(ApiKey.id == key_id).with_for_update().execution_options(populate_existing=True))
     if not key or key.deleted_at:
         raise HTTPException(404, "Key 不存在")
+    if key.enabled:
+        await ensure_capacity(db, username, key_id)
+    else:
+        target = await db.get(User, username)
+        if not target or not target.enabled:
+            raise HTTPException(400, "请选择已存在且启用的用户")
     key.owner_username = username
     await db.commit()
     return {"message": "Key 归属已更新"}
@@ -86,7 +120,9 @@ async def transfer_key(request: Request, key_id: UUID, username: str = Form(...)
 async def users(request: Request, identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
     users = (await db.scalars(select(User).order_by(User.username))).all()
     keys = (await db.scalars(select(ApiKey).where(ApiKey.deleted_at.is_(None)))).all()
-    return render(request, identity, page="users", users=users, keys=keys)
+    from .quota import quota_summary
+    quotas = {user.username: await quota_summary(db, user.username) for user in users}
+    return render(request, identity, page="users", users=users, keys=keys, quotas=quotas)
 
 
 def authorize_role(actor, target_role, new_role):
@@ -100,8 +136,13 @@ def authorize_role(actor, target_role, new_role):
 async def create_user(request: Request, username: str = Form(...), email: str = Form("", max_length=320), role: str = Form("user"), csrf_token: str = Form(...), identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
     verify_csrf(request, identity, csrf_token)
     authorize_role(request.state.user, "user", role)
-    if not re.fullmatch(r"[A-Za-z0-9_.@-]{1,120}", username):
-        raise HTTPException(400, "用户名仅支持字母、数字、点、下划线、@ 和连字符")
+    original = username.strip()
+    try:
+        username = username_prefix(original)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+    if "@" in original and not email:
+        email = original.lower()
     password = secrets.token_urlsafe(18)
     db.add(User(username=username, email=email or None, role=role, password_hash=hash_password(password), must_change_password=True))
     try:
@@ -109,7 +150,7 @@ async def create_user(request: Request, username: str = Form(...), email: str = 
     except IntegrityError:
         await db.rollback()
         raise HTTPException(409, "用户名已存在")
-    return {"secret": password, "message": "初始密码仅显示一次，用户下次登录必须修改密码"}
+    return {"username": username, "secret": password, "message": f"用户 {username} 已创建，初始密码仅显示一次，用户下次登录必须修改密码"}
 
 
 @router.post("/admin/users/{username}")
@@ -172,9 +213,12 @@ async def google_callback(request: Request, state: str = "", code: str = "", db:
     user = await db.scalar(select(User).where(User.google_sub == sub))
     if not user:
         # Never implicitly link an existing local account based on email.
-        username = email[:120]
+        try:
+            username = username_prefix(email)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
         if await db.get(User, username):
-            username = "google-" + secrets.token_hex(16)
+            raise HTTPException(409, "邮箱前缀对应的用户名已存在，请联系管理员；不会自动合并账号")
         user = User(username=username, email=email, google_sub=sub, role="user", session_version=1, enabled=True)
         db.add(user)
         try:
@@ -186,7 +230,7 @@ async def google_callback(request: Request, state: str = "", code: str = "", db:
                 raise HTTPException(409, "账号创建冲突，请重试")
     if not user.enabled:
         raise HTTPException(403, "账号已停用")
-    response = RedirectResponse("/account", 302)
+    response = RedirectResponse("/account" if user.must_change_password else ("/overview" if user.role == "user" else "/admin"), 302)
     response.delete_cookie("google_state")
     return await issue_session(db, user, settings, response)
 
@@ -227,3 +271,48 @@ async def save_google_settings(request: Request, client_id: str = Form("", max_l
         config.client_secret = client_secret.strip()
     await db.commit()
     return {"message": "Google 登录配置已保存，立即生效"}
+
+
+@router.post("/admin/users/{username}/quota")
+async def grant_quota(request: Request, username: str, amount: int = Form(..., ge=1, le=10000), csrf_token: str = Form(...), identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
+    from .quota import quota_lock
+    verify_csrf(request, identity, csrf_token)
+    await quota_lock(db)
+    user = await db.scalar(select(User).where(User.username == username).with_for_update().execution_options(populate_existing=True))
+    if not user:
+        raise HTTPException(404, "用户不存在")
+    authorize_role(request.state.user, user.role, user.role)
+    user.quota_granted += amount
+    await db.commit()
+    return {"message": f"已增加 {amount} 个 Key 额度"}
+
+
+@router.post("/account/keys/{key_id}/toggle")
+async def personal_toggle(request: Request, key_id: UUID, csrf_token: str = Form(...), identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
+    from .quota import quota_lock, ensure_capacity
+    verify_csrf(request, identity, csrf_token)
+    await quota_lock(db)
+    key = await db.scalar(select(ApiKey).where(ApiKey.id == key_id, ApiKey.owner_username == identity.username, ApiKey.deleted_at.is_(None)).with_for_update().execution_options(populate_existing=True))
+    if not key:
+        raise HTTPException(404, "Key 不存在")
+    if not key.enabled:
+        await ensure_capacity(db, identity.username)
+    key.enabled = not key.enabled
+    await db.commit()
+    return {"message": "Key 已启用" if key.enabled else "Key 已停用，额度已释放"}
+
+
+@router.post("/account/keys/{key_id}/delete")
+async def personal_delete(request: Request, key_id: UUID, csrf_token: str = Form(...), identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
+    from .quota import quota_lock
+    from .models import ResponseBinding
+    verify_csrf(request, identity, csrf_token)
+    await quota_lock(db)
+    key = await db.scalar(select(ApiKey).where(ApiKey.id == key_id, ApiKey.owner_username == identity.username, ApiKey.deleted_at.is_(None)).with_for_update())
+    if not key:
+        raise HTTPException(404, "Key 不存在")
+    key.enabled = False
+    key.deleted_at = datetime.now(timezone.utc)
+    await db.execute(delete(ResponseBinding).where(ResponseBinding.api_key_id == key_id))
+    await db.commit()
+    return {"message": "Key 已删除，额度已释放，历史请求记录保留"}

@@ -26,6 +26,8 @@ from .config import get_settings
 from .database import SessionLocal, engine, get_session
 from .models import ModelPrice, Base, ResponseBinding, UsageRecord, Worker, WorkerStatus
 from .audit import RequestAuditMiddleware, current_audit, request_params as captured_params
+from .quota import reconcile_worker
+from .contributions import account_monitor_loop, update_account
 from .migrations import upgrade, bootstrap_users
 from .schemas import BackendResult, ChatCompletionRequest, ResponseRequest
 
@@ -70,15 +72,19 @@ async def lifespan(app: FastAPI):
         await bootstrap_users(session, settings)
         worker = await session.scalar(select(Worker).where(Worker.name == "worker-1"))
         if not worker:
-            worker = Worker(name="worker-1", container_name="codex-worker-1", endpoint=settings.app_server_url, status=WorkerStatus.ready)
+            worker = Worker(owner_username=settings.admin_username, name="worker-1", container_name="codex-worker-1", endpoint=settings.app_server_url, status=WorkerStatus.ready)
             session.add(worker)
-        else:
+        elif worker.endpoint != "removed://worker":
             worker.container_name = "codex-worker-1"
             worker.endpoint = settings.app_server_url
         await session.commit()
     app.state.backend = MockBackend() if settings.backend == "mock" else AppServerBackend(settings)
     recovery_task = asyncio.create_task(worker_recovery_loop(), name="worker-recovery")
+    contribution_task = asyncio.create_task(account_monitor_loop(), name="worker-contributions") if settings.backend != "mock" else None
     yield
+    if contribution_task:
+        contribution_task.cancel()
+        await asyncio.gather(contribution_task, return_exceptions=True)
     recovery_task.cancel()
     await asyncio.gather(recovery_task, return_exceptions=True)
     await app.state.backend.close()
@@ -96,6 +102,8 @@ from .self_service import router as self_service_router
 from .reporting import router as reporting_router
 app.include_router(self_service_router)
 app.include_router(reporting_router)
+from .contributions import router as contribution_router
+app.include_router(contribution_router)
 app.add_middleware(RequestAuditMiddleware)
 
 
@@ -144,7 +152,7 @@ async def quarantine_worker(worker_id, reason: str, kind: str = "connection") ->
     settings = get_settings()
     cooldown = settings.worker_limit_cooldown_seconds if kind == "limit" else settings.worker_failure_cooldown_seconds
     async with SessionLocal() as session:
-        worker = await session.get(Worker, worker_id)
+        worker = await session.scalar(select(Worker).where(Worker.id == worker_id).with_for_update().execution_options(populate_existing=True))
         if not worker:
             return
         worker.status = WorkerStatus.error
@@ -155,6 +163,7 @@ async def quarantine_worker(worker_id, reason: str, kind: str = "connection") ->
         if kind == "logged_out":
             worker.auth_mode = None
             worker.plan_type = None
+        await reconcile_worker(session, worker)
         await session.commit()
 
 
@@ -164,6 +173,7 @@ async def recover_worker(worker: Worker) -> bool:
         async with open_app_server(worker.endpoint, settings.app_server_token.get_secret_value(), min(settings.app_server_timeout_seconds, 20)) as server:
             response = await server.call("account/read", {"refreshToken": True})
             account = response.get("account") or {}
+            update_account(worker, account)
             if not account:
                 worker.failure_kind = "logged_out"
                 worker.failure_reason = "Codex worker is not logged in"
@@ -173,6 +183,7 @@ async def recover_worker(worker: Worker) -> bool:
         worker.status = WorkerStatus.ready
         worker.auth_mode = account.get("type")
         worker.plan_type = account.get("planType")
+        update_account(worker, account)
         worker.last_seen_at = utcnow()
         worker.recovered_at = utcnow()
         worker.failure_kind = None
@@ -183,6 +194,8 @@ async def recover_worker(worker: Worker) -> bool:
     except Exception as exc:
         kind = exc.kind if isinstance(exc, WorkerFailure) else classify_worker_failure(str(exc))
         worker.failure_kind = kind
+        if kind == "logged_out":
+            update_account(worker, None)
         worker.failure_reason = str(exc)[:500]
         cooldown = settings.worker_limit_cooldown_seconds if kind == "limit" else settings.worker_failure_cooldown_seconds
         worker.retry_after = utcnow() + timedelta(seconds=cooldown)
@@ -196,11 +209,12 @@ async def worker_recovery_loop() -> None:
             await asyncio.sleep(settings.worker_recovery_interval_seconds)
             async with SessionLocal() as session:
                 await expire_response_bindings(session)
-                workers = (await session.scalars(select(Worker).where(Worker.enabled.is_(True), Worker.status == WorkerStatus.error))).all()
+                workers = (await session.scalars(select(Worker).where(Worker.enabled.is_(True), Worker.status == WorkerStatus.error).with_for_update(skip_locked=True))).all()
                 now = utcnow()
                 for worker in workers:
                     if not worker.retry_after or worker.retry_after <= now:
                         await recover_worker(worker)
+                        await reconcile_worker(session, worker)
                 await session.commit()
         except asyncio.CancelledError:
             raise
@@ -242,7 +256,17 @@ async def validation_error_handler(_: Request, exc: RequestValidationError) -> J
 
 
 @app.exception_handler(HTTPException)
-async def http_error_handler(_: Request, exc: HTTPException) -> JSONResponse:
+async def http_error_handler(request: Request, exc: HTTPException):
+    if (
+        exc.status_code == 403
+        and "text/html" in request.headers.get("accept", "").lower()
+        and request.headers.get("x-requested-with", "").lower() != "xmlhttprequest"
+        and not request.url.path.startswith("/v1/")
+    ):
+        return request.app.state.templates.TemplateResponse(
+            request, "errors/403.html", {}, status_code=403,
+            headers={**(exc.headers or {}), "Cache-Control": "no-store"},
+        )
     if isinstance(exc.detail, dict) and isinstance(exc.detail.get("error"), dict):
         error = exc.detail["error"]
         response = openai_error(

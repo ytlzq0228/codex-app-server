@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>403 · 无权访问 · Codex Gateway</title>
+  <link rel="stylesheet" href="/static/admin.css">
+  <style>
+    .error-shell{min-height:100vh;display:grid;place-items:center;padding:24px}
+    .error-card{width:min(100%,560px);padding:40px;text-align:center}
+    .error-card .brand-mark{margin:0 auto 24px}
+    .error-code{font-size:72px;font-weight:800;letter-spacing:-.06em;color:var(--green);margin:0}
+    .error-card h1{font-size:26px;margin:12px 0}
+    .error-card p{line-height:1.8}
+    .error-actions{display:flex;justify-content:center;gap:12px;flex-wrap:wrap;margin-top:28px}
+    .error-actions a{text-decoration:none;display:inline-block}
+  </style>
+</head>
+<body>
+  <main class="error-shell"><section class="panel error-card" aria-labelledby="error-title">
+    <div class="brand-mark" aria-hidden="true">C</div>
+    <p class="error-code">403</p>
+    <h1 id="error-title">无权访问此页面</h1>
+    <p class="muted">当前账号没有访问此页面或执行此操作的权限。<br>如需开通权限，请联系管理员。</p>
+    <div class="error-actions"><a class="button button-primary" href="/account">返回我的账户</a><a class="button" href="/login">使用其他账号登录</a></div>
+  </section></main>
+</body>
+</html>

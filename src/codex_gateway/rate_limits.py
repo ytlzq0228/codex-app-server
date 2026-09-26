@@ -20,7 +20,7 @@ def summarize_windows(payload):
             if not slot or not isinstance(used, (int, float)) or isinstance(used, bool):
                 continue
             reset = window.get('resetsAt')
-            windows[slot] = {'remaining': max(0, min(100, 100-used)),
+            windows[slot] = {'used': max(0, min(100, used)),
                              'resets_at': reset if isinstance(reset, (int, float)) and not isinstance(reset, bool) else None}
         result.append({'name': bucket.get('limitName') or (key if key != 'default' else '账号额度'), **windows})
     return {'buckets': result, 'checked_at': datetime.now(timezone.utc).isoformat()}

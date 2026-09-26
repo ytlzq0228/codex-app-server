@@ -11,6 +11,7 @@
     const button = box.querySelector('[data-rate-refresh]');
     const status = box.querySelector('[data-rate-status]');
     const content = box.querySelector('[data-rate-content]');
+    const usageClass = percent => percent >= 90 ? 'usage-danger' : (percent >= 60 ? 'usage-warn' : 'usage-ok');
     const refresh = () => {
       if (button.disabled) return;
       button.disabled = true;
@@ -28,9 +29,9 @@
             for (const [key,label] of [['five_hour','5 小时'],['week','周窗口']]) {
               const window = bucket[key];
               const line = document.createElement('div');
-              line.textContent = window ? `${label}：剩余 ${window.remaining}%` : `${label}：暂无数据`;
+              line.textContent = window ? `${label}：已用 ${window.used}%` : `${label}：暂无数据`;
               if (window) {
-                const bar = document.createElement('progress'); bar.max=100; bar.value=window.remaining; bar.setAttribute('aria-label', `${label}剩余额度`); line.append(bar);
+                const bar = document.createElement('progress'); bar.max=100; bar.value=window.used; bar.className=usageClass(window.used); bar.setAttribute('aria-label', `${label}已用额度`); line.append(bar);
                 if (window.resets_at != null) { const reset=document.createElement('small'); reset.textContent='重置：'+new Date(window.resets_at*1000).toLocaleString(); line.append(reset); }
               }
               content.append(line);

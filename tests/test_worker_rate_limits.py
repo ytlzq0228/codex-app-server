@@ -9,9 +9,9 @@ from test_self_service import user_login, AJAX
 def test_windows_are_identified_by_duration_and_preserve_buckets():
     data=summarize_windows({'rateLimits':{'primary':{'usedPercent':20,'windowDurationMins':10080,'resetsAt':1790929665},'secondary':None}})
     assert data['buckets'][0]['five_hour'] is None
-    assert data['buckets'][0]['week']=={'remaining':80,'resets_at':1790929665}
+    assert data['buckets'][0]['week']=={'used':20,'resets_at':1790929665}
     data=summarize_windows({'rateLimitsByLimitId':{'first':{'secondary':{'usedPercent':100,'windowDurationMins':300}},'second':{'primary':{'usedPercent':0,'windowDurationMins':300}}}})
-    assert [b['five_hour']['remaining'] for b in data['buckets']]==[0,100]
+    assert [b['five_hour']['used'] for b in data['buckets']]==[100,0]
     assert all(b['week'] is None for b in data['buckets'])
 
 
@@ -36,7 +36,7 @@ def test_read_rate_limits_owner_isolation_and_failure(worker_services,monkeypatc
         probe(client,token,worker)
         monkeypatch.setattr(contributions,'open_app_server',opened)
         response=client.post(url,data={'csrf_token':token},headers=AJAX)
-        assert response.status_code==200 and response.json()['buckets'][0]['week']['remaining']==80
+        assert response.status_code==200 and response.json()['buckets'][0]['week']['used']==20
         assert calls==['account/rateLimits/read']
         before=client.portal.call(summary,alice)
         fail=True

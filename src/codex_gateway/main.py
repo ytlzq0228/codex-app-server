@@ -1,4 +1,5 @@
 import json
+import hashlib
 from decimal import Decimal
 import asyncio
 import time
@@ -23,6 +24,7 @@ from .admin import user_router as admin_user_router
 from .auth import ApiPrincipal, require_api_key
 from .app_server import open_app_server
 from .backend import AppServerBackend, BackendTarget, CompletionBackend, MockBackend, WorkerFailure, classify_worker_failure, run_healthcheck_turn
+from .billing import priced_amount
 from .config import get_settings
 from .database import SessionLocal, engine, get_session
 from .models import ModelPrice, Base, ResponseBinding, UsageRecord, Worker, WorkerStatus
@@ -306,7 +308,7 @@ def response_object(response_id: str, body: ResponseRequest, result: BackendResu
         "status": status, "model": body.model,
         "previous_response_id": previous_response_id,
         "output": [{"id": message_id or f"msg_{uuid4().hex}", "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": result.text, "annotations": []}]}],
-        "usage": {"input_tokens": result.input_tokens, "input_tokens_details": {"cached_tokens": 0}, "output_tokens": result.output_tokens, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": result.input_tokens + result.output_tokens},
+        "usage": {"input_tokens": result.input_tokens, "input_tokens_details": {"cached_tokens": result.cache_read_tokens, "cache_write_tokens": result.cache_write_tokens}, "output_tokens": result.output_tokens, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": result.input_tokens + result.output_tokens},
         "metadata": body.metadata or {}, "error": None, "incomplete_details": None,
         "instructions": body.instructions, "max_output_tokens": body.max_output_tokens,
         "parallel_tool_calls": body.parallel_tool_calls if body.parallel_tool_calls is not None else True,
@@ -333,7 +335,7 @@ def chat_completion_object(completion_id: str, created: int, body: ChatCompletio
         "created": created,
         "model": body.model,
         "choices": [{"index": 0, "message": {"role": "assistant", "content": result.text, "refusal": None}, "logprobs": None, "finish_reason": "stop"}],
-        "usage": {"prompt_tokens": result.input_tokens, "completion_tokens": result.output_tokens, "total_tokens": result.input_tokens + result.output_tokens},
+        "usage": {"prompt_tokens": result.input_tokens, "prompt_tokens_details": {"cached_tokens": result.cache_read_tokens, "cache_write_tokens": result.cache_write_tokens}, "completion_tokens": result.output_tokens, "total_tokens": result.input_tokens + result.output_tokens},
         "system_fingerprint": None,
     }
     if body.service_tier:
@@ -352,6 +354,7 @@ async def choose_target(
     session: AsyncSession,
     binding: ResponseBinding | None = None,
     exclude_worker_ids: set | None = None,
+    cache_affinity: str | None = None,
 ) -> BackendTarget:
     settings = get_settings()
     excluded = exclude_worker_ids or set()
@@ -364,6 +367,9 @@ async def choose_target(
         candidates = [worker] if worker else []
     else:
         candidates = list((await session.scalars(select(Worker).where(Worker.enabled.is_(True), Worker.status.in_([WorkerStatus.ready, WorkerStatus.busy])).order_by(func.random()))).all())
+        if cache_affinity:
+            scope = f"{principal.key_id or 'development'}:{cache_affinity}"
+            candidates.sort(key=lambda worker: hashlib.sha256(f"{scope}:{worker.id}".encode()).digest(), reverse=True)
     candidates = [worker for worker in candidates if worker.id not in excluded and worker.enabled and worker.status in {WorkerStatus.ready, WorkerStatus.busy}]
     if not candidates:
         raise worker_unavailable(bound=binding is not None)
@@ -449,8 +455,16 @@ async def save_usage(
         price = await session.get(ModelPrice, model)
         if audit is None and request_params is not None and endpoint == "responses":
             request_params = {**request_params, "previous_response_id": previous_response_id}
-        cost = ((Decimal(result.input_tokens) * price.input_price + Decimal(result.output_tokens) * price.output_price) / Decimal(1_000_000)) if price and result else (Decimal(0) if price else None)
-        session.add(UsageRecord(owner_username=principal.owner_username, request_params=request_params, input_price=price.input_price if price else None, output_price=price.output_price if price else None, cost_usd=cost, request_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, model=model, status_code=status_code, input_tokens=result.input_tokens if result else 0, output_tokens=result.output_tokens if result else 0, duration_ms=int((time.monotonic() - started) * 1000), error_code=error_code, endpoint=endpoint, previous_response_id=previous_response_id, thread_id=thread_id or (result.thread_id if result else None)))
+        cost = priced_amount(result.input_tokens, result.output_tokens, result.cache_read_tokens, result.cache_write_tokens, price) if price and result else (Decimal(0) if price else None)
+        session.add(UsageRecord(owner_username=principal.owner_username, request_params=request_params,
+            input_price=price.input_price if price else None, output_price=price.output_price if price else None,
+            cache_read_price=price.cache_read_price if price else None, cache_write_price=price.cache_write_price if price else None,
+            cost_usd=cost, request_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id,
+            model=model, status_code=status_code, input_tokens=result.input_tokens if result else 0,
+            output_tokens=result.output_tokens if result else 0, cache_read_tokens=result.cache_read_tokens if result else 0,
+            cache_write_tokens=result.cache_write_tokens if result else 0,
+            duration_ms=int((time.monotonic() - started) * 1000), error_code=error_code, endpoint=endpoint,
+            previous_response_id=previous_response_id, thread_id=thread_id or (result.thread_id if result else None)))
         if persist_binding and result and principal.key_id and result.thread_id and target.worker_id:
             now = utcnow()
             session.add(ResponseBinding(response_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, thread_id=result.thread_id, last_used_at=now, expires_at=binding_expiry(now), status="active"))
@@ -469,7 +483,7 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
     yield sse({"type": "response.content_part.added", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": "", "annotations": []}}); sequence += 1
     chunks: list[str] = []
     thread_id = ""
-    input_tokens = output_tokens = 0
+    input_tokens = output_tokens = cache_read_tokens = cache_write_tokens = 0
     retried = False
     try:
         while True:
@@ -478,6 +492,8 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
                     thread_id = event.thread_id or thread_id
                     input_tokens = event.input_tokens or input_tokens
                     output_tokens = event.output_tokens or output_tokens
+                    cache_read_tokens = event.cache_read_tokens or cache_read_tokens
+                    cache_write_tokens = event.cache_write_tokens or cache_write_tokens
                     if event.delta:
                         chunks.append(event.delta)
                         yield sse({"type": "response.output_text.delta", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "delta": event.delta}); sequence += 1
@@ -514,7 +530,8 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
     yield sse({"type": "response.content_part.done", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "part": part}); sequence += 1
     item = {"id": message_id, "type": "message", "status": "completed", "role": "assistant", "content": [part]}
     yield sse({"type": "response.output_item.done", "sequence_number": sequence, "output_index": 0, "item": item}); sequence += 1
-    result = BackendResult(text=text, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens)
+    result = BackendResult(text=text, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens,
+                           cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens)
     yield sse({"type": "response.completed", "sequence_number": sequence, "response": response_object(response_id, body, result, message_id=message_id, previous_response_id=public_previous_id)})
     await save_usage(response_id, principal, target, body.model, 200, started, result, persist_binding=True, previous_response_id=public_previous_id, request_params=body.model_dump(mode="json"))
 
@@ -536,7 +553,7 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
 
     yield chat_sse(chunk({"role": "assistant", "content": ""}))
     thread_id = ""
-    input_tokens = output_tokens = 0
+    input_tokens = output_tokens = cache_read_tokens = cache_write_tokens = 0
     content_emitted = False
     retried = False
     try:
@@ -546,6 +563,8 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
                     thread_id = event.thread_id or thread_id
                     input_tokens = event.input_tokens or input_tokens
                     output_tokens = event.output_tokens or output_tokens
+                    cache_read_tokens = event.cache_read_tokens or cache_read_tokens
+                    cache_write_tokens = event.cache_write_tokens or cache_write_tokens
                     if event.delta:
                         content_emitted = True
                         yield chat_sse(chunk({"content": event.delta}))
@@ -565,10 +584,13 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
         yield chat_sse("[DONE]")
         await save_usage(completion_id, principal, target, body.model, 503 if capacity_failure else 502, started, error_code=error_code, request_params=body.model_dump(mode="json"))
         return
-    result = BackendResult(text="", thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens)
+    result = BackendResult(text="", thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens,
+                           cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens)
     yield chat_sse(chunk({}, "stop"))
     if body.stream_options and body.stream_options.include_usage:
-        yield chat_sse(chunk({}, usage={"prompt_tokens": input_tokens, "completion_tokens": output_tokens, "total_tokens": input_tokens + output_tokens}))
+        yield chat_sse(chunk({}, usage={"prompt_tokens": input_tokens,
+            "prompt_tokens_details": {"cached_tokens": cache_read_tokens, "cache_write_tokens": cache_write_tokens},
+            "completion_tokens": output_tokens, "total_tokens": input_tokens + output_tokens}))
     yield chat_sse("[DONE]")
     await save_usage(completion_id, principal, target, body.model, 200, started, result, request_params=body.model_dump(mode="json"))
 
@@ -631,7 +653,7 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
     if unsupported := body.unsupported():
         return openai_error(400, unsupported[1], "unsupported_parameter", param=unsupported[0])
     request = body.to_response_request()
-    target = await choose_target(principal, session)
+    target = await choose_target(principal, session, cache_affinity=body.prompt_cache_key)
     await release_request_session(session)
     if body.stream:
         return StreamingResponse(chat_completion_stream(body, request, backend, principal, target, principal.pinned_worker_id is None), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -672,7 +694,7 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
             return openai_error(404, "previous_response_id has expired or is no longer available", "previous_response_not_found", param="previous_response_id")
         await touch_response_thread(session, binding)
         body = body.model_copy(update={"previous_response_id": binding.thread_id})
-    target = await choose_target(principal, session, binding)
+    target = await choose_target(principal, session, binding, cache_affinity=body.prompt_cache_key)
     await release_request_session(session)
     if body.stream:
         return StreamingResponse(response_stream(body, backend, principal, target, public_previous_id, binding is None and principal.pinned_worker_id is None), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

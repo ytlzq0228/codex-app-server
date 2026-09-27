@@ -1,29 +1,65 @@
 from decimal import Decimal
 from types import SimpleNamespace
+from uuid import uuid4
+import time
+from sqlalchemy import select
 from codex_gateway.reporting import summarize_latest
+from codex_gateway.billing import priced_amount
 
 
 def test_latest_price_revaluation_and_dimension_totals():
-    rows = [('alice','key1','Key 1','w1','Worker 1','model',2,1000000,500000),
-            ('bob','key1','Key 1','w2','Worker 2','model',1,2000000,0),
-            ('alice','key2','Key 2',None,None,'unknown',3,100,50)]
-    prices = {'model':SimpleNamespace(input_price=Decimal('2'),output_price=Decimal('8'))}
+    rows = [('alice','key1','Key 1','w1','Worker 1','model',2,1000000,500000,200000,100000),
+            ('bob','key1','Key 1','w2','Worker 2','model',1,2000000,0,0,0),
+            ('alice','key2','Key 2',None,None,'unknown',3,100,50,0,0)]
+    prices = {'model':SimpleNamespace(input_price=Decimal('2'),output_price=Decimal('8'),cache_read_price=Decimal('0.2'),cache_write_price=Decimal('2.5'))}
     total, users, workers = summarize_latest(rows, prices)
-    assert total['amount'] == Decimal('10')
+    assert total['amount'] == Decimal('9.69')
+    assert total['cache_read_tokens'] == 200000 and total['cache_write_tokens'] == 100000
     assert total['requests'] == 6 and total['unpriced'] == 3
     assert len(users) == 3 and len(workers) == 3
     for groups in (users,workers):
-        for metric in ('amount','requests','input_tokens','output_tokens','unpriced'):
+        for metric in ('amount','requests','input_tokens','output_tokens','cache_read_tokens','cache_write_tokens','unpriced'):
             assert sum(g[metric] for g in groups) == total[metric]
     prices['model'].input_price = Decimal('4')
-    assert summarize_latest(rows,prices)[0]['amount'] == Decimal('16')
-    assert rows[0][6:] == (2,1000000,500000)
+    assert summarize_latest(rows,prices)[0]['amount'] == Decimal('15.09')
+    assert rows[0][6:] == (2,1000000,500000,200000,100000)
 
 
 def test_empty_and_zero_priced_usage():
     assert summarize_latest([], {})[0]['amount'] == 0
-    total,_,_ = summarize_latest([(None,None,None,None,None,'free',1,10,20)], {'free':SimpleNamespace(input_price=Decimal(0),output_price=Decimal(0))})
+    total,_,_ = summarize_latest([(None,None,None,None,None,'free',1,10,20,0,0)], {'free':SimpleNamespace(input_price=Decimal(0),output_price=Decimal(0),cache_read_price=Decimal(0),cache_write_price=Decimal(0))})
     assert total['amount'] == 0 and total['unpriced'] == 0
+
+
+def test_four_price_request_snapshot():
+    from fastapi.testclient import TestClient
+    from codex_gateway.main import app, save_usage
+    from codex_gateway.database import SessionLocal
+    from codex_gateway.auth import ApiPrincipal
+    from codex_gateway.backend import BackendTarget
+    from codex_gateway.models import ModelPrice, UsageRecord
+    from codex_gateway.schemas import BackendResult
+
+    model = 'four-price-' + uuid4().hex[:10]
+    request_id = 'resp_' + uuid4().hex
+
+    async def write_and_read():
+        async with SessionLocal() as db:
+            db.add(ModelPrice(model=model, input_price=Decimal('2'), output_price=Decimal('8'),
+                              cache_read_price=Decimal('0.2'), cache_write_price=Decimal('2.5')))
+            await db.commit()
+        await save_usage(request_id, ApiPrincipal(None, 'test'), BackendTarget('test', 'ws://test', '/workspace'),
+                         model, 200, time.monotonic(),
+                         BackendResult(text='ok', thread_id='thread', input_tokens=1000000, output_tokens=500000,
+                                       cache_read_tokens=200000, cache_write_tokens=100000))
+        async with SessionLocal() as db:
+            record = await db.scalar(select(UsageRecord).where(UsageRecord.request_id == request_id))
+            return record.cost_usd, record.cache_read_tokens, record.cache_write_tokens, record.cache_read_price, record.cache_write_price
+
+    with TestClient(app) as client:
+        cost, cache_read, cache_write, read_price, write_price = client.portal.call(write_and_read)
+    assert (cost, cache_read, cache_write, read_price, write_price) == (Decimal('5.690000000000'), 200000, 100000, Decimal('0.200000'), Decimal('2.500000'))
+    assert priced_amount(1000000, 500000, 200000, 100000, SimpleNamespace(input_price=Decimal('2'), output_price=Decimal('8'), cache_read_price=Decimal('0.2'), cache_write_price=Decimal('2.5'))) == Decimal('5.69')
 
 
 def test_report_recalculates_live_subscription_cost(monkeypatch):

@@ -93,13 +93,37 @@ class MockBackend:
         return None
 
 
-def _token_counts(params: dict[str, Any]) -> tuple[int, int]:
+def _token_counts(params: dict[str, Any]) -> tuple[int, int, int, int]:
     usage = params.get("tokenUsage") or params.get("usage") or params
-    if isinstance(usage, dict) and isinstance(usage.get("total"), dict):
-        usage = usage["total"]
+    if isinstance(usage, dict):
+        usage = usage.get("last") or usage.get("total") or usage
     if not isinstance(usage, dict):
-        return 0, 0
-    return int(usage.get("inputTokens", usage.get("input_tokens", 0)) or 0), int(usage.get("outputTokens", usage.get("output_tokens", 0)) or 0)
+        return 0, 0, 0, 0
+    return tuple(int(usage.get(name, usage.get(alias, 0)) or 0) for name, alias in (
+        ("inputTokens", "input_tokens"), ("outputTokens", "output_tokens"),
+        ("cachedInputTokens", "cache_read_tokens"), ("cacheWriteInputTokens", "cache_write_tokens")))
+
+
+class TurnUsage:
+    """Accumulate model calls in one turn without billing thread totals repeatedly."""
+
+    def __init__(self):
+        self.counts = (0, 0, 0, 0)
+        self.previous_total = None
+
+    def observe(self, params):
+        usage = params.get("tokenUsage") or params.get("usage") or params
+        total = usage.get("total") if isinstance(usage, dict) else None
+        if self.previous_total is not None and isinstance(total, dict):
+            current = _token_counts(total)
+            increment = (_token_counts(params) if any(new < old for new, old in zip(current, self.previous_total))
+                         else tuple(new - old for new, old in zip(current, self.previous_total)))
+        else:
+            increment = _token_counts(params)
+        self.counts = tuple(old + new for old, new in zip(self.counts, increment))
+        if isinstance(total, dict):
+            self.previous_total = _token_counts(total)
+        return self.counts
 
 
 class AppServerBackend:
@@ -177,8 +201,9 @@ class AppServerBackend:
                     if output_schema := request.output_schema():
                         turn_params["outputSchema"] = output_schema
                     turn_may_have_started = True
-                    await app_server.call("turn/start", turn_params)
-                    input_tokens = output_tokens = 0
+                    started = await app_server.call("turn/start", turn_params)
+                    turn_id = (started.get("turn") or {}).get("id")
+                    turn_usage = TurnUsage()
                     async for message in app_server.messages():
                         method, params = message.get("method"), message.get("params", {})
                         if message.get("id") is not None and method:
@@ -186,14 +211,18 @@ class AppServerBackend:
                         elif method == "item/agentMessage/delta":
                             yield BackendStreamEvent(delta=params.get("delta", ""), thread_id=thread_id)
                         elif method == "thread/tokenUsage/updated":
-                            input_tokens, output_tokens = _token_counts(params)
+                            if not turn_id or not params.get("turnId") or params["turnId"] == turn_id:
+                                turn_usage.observe(params)
                         elif method == "turn/completed":
                             turn = params.get("turn", {})
                             if turn.get("status") == "failed":
                                 error = turn.get("error") or {}
                                 message = error.get("message", "Codex turn failed")
                                 raise WorkerFailure(message, kind=classify_worker_failure(message), safe_to_retry=False)
-                            yield BackendStreamEvent(thread_id=thread_id, done=True, input_tokens=input_tokens, output_tokens=output_tokens)
+                            input_tokens, output_tokens, cache_read_tokens, cache_write_tokens = turn_usage.counts
+                            yield BackendStreamEvent(thread_id=thread_id, done=True, input_tokens=input_tokens,
+                                                     output_tokens=output_tokens, cache_read_tokens=cache_read_tokens,
+                                                     cache_write_tokens=cache_write_tokens)
                             return
             except WorkerFailure:
                 raise
@@ -213,7 +242,9 @@ class AppServerBackend:
             terminal = event
             if event.delta:
                 chunks.append(event.delta)
-        return BackendResult(text="".join(chunks), thread_id=terminal.thread_id or "", input_tokens=terminal.input_tokens, output_tokens=terminal.output_tokens)
+        return BackendResult(text="".join(chunks), thread_id=terminal.thread_id or "", input_tokens=terminal.input_tokens,
+                             output_tokens=terminal.output_tokens, cache_read_tokens=terminal.cache_read_tokens,
+                             cache_write_tokens=terminal.cache_write_tokens)
 
     async def stream(self, request: ResponseRequest, target: BackendTarget) -> AsyncIterator[BackendStreamEvent]:
         async for event in self._turn(request, target):

@@ -17,6 +17,7 @@ class ToolRun:
     queue: asyncio.Queue = field(default_factory=lambda: asyncio.Queue(maxsize=64))
     reply: asyncio.Future | None = None
     call_id: str | None = None
+    accepted_call_id: str | None = None
     task: asyncio.Task | None = None
     claimed: bool = False
     thread_id: str | None = None
@@ -82,10 +83,16 @@ class ToolSessions:
                 run.thread_id = event.thread_id or run.thread_id
                 await run.queue.put(event)
         except asyncio.CancelledError:
+            if run.accepted_call_id:
+                key = run.target.connection_key.split(':', 1)[0]
+                self.retire((key, run.accepted_call_id), 'client_tool_call_unavailable')
             if not run.queue.full():
                 run.queue.put_nowait(ToolProtocolError('The pending execution was cancelled or invalidated', 'client_tool_call_unavailable'))
             raise
         except Exception as exc:
+            if run.accepted_call_id:
+                key = run.target.connection_key.split(':', 1)[0]
+                self.retire((key, run.accepted_call_id), 'client_tool_call_unavailable')
             await run.queue.put(exc)
         finally:
             if run.call_id:
@@ -113,6 +120,7 @@ class ToolSessions:
         run=self.find(request,key)
         if run:
             run.claimed=True
+            run.accepted_call_id=run.call_id
             self.retire((key,run.call_id), 'client_tool_result_duplicate')
             output=tool_outputs(request)[0][1]
             run.reply.set_result(output)
@@ -138,6 +146,7 @@ class ToolSessions:
                     event=event.model_copy(update=updates)
                 if event.tool_call:
                     suspended=True
+                    run.accepted_call_id=None
                 yield event
                 if boundary:
                     break

@@ -71,6 +71,28 @@ async def test_dynamic_continuation_is_scoped_and_not_reexecuted():
 
 
 @pytest.mark.asyncio
+async def test_failed_continuation_reports_lost_call_instead_of_duplicate():
+    sessions = None
+    async def events(req, target, run):
+        call = {'call_id': 'call_failed'}
+        await sessions.await_result(run, call)
+        yield BackendStreamEvent(tool_call=call, thread_id='thread-a')
+        await sessions.receive_result(run)
+        raise RuntimeError('backend failed after accepting the tool result')
+
+    sessions = ToolSessions(events)
+    target = BackendTarget('key:worker', 'ws://worker', '/workspace')
+    assert [event async for event in sessions.stream(request(), target)][0].tool_call['call_id'] == 'call_failed'
+    continued = ResponseRequest(model='test', input=[{'type': 'function_call_output', 'call_id': 'call_failed', 'output': 'answer'}])
+    with pytest.raises(RuntimeError):
+        _ = [event async for event in sessions.stream(continued, target)]
+    with pytest.raises(ToolProtocolError) as error:
+        sessions.target_for(continued, 'key')
+    assert error.value.code == 'client_tool_call_unavailable'
+    await sessions.close()
+
+
+@pytest.mark.asyncio
 async def test_expired_calls_fail_closed():
     sessions=None
     async def events(req,target,run):

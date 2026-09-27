@@ -1,5 +1,6 @@
 import json
 import hashlib
+import logging
 from decimal import Decimal
 import asyncio
 import time
@@ -38,6 +39,8 @@ from .quota import reconcile_worker, enforce_quota
 from .contributions import account_monitor_loop, update_account
 from .migrations import upgrade, bootstrap_users
 from .schemas import BackendResult, ChatCompletionRequest, ResponseRequest
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -579,6 +582,8 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
         session_failure = isinstance(exc, WorkerFailure) and exc.kind == "session"
         tool_failure = isinstance(exc, WorkerFailure) and isinstance(exc.__cause__, ToolProtocolError)
         capacity_failure = isinstance(exc, WorkerFailure) and exc.kind == "capacity"
+        logger.exception("Responses backend failed: request_id=%s worker_id=%s failure_kind=%s", response_id,
+                         target.worker_id, exc.kind if isinstance(exc, WorkerFailure) else type(exc).__name__)
         if session_failure and principal.key_id and public_previous_id:
             async with SessionLocal() as session:
                 previous = await session.scalar(select(ResponseBinding).where(ResponseBinding.response_id == public_previous_id, ResponseBinding.api_key_id == principal.key_id))

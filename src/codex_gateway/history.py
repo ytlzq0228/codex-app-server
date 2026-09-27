@@ -114,3 +114,30 @@ def active_conversation_groups(rows):
         else:
             group['threads'].append({'binding': binding, 'worker': worker, 'binding_count': 1})
     return list(groups.values()), by_key
+
+
+def history_time_filters(start='', end=''):
+    """Accept explicit instants; never interpret browser wall time as server time."""
+    from datetime import datetime, timezone
+    from fastapi import HTTPException
+    bounds = []
+    for value in (start, end):
+        if not value:
+            bounds.append(None)
+            continue
+        try:
+            parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+            if parsed.tzinfo is None or parsed.utcoffset() is None:
+                raise ValueError('timezone required')
+            bounds.append(parsed.astimezone(timezone.utc))
+        except (ValueError, OverflowError):
+            raise HTTPException(400, '时间格式无效，请提供带时区的时间')
+    start_at, end_at = bounds
+    if start_at and end_at and start_at >= end_at:
+        raise HTTPException(400, '结束时间必须晚于开始时间')
+    filters = []
+    if start_at:
+        filters.append(UsageRecord.created_at >= start_at)
+    if end_at:
+        filters.append(UsageRecord.created_at < end_at)
+    return filters

@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/static/admin.css">
   <link rel="stylesheet" href="/static/admin-features.css">
   <script defer src="/static/admin.js"></script>
-<link rel="stylesheet" href="/static/modals.css"><script defer src="/static/modals.js"></script><link rel="stylesheet" href="/static/controls.css"><link rel="stylesheet" href="/static/worker-rate-limits.css"><script defer src="/static/worker-rate-limits.js"></script></head>
+<link rel="stylesheet" href="/static/modals.css"><script defer src="/static/modals.js"></script><link rel="stylesheet" href="/static/controls.css"><link rel="stylesheet" href="/static/worker-rate-limits.css"><script defer src="/static/worker-rate-limits.js"></script><link rel="stylesheet" href="/static/history.css"><script defer src="/static/history-filters.js"></script><script defer src="/static/local-time.js"></script></head>
 <body data-csrf-token="{{ csrf_token }}" class="{{ 'worker-page' if page == 'admin_workers' else '' }}">
   {% include "shared/sidebar.html" %}
 
@@ -49,11 +49,18 @@
     {% if page == 'history' %}
     <section id="history" class="panel">
       <div class="section-head"><div><p class="eyebrow">AUDIT LOG</p><h2>请求历史</h2><p class="muted">共 {{ history_total }} 条请求，聚合为 {{ history_session_total }} 个会话；每页 30 个会话，点击请求 ID 查看请求参数和计费详情。</p></div></div>
-      <form method="get" class="toolbar">
+      <form method="get" class="history-filters" data-history-filters>
         <label>逻辑会话 ID<input name="conversation" value="{{ request.query_params.get('conversation','') }}" placeholder="完整逻辑会话 ID / 旧 Thread ID"></label>
-        <label>Key ID<input name="key_id" value="{{ request.query_params.get('key_id','') }}"></label>
-        <label>接口<input name="endpoint" value="{{ request.query_params.get('endpoint','') }}"></label>
-        <button class="button">定位会话</button><a class="button" href="/admin/history">查看全部</a>
+        <div class="history-key-field"><label for="history-key">Key</label><select id="history-key" name="key_id" data-key-select>
+          <option value="">全部 Key</option>
+          <option value="development" {{ 'selected' if request.query_params.get('key_id') == 'development' }}>开发模式（无 Key）</option>
+          {% for key in history_keys %}<option value="{{ key.id }}" {{ 'selected' if request.query_params.get('key_id') == key.id|string }}>{{ key.name }} · {{ key.owner_username or '无归属' }} · {{ key.id }}{{ '（已删除）' if key.deleted_at else '' }}</option>{% endfor %}
+        </select></div>
+        <label>接口<input name="endpoint" value="{{ request.query_params.get('endpoint','') }}" placeholder="例如 responses"></label>
+        <label>开始时间<input type="datetime-local" step="1" data-time-bound="start" data-instant="{{ request.query_params.get('start','') }}"></label>
+        <label>结束时间<input type="datetime-local" step="1" data-time-bound="end" data-instant="{{ request.query_params.get('end','') }}"></label>
+        <div class="history-filter-actions"><button class="button button-primary">查询</button><a class="button" href="/admin/history">查看全部</a></div>
+        <p class="history-filter-hint muted">时间按浏览器时区 <span data-browser-timezone></span> 显示和筛选，包含开始时间、不包含结束时间；显示含匹配请求的完整会话。</p>
       </form>
       {% include 'shared/conversation-history.html' %}
       {% if history_pages > 1 %}<div class="pagination">{% if history_page > 1 %}<a class="button button-small" href="{{ request.url.include_query_params(history_page=history_page-1) }}">上一页</a>{% endif %}<span>第 {{ history_page }} / {{ history_pages }} 页</span>{% if history_page < history_pages %}<a class="button button-small" href="{{ request.url.include_query_params(history_page=history_page+1) }}">下一页</a>{% endif %}</div>{% endif %}
@@ -62,9 +69,9 @@
 
     {% if page == 'admin_workers' %}
     <section id="workers" class="panel">
-      <div class="section-head"><div><p class="eyebrow">RUNTIME</p><h2>Codex Workers</h2><a href="/admin/workers">进入 Worker 管理</a></div><button class="button button-primary" data-open-dialog="worker-dialog">增加 Worker</button></div>
+      <div class="section-head"><div><p class="eyebrow">RUNTIME</p><h2>Codex Workers</h2></div><button class="button button-primary" data-open-dialog="worker-dialog">增加 Worker</button></div>
       <div class="table-wrap"><table class="worker-table"><thead><tr><th>名称</th><th>状态</th><th>归属 / 登录账号</th><th>认证方式</th><th>套餐</th><th>账号已用额度</th><th>故障与恢复</th><th>操作</th></tr></thead><tbody>
-      {% for worker in workers %}<tr><td><div class="worker-name"><span class="worker-dot worker-{{ worker.status.value }}"></span><strong>{{ worker.name }}</strong></div></td><td><span class="badge badge-{{ worker.status.value }}">{{ '已隔离' if worker.status.value == 'error' else worker.status.value }}</span></td><td>{{ worker.owner_username or "—" }} · {{ worker.account_email or "未读取账号" }}</td><td>{% if worker.auth_mode %}<span class="badge badge-ok">已登录 · {{ worker.auth_mode }}</span>{% else %}<span class="badge badge-off">未登录</span>{% endif %}</td><td>{{ worker.plan_type or '—' }}</td><td>{% include "shared/worker-rate-limits.html" %}</td><td class="worker-health">{% if worker.failure_reason %}<strong>{{ {'connection':'连接故障','logged_out':'账号已退出','limit':'账户限额'}.get(worker.failure_kind, '运行故障') }}</strong><span class="worker-error-reason" title="{{ worker.failure_reason }}">{{ worker.failure_reason }}</span><div class="worker-health-times">{% if worker.quarantined_at %}<span>隔离于 {{ worker.quarantined_at.strftime('%m-%d %H:%M:%S') }}</span>{% endif %}{% if worker.retry_after %}<span>下次探测 {{ worker.retry_after.strftime('%m-%d %H:%M:%S') }}</span>{% endif %}</div>{% elif worker.recovered_at %}<span class="health-recovered">已自动恢复</span><span>{{ worker.recovered_at.strftime('%m-%d %H:%M:%S') }}</span>{% else %}<span class="muted">正常</span>{% endif %}</td><td><div class="row-actions">
+      {% for worker in workers %}<tr><td><div class="worker-name"><span class="worker-dot worker-{{ worker.status.value }}"></span><strong>{{ worker.name }}</strong></div></td><td><span class="badge badge-{{ worker.status.value }}">{{ '已隔离' if worker.status.value == 'error' else worker.status.value }}</span></td><td>{{ worker.owner_username or "—" }} · {{ worker.account_email or "未读取账号" }}</td><td>{% if worker.auth_mode %}<span class="badge badge-ok">已登录 · {{ worker.auth_mode }}</span>{% else %}<span class="badge badge-off">未登录</span>{% endif %}</td><td>{{ worker.plan_type or '—' }}</td><td>{% include "shared/worker-rate-limits.html" %}</td><td class="worker-health">{% if worker.failure_reason %}<strong>{{ {'connection':'连接故障','logged_out':'账号已退出','limit':'账户限额'}.get(worker.failure_kind, '运行故障') }}</strong><span class="worker-error-reason" title="{{ worker.failure_reason }}">{{ worker.failure_reason }}</span><div class="worker-health-times">{% if worker.quarantined_at %}<span>隔离于 <time data-local-time datetime="{{ worker.quarantined_at.isoformat() }}">{{ worker.quarantined_at.isoformat() }}</time></span>{% endif %}{% if worker.retry_after %}<span>下次探测 <time data-local-time datetime="{{ worker.retry_after.isoformat() }}">{{ worker.retry_after.isoformat() }}</time></span>{% endif %}</div>{% elif worker.recovered_at %}<span class="health-recovered">已自动恢复</span><span><time data-local-time datetime="{{ worker.recovered_at.isoformat() }}">{{ worker.recovered_at.isoformat() }}</time></span>{% else %}<span class="muted">正常</span>{% endif %}</td><td><div class="row-actions">
         <form data-ajax data-reload method="post" action="/admin/workers/{{ worker.id }}/probe"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-small">探测</button></form>
         <form data-ajax {% if worker.auth_mode %}data-confirm="是否退出当前账号并重新登录？退出后将重新计算贡献额度，额度不足的 Key 可能被停用。"{% endif %} method="post" action="/admin/workers/{{ worker.id }}/login"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">{% if worker.auth_mode %}<input type="hidden" name="force" value="true"><button class="button button-small">重新登录</button>{% else %}<button class="button button-small button-primary">登录账号</button>{% endif %}</form>
         <form data-ajax data-reload method="post" action="/admin/workers/{{ worker.id }}/state"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-small">{{ '排空' if worker.enabled else '启用' }}</button></form>

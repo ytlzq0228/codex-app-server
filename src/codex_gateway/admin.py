@@ -19,7 +19,7 @@ from .app_server import AppServerError, open_app_server
 from .backend import WorkerFailure, classify_worker_failure, run_healthcheck_turn
 from .config import Settings, get_settings
 from .database import get_session
-from .history import conversation_history, active_conversation_groups
+from .history import conversation_history, active_conversation_groups, history_time_filters
 from .models import GoogleAuthConfig, User, UserSession, ApiKey, ResponseBinding, UsageRecord, Worker, WorkerStatus
 from .quota import quota_lock, ensure_capacity, reconcile_worker
 from .user_auth import issue_session, require_user, digest
@@ -120,7 +120,8 @@ def manager_delete_succeeded(status_code: int) -> bool:
     return status_code in {204, 404}
 
 
-async def render_admin_page(request: Request, page: str, history_page: int, admin: AdminSession, session: AsyncSession, *, conversation: str = "", key_id: str = "", endpoint: str = ""):
+async def render_admin_page(request: Request, page: str, history_page: int, admin: AdminSession, session: AsyncSession, *, conversation: str = "", key_id: str = "", endpoint: str = "", start: str = "", end: str = ""):
+    date_filters = history_time_filters(start, end)
     if page == "overview":
         stats = {
             "requests": await session.scalar(select(func.count()).select_from(UsageRecord)) or 0,
@@ -133,7 +134,8 @@ async def render_admin_page(request: Request, page: str, history_page: int, admi
     history_page_size = 30
     keys = (await session.scalars(select(ApiKey).where(ApiKey.deleted_at.is_(None)).order_by(ApiKey.created_at.desc()))).all()
     workers = (await session.scalars(select(Worker).where(Worker.endpoint != "removed://worker").order_by(Worker.created_at.asc()))).all()
-    history = await conversation_history(session, page=history_page, page_size=history_page_size, conversation_id=conversation, key_id=key_id, endpoint=endpoint)
+    history_keys = (await session.scalars(select(ApiKey).order_by(ApiKey.name, ApiKey.id))).all() if page == "history" else []
+    history = await conversation_history(session, filters=date_filters, page=history_page, page_size=history_page_size, conversation_id=conversation, key_id=key_id, endpoint=endpoint)
     history_total = history["request_total"]
     history_session_total = history["total"]
     history_page, history_pages = history["page"], history["pages"]
@@ -168,7 +170,7 @@ async def render_admin_page(request: Request, page: str, history_page: int, admi
     return templates(request).TemplateResponse(
         request,
         "admin/dashboard.html",
-        {"users": (await session.scalars(select(User).order_by(User.username))).all(), "page": page, "keys": keys, "workers": workers, "history_groups": history_groups, "history_page": history_page, "history_pages": history_pages, "history_total": history_total, "history_session_total": history_session_total, "active_sessions": active_sessions, "sessions_by_key": sessions_by_key, "stats": stats, "csrf_token": admin.csrf_token},
+        {"users": (await session.scalars(select(User).order_by(User.username))).all(), "page": page, "history_keys": history_keys, "keys": keys, "workers": workers, "history_groups": history_groups, "history_page": history_page, "history_pages": history_pages, "history_total": history_total, "history_session_total": history_session_total, "active_sessions": active_sessions, "sessions_by_key": sessions_by_key, "stats": stats, "csrf_token": admin.csrf_token},
     )
 
 
@@ -201,8 +203,8 @@ async def sessions_page(request: Request, conversation: str = "", key_id: str = 
 
 
 @router.get("/history", response_class=HTMLResponse)
-async def history_page(request: Request, history_page: int = 1, conversation: str = "", key_id: str = "", endpoint: str = "", admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
-    return await render_admin_page(request, "history", history_page, admin, session, conversation=conversation, key_id=key_id, endpoint=endpoint)
+async def history_page(request: Request, start: str = "", end: str = "", history_page: int = 1, conversation: str = "", key_id: str = "", endpoint: str = "", admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    return await render_admin_page(request, "history", history_page, admin, session, conversation=conversation, key_id=key_id, endpoint=endpoint, start=start, end=end)
 
 
 @router.post("/keys")

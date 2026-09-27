@@ -302,6 +302,7 @@ def test_admin_worker_page_is_separate_from_contribution_page(worker_services):
         admin_page=client.get('/admin/workers').text
         assert 'Worker 管理' in admin_page and all(name in admin_page for name in names)
         assert 'href="/admin/workers"' in client.get('/admin').text
+        assert '进入 Worker 管理' not in admin_page
 
 
 def test_duplicate_account_quota_lifecycle_and_transfer(worker_services):

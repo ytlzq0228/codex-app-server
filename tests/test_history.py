@@ -152,3 +152,56 @@ def test_active_and_historical_pages_share_logical_id_and_keep_thread_actions():
         active=client.get('/admin/sessions')
         assert '1 个逻辑会话 · 1 个 Thread' in active.text
         assert '共 13 条请求，聚合为 1 个会话' in client.get('/admin/history',params={'conversation':conv,'key_id':key_id}).text
+
+
+def test_history_time_bounds_require_timezone_and_normalize_to_utc():
+    import pytest
+    from fastapi import HTTPException
+    from codex_gateway.history import history_time_filters
+    filters = history_time_filters('2026-09-27T08:00:00+08:00', '2026-09-27T01:00:00Z')
+    assert filters[0].right.value == datetime(2026, 9, 27, tzinfo=timezone.utc)
+    assert filters[1].right.value == datetime(2026, 9, 27, 1, tzinfo=timezone.utc)
+    assert str(filters[0].operator.__name__) == 'ge'
+    assert str(filters[1].operator.__name__) == 'lt'
+    assert history_time_filters() == []
+    assert len(history_time_filters(end='2026-09-27T01:00:00Z')) == 1
+    for start, end in [
+        ('2026-09-27T08:00:00', ''), ('invalid', ''),
+        ('2026-09-27T01:00:00Z', '2026-09-27T00:00:00Z'),
+        ('2026-09-27T01:00:00Z', '2026-09-27T01:00:00Z'),
+    ]:
+        with pytest.raises(HTTPException) as error:
+            history_time_filters(start, end)
+        assert error.value.status_code == 400
+
+
+def test_admin_history_time_filter_preserves_full_conversation():
+    prefix=uuid4().hex
+    now=datetime(2026, 9, 27, tzinfo=timezone.utc)
+    async def seed():
+        async with SessionLocal() as db:
+            key=ApiKey(name=prefix,prefix=prefix[:20],key_hash=prefix*2)
+            db.add(key)
+            await db.flush()
+            for i in range(3):
+                db.add(UsageRecord(request_id=prefix+str(i),api_key_id=key.id,
+                    logical_conversation_id=prefix,model='test',status_code=200,
+                    endpoint='responses',created_at=now+timedelta(seconds=i)))
+            await db.commit()
+            return str(key.id)
+    with TestClient(app) as client:
+        key_id=client.portal.call(seed)
+        settings=get_settings()
+        client.post('/auth/login',data={'username':settings.admin_username,
+            'password':settings.admin_password.get_secret_value()})
+        params={'conversation':prefix,'key_id':key_id,
+            'start':'2026-09-27T08:00:01+08:00','end':'2026-09-27T00:00:02Z'}
+        result=client.get('/admin/history',params=params)
+        assert result.status_code==200
+        assert '共 3 条请求，聚合为 1 个会话' in result.text
+        assert 'data-key-select' in result.text and 'data-time-bound="start"' in result.text
+        assert 'datetime="2026-09-27T00:00:00+00:00"' in result.text
+        params['start']='2026-09-27T00:00:03Z'
+        params.pop('end')
+        assert '共 0 条请求' in client.get('/admin/history',params=params).text
+        assert client.get('/admin/history',params={'start':'2026-09-27T00:00:00'}).status_code==400

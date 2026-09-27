@@ -21,7 +21,7 @@
         </td>
         <td>{{ item.worker.name }}</td>
         <td><a data-request-detail href="/user/usage/{{ item.binding.response_id }}"><code>{{ item.binding.response_id }}</code></a></td>
-        <td>{{ item.binding.last_used_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+        <td><time data-local-time datetime="{{ item.binding.last_used_at.isoformat() }}">{{ item.binding.last_used_at.isoformat() }}</time></td>
         <td>按需恢复</td>
         <td><form data-ajax data-reload data-confirm="确定释放这个 Worker Thread 的全部响应绑定吗？同一 Thread 上的绑定都会释放，请求历史会保留。" method="post" action="/admin/sessions/{{ item.binding.response_id }}/delete"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-small button-danger">释放 Thread</button></form></td>
       </tr>

@@ -66,7 +66,7 @@ no-content-retention design.
 | Safety identifier | Stable abuse identifier | Accepted but not forwarded | Partial | P2 |
 | Include/logprobs | Optional extra response data | Requested logprobs explicitly rejected | Partial | Done for honest behavior |
 | Tools | Built-in, MCP, function and custom tools | Offered tools ignored for text-chat compatibility; forced choice rejected | Partial | P2; intentionally no client tool executor |
-| Usage details | Input/output/cached/reasoning breakdown | Totals; cached/reasoning hard-coded zero | Partial | P1: map all available app-server counters |
+| Usage details | Input/output/cached/reasoning breakdown | Input/output and cached input are mapped from app-server turn usage; reasoning remains unavailable | Partial | P1: map reasoning if app-server exposes it |
 
 ## Chat Completions API
 

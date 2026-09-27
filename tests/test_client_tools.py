@@ -51,10 +51,10 @@ async def test_dynamic_continuation_is_scoped_and_not_reexecuted():
         executions.append('started')
         call={'id':'fc_a','type':'function_call','call_id':'call_a','name':'lookup','arguments':'{}','status':'completed'}
         await sessions.await_result(run,call)
-        yield BackendStreamEvent(tool_call=call,thread_id='thread-a',input_tokens=10)
+        yield BackendStreamEvent(tool_call=call,thread_id='thread-a',input_tokens=10,output_tokens=1,cache_read_tokens=6,cache_write_tokens=2)
         result=await sessions.receive_result(run)
         yield BackendStreamEvent(delta=result,thread_id='thread-a')
-        yield BackendStreamEvent(done=True,thread_id='thread-a',input_tokens=15,output_tokens=2)
+        yield BackendStreamEvent(done=True,thread_id='thread-a',input_tokens=15,output_tokens=2,cache_read_tokens=9,cache_write_tokens=3)
     sessions=ToolSessions(events,ttl=1)
     target=BackendTarget('key:worker','ws://worker','/workspace')
     first=[e async for e in sessions.stream(request(),target)]
@@ -64,7 +64,7 @@ async def test_dynamic_continuation_is_scoped_and_not_reexecuted():
     assert sessions.target_for(continued,'key')==target
     final=[e async for e in sessions.stream(continued,target)]
     assert final[0].delta=='client answer'
-    assert final[-1].input_tokens==5
+    assert (final[-1].input_tokens, final[-1].output_tokens, final[-1].cache_read_tokens, final[-1].cache_write_tokens)==(5,1,3,1)
     assert executions==['started']
     with pytest.raises(ToolProtocolError):sessions.target_for(continued,'key')
     await sessions.close()
@@ -76,7 +76,7 @@ async def test_expired_calls_fail_closed():
     async def events(req,target,run):
         call={'call_id':'call_expired'}
         await sessions.await_result(run,call)
-        yield BackendStreamEvent(tool_call=call,thread_id='thread-a')
+        yield BackendStreamEvent(tool_call=call,thread_id='thread-a',input_tokens=10,output_tokens=1,cache_read_tokens=6,cache_write_tokens=2)
         await sessions.receive_result(run)
     sessions=ToolSessions(events,ttl=0.01)
     target=BackendTarget('key:worker','ws://worker','/workspace')
@@ -97,7 +97,7 @@ async def test_responses_sse_emits_structured_tools_after_persistence(monkeypatc
     monkeypatch.setattr(main,'save_usage',save)
     call=public_call(definitions(request()),{'tool':'gateway_client_0','arguments':{'query':'dns'}})
     class Backend:
-        async def stream(self,*args):yield BackendStreamEvent(tool_call=call,thread_id='thread-a')
+        async def stream(self,*args):yield BackendStreamEvent(tool_call=call,thread_id='thread-a',input_tokens=10,output_tokens=1,cache_read_tokens=6,cache_write_tokens=2)
     stream=main.response_stream(request(),Backend(),ApiPrincipal(None,'test'),BackendTarget('key:worker','ws://worker','/workspace'),None)
     events=[]
     async for raw in stream:
@@ -107,6 +107,8 @@ async def test_responses_sse_emits_structured_tools_after_persistence(monkeypatc
     assert events[-1]['response']['output']==[call]
     assert any(e['type']=='response.function_call_arguments.done' for e in events)
     assert saved[0].tool_calls==[call]
+    assert saved[0].cache_read_tokens==6 and saved[0].cache_write_tokens==2
+    assert events[-1]["response"]["usage"]["input_tokens_details"]=={"cached_tokens":6,"cache_write_tokens":2}
 
 @pytest.mark.asyncio
 async def test_server_request_id_collision_does_not_consume_rpc_response():
@@ -138,3 +140,27 @@ async def test_disconnected_stream_cancels_worker_before_tool_boundary():
     await stream.aclose()
     assert cancelled.is_set() and not sessions.runs
     await sessions.close()
+
+@pytest.mark.asyncio
+async def test_chat_stream_preserves_four_metrics_and_tool_call(monkeypatch):
+    from codex_gateway import main
+    from codex_gateway.auth import ApiPrincipal
+    from codex_gateway.schemas import ChatCompletionRequest
+    saved=[]
+    async def save(*args,**kwargs):saved.append(args[6])
+    monkeypatch.setattr(main,'save_usage',save)
+    call={'type':'function_call','call_id':'call_four_metrics','name':'lookup','arguments':'{}'}
+    class Backend:
+        async def stream(self,*args):
+            yield BackendStreamEvent(tool_call=call,thread_id='thread-a',input_tokens=100,output_tokens=10,cache_read_tokens=60,cache_write_tokens=5)
+    body=ChatCompletionRequest(model='test',messages=[{'role':'user','content':'lookup'}],stream=True,stream_options={'include_usage':True})
+    events=[]
+    async for raw in main.chat_completion_stream(body,body.to_response_request(),Backend(),ApiPrincipal(None,'test'),BackendTarget('key:worker','ws://worker','/workspace')):
+        data=raw.split('data: ',1)[1].strip()
+        if data!='[DONE]':events.append(json.loads(data))
+    assert events[-1]['usage']['prompt_tokens_details']=={'cached_tokens':60,'cache_write_tokens':5}
+    assert saved[0].cache_read_tokens==60 and saved[0].cache_write_tokens==5
+    assert saved[0].tool_calls==[call]
+    assert any(e['choices'] and e['choices'][0]['finish_reason']=='tool_calls' for e in events)
+    response=main.chat_completion_object('id',0,body,saved[0])
+    assert response['usage']==events[-1]['usage']

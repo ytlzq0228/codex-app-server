@@ -20,6 +20,11 @@ async def upgrade(connection):
     await connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS quota_granted INTEGER NOT NULL DEFAULT 0"))
     if not has_quota:
         await connection.execute(text("UPDATE users u SET quota_granted=(SELECT COUNT(*) FROM api_keys k WHERE k.owner_username=u.username AND k.enabled AND k.deleted_at IS NULL)"))
+    for name in ("cache_read_price", "cache_write_price"):
+        exists = await connection.scalar(text("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='model_prices' AND column_name=:name AND table_schema=current_schema())"), {"name": name})
+        await connection.execute(text(f"ALTER TABLE model_prices ADD COLUMN IF NOT EXISTS {name} NUMERIC(18,6) NOT NULL DEFAULT 0"))
+        if not exists:
+            await connection.execute(text(f"UPDATE model_prices SET {name}=input_price"))
     for statement in (
         "ALTER TABLE subscription_plans ADD COLUMN IF NOT EXISTS weight NUMERIC(18,6) NOT NULL DEFAULT 1",
         "ALTER TABLE workers ALTER COLUMN name TYPE VARCHAR(180)",
@@ -41,6 +46,10 @@ async def upgrade(connection):
         "ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS input_price NUMERIC(18,6)",
         "ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS output_price NUMERIC(18,6)",
         "ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS cost_usd NUMERIC(24,12)",
+        "ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS cache_read_tokens BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS cache_write_tokens BIGINT NOT NULL DEFAULT 0",
+        "ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS cache_read_price NUMERIC(18,6)",
+        "ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS cache_write_price NUMERIC(18,6)",
         "CREATE INDEX IF NOT EXISTS ix_usage_records_owner_username ON usage_records(owner_username)",
     ):
         await connection.execute(text(statement))

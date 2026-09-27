@@ -17,6 +17,7 @@ from sqlalchemy.dialects.postgresql import insert
 from .self_service import render
 from .user_auth import require_user
 from .history import conversation_history
+from .billing import priced_amount
 
 router = APIRouter()
 
@@ -77,18 +78,21 @@ async def finance(request: Request, month: str = "", identity=Depends(require_ad
 def summarize_latest(rows, prices):
     """Revalue token aggregates without reading or changing historical costs."""
     def empty():
-        return dict(requests=0, input_tokens=0, output_tokens=0, amount=Decimal(0), unpriced=0)
+        return dict(requests=0, input_tokens=0, output_tokens=0, cache_read_tokens=0,
+                    cache_write_tokens=0, amount=Decimal(0), unpriced=0)
     total, users, workers = empty(), {}, {}
     for row in rows:
-        owner, key_id, key_name, worker_id, worker_name, model, count, inp, out = row
+        owner, key_id, key_name, worker_id, worker_name, model, count, inp, out, cache_read, cache_write = row
         price = prices.get(model)
-        amount = (Decimal(inp) * price.input_price + Decimal(out) * price.output_price) / Decimal(1_000_000) if price else Decimal(0)
+        amount = priced_amount(inp, out, cache_read, cache_write, price) if price else Decimal(0)
         key_group = users.setdefault((owner, key_id), {**empty(), "owner": owner or "开发 / 未归属", "key_id": str(key_id) if key_id else "—", "name": key_name or "开发 Key / 未知 Key"})
         worker_group = workers.setdefault(worker_id, {**empty(), "name": worker_name or "未分配 Worker", "worker_id": str(worker_id) if worker_id else "—"})
         for group in (total, key_group, worker_group):
             group["requests"] += count
             group["input_tokens"] += inp
             group["output_tokens"] += out
+            group["cache_read_tokens"] += cache_read
+            group["cache_write_tokens"] += cache_write
             group["amount"] += amount
             group["unpriced"] += 0 if price else count
     return total, sorted(users.values(), key=lambda g: g["amount"], reverse=True), sorted(workers.values(), key=lambda g: g["amount"], reverse=True)
@@ -99,7 +103,8 @@ async def financial_reports(request: Request, month: str = "", identity=Depends(
     month = month or datetime.now(timezone.utc).strftime("%Y-%m")
     query = select(UsageRecord.owner_username, UsageRecord.api_key_id, ApiKey.name,
                    UsageRecord.worker_id, Worker.name, UsageRecord.model, func.count(),
-                   func.sum(UsageRecord.input_tokens), func.sum(UsageRecord.output_tokens))
+                   func.sum(UsageRecord.input_tokens), func.sum(UsageRecord.output_tokens),
+                   func.sum(UsageRecord.cache_read_tokens), func.sum(UsageRecord.cache_write_tokens))
     query = query.outerjoin(ApiKey, UsageRecord.api_key_id == ApiKey.id).outerjoin(Worker, UsageRecord.worker_id == Worker.id)
     if month != "all":
         if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month) or not 1 <= int(month[:4]) <= 9998:
@@ -138,7 +143,7 @@ def valid_amount(value):
 
 
 @router.post("/admin/prices")
-async def price(request: Request, model: str = Form(..., min_length=1, max_length=120), input_price: Decimal = Form(...), output_price: Decimal = Form(...), csrf_token: str = Form(...), identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
+async def price(request: Request, model: str = Form(..., min_length=1, max_length=120), input_price: Decimal = Form(...), output_price: Decimal = Form(...), cache_read_price: Decimal | None = Form(None), cache_write_price: Decimal | None = Form(None), csrf_token: str = Form(...), identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
     verify_csrf(request, identity, csrf_token)
     model = model.strip()
     if not model:
@@ -148,6 +153,8 @@ async def price(request: Request, model: str = Form(..., min_length=1, max_lengt
         record = ModelPrice(model=model)
         db.add(record)
     record.input_price, record.output_price = valid_amount(input_price), valid_amount(output_price)
+    record.cache_read_price = valid_amount(cache_read_price if cache_read_price is not None else input_price)
+    record.cache_write_price = valid_amount(cache_write_price if cache_write_price is not None else input_price)
     await db.commit()
     return {"message": "价格已保存，财务报表按最新价格重算；请求记录中的历史快照保持不变"}
 

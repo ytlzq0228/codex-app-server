@@ -55,6 +55,8 @@ class ModelPrice(Base):
     model: Mapped[str] = mapped_column(String(120), primary_key=True)
     input_price: Mapped[float] = mapped_column(Numeric(18, 6))
     output_price: Mapped[float] = mapped_column(Numeric(18, 6))
+    cache_read_price: Mapped[float] = mapped_column(Numeric(18, 6), default=0, server_default="0")
+    cache_write_price: Mapped[float] = mapped_column(Numeric(18, 6), default=0, server_default="0")
 
 class SubscriptionPlan(Base):
     __tablename__ = "subscription_plans"
@@ -154,6 +156,8 @@ class UsageRecord(Base):
     history_expected_hash: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     input_price: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
     output_price: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    cache_read_price: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    cache_write_price: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
     cost_usd: Mapped[float | None] = mapped_column(Numeric(24, 12), nullable=True)
     request_id: Mapped[str] = mapped_column(String(80), unique=True, index=True)
     api_key_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), ForeignKey("api_keys.id"), nullable=True, index=True)
@@ -162,6 +166,8 @@ class UsageRecord(Base):
     status_code: Mapped[int] = mapped_column(Integer)
     input_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
     output_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    cache_read_tokens: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
+    cache_write_tokens: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
     error_code: Mapped[str | None] = mapped_column(String(80), nullable=True)
     endpoint: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)

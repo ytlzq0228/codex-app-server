@@ -337,6 +337,8 @@ class BackendResult(BaseModel):
     thread_id: str
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
 
 
 class BackendStreamEvent(BaseModel):
@@ -346,3 +348,5 @@ class BackendStreamEvent(BaseModel):
     done: bool = False
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0

@@ -1,4 +1,5 @@
 from uuid import uuid4
+from contextlib import asynccontextmanager
 
 import pytest
 
@@ -6,7 +7,7 @@ import codex_gateway.main as main_module
 import codex_gateway.app_server as app_server_module
 from codex_gateway.auth import ApiPrincipal
 from codex_gateway.app_server import AppServerCapacityError, AppServerError, AppServerPool
-from codex_gateway.backend import AppServerBackend, BackendTarget, WorkerFailure, _token_counts, classify_worker_failure, run_healthcheck_turn
+from codex_gateway.backend import AppServerBackend, BackendTarget, TurnUsage, WorkerFailure, _token_counts, classify_worker_failure, run_healthcheck_turn
 from codex_gateway.config import get_settings
 from codex_gateway.main import complete_with_failover, release_request_session
 from codex_gateway.schemas import BackendResult, ResponseRequest
@@ -38,11 +39,57 @@ def test_empty_input_is_rejected() -> None:
 
 
 @pytest.mark.parametrize(("payload", "expected"), [
-    ({"tokenUsage": {"total": {"inputTokens": 12, "outputTokens": 3}}}, (12, 3)),
-    ({"usage": {"input_tokens": 4, "output_tokens": 2}}, (4, 2)),
+    ({"tokenUsage": {"total": {"inputTokens": 12, "outputTokens": 3}}}, (12, 3, 0, 0)),
+    ({"usage": {"input_tokens": 4, "output_tokens": 2}}, (4, 2, 0, 0)),
+    ({"tokenUsage": {"total": {"inputTokens": 100, "outputTokens": 20}, "last": {"inputTokens": 12, "outputTokens": 3, "cachedInputTokens": 5, "cacheWriteInputTokens": 2}}}, (12, 3, 5, 2)),
 ])
-def test_token_usage_variants(payload: dict, expected: tuple[int, int]) -> None:
+def test_token_usage_variants(payload: dict, expected: tuple[int, int, int, int]) -> None:
     assert _token_counts(payload) == expected
+
+
+def test_turn_usage_uses_last_then_cumulative_deltas():
+    usage = TurnUsage()
+    first = {"tokenUsage": {"total": {"inputTokens": 112, "outputTokens": 23, "cachedInputTokens": 55, "cacheWriteInputTokens": 12},
+                            "last": {"inputTokens": 12, "outputTokens": 3, "cachedInputTokens": 5, "cacheWriteInputTokens": 2}}}
+    second = {"tokenUsage": {"total": {"inputTokens": 119, "outputTokens": 27, "cachedInputTokens": 58, "cacheWriteInputTokens": 13},
+                             "last": {"inputTokens": 7, "outputTokens": 4, "cachedInputTokens": 3, "cacheWriteInputTokens": 1}}}
+    assert usage.observe(first) == (12, 3, 5, 2)
+    assert usage.observe(first) == (12, 3, 5, 2)
+    assert usage.observe(second) == (19, 7, 8, 3)
+
+
+@pytest.mark.asyncio
+async def test_resumed_turn_bills_only_its_own_usage():
+    class FakeServer:
+        async def call(self, method, _params):
+            if method == 'account/read':
+                return {'account': {'type': 'chatgpt'}}
+            if method == 'thread/resume':
+                return {'thread': {'id': 'existing-thread'}}
+            if method == 'turn/start':
+                return {'turn': {'id': 'new-turn'}}
+            raise AssertionError(method)
+
+        async def messages(self):
+            yield {'method': 'thread/tokenUsage/updated', 'params': {'turnId': 'older-turn', 'tokenUsage': {'total': {'inputTokens': 1000, 'outputTokens': 100}}}}
+            yield {'method': 'thread/tokenUsage/updated', 'params': {'turnId': 'new-turn', 'tokenUsage': {
+                'total': {'inputTokens': 1200, 'outputTokens': 110, 'cachedInputTokens': 140, 'cacheWriteInputTokens': 20},
+                'last': {'inputTokens': 200, 'outputTokens': 10, 'cachedInputTokens': 140, 'cacheWriteInputTokens': 20}}}}
+            yield {'method': 'turn/completed', 'params': {'turn': {'status': 'completed'}}}
+
+        async def reject_server_request(self, _message):
+            raise AssertionError('Unexpected server request')
+
+    class FakePool:
+        @asynccontextmanager
+        async def lease(self, *_args):
+            yield FakeServer(), 0
+
+    backend = AppServerBackend(get_settings())
+    backend.pool = FakePool()
+    result = await backend.complete(ResponseRequest(model='gpt-6-sol', input='continue', previous_response_id='existing-thread'),
+                                    BackendTarget('key:worker', 'ws://worker', '/workspace/key'))
+    assert (result.input_tokens, result.output_tokens, result.cache_read_tokens, result.cache_write_tokens) == (200, 10, 140, 20)
 
 
 @pytest.mark.parametrize(("message", "kind"), [
@@ -269,3 +316,19 @@ async def test_logout_rpc_serializes_null_params():
     await session.send('account/login/start',{'type':'chatgptDeviceCode'})
     assert sent[0]['params'] is None
     assert sent[1]['params']=={'type':'chatgptDeviceCode'}
+
+@pytest.mark.asyncio
+async def test_cache_affinity_preserves_explicit_routing_and_exclusions():
+    from types import SimpleNamespace
+    workers=[SimpleNamespace(id=uuid4(),enabled=True,status='ready',container_name=f'w{i}',endpoint=f'ws://w{i}',execution_generation=0) for i in range(3)]
+    class Session:
+        async def scalars(self,*args):return SimpleNamespace(all=lambda:list(workers))
+        async def get(self,model,key):return next(w for w in workers if w.id==key)
+    db=Session();principal=ApiPrincipal(uuid4(),'test')
+    first=await main_module.choose_target(principal,db,cache_affinity='shared-prefix')
+    workers.reverse()
+    assert (await main_module.choose_target(principal,db,cache_affinity='shared-prefix')).worker_id==first.worker_id
+    other=next(w for w in workers if w.id!=first.worker_id)
+    assert (await main_module.choose_target(principal,db,SimpleNamespace(worker_id=other.id),cache_affinity='shared-prefix')).worker_id==other.id
+    assert (await main_module.choose_target(ApiPrincipal(principal.key_id,'test',pinned_worker_id=other.id),db,cache_affinity='shared-prefix')).worker_id==other.id
+    assert (await main_module.choose_target(principal,db,exclude_worker_ids={first.worker_id},cache_affinity='shared-prefix')).worker_id!=first.worker_id

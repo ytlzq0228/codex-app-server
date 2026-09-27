@@ -11,7 +11,7 @@ from fastapi import HTTPException
 from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 
-from .client_tools import definitions
+from .client_tools import definitions, ToolProtocolError
 from .config import get_settings
 from .conversations import digest, explicit_identity, durable_write
 from .database import SessionLocal
@@ -82,9 +82,9 @@ def appended_items(request, expected):
     return delta
 
 
-def conflict(message):
+def conflict(message, code="conversation_busy"):
     return HTTPException(409, detail={"error": {"message": message, "type": "invalid_request_error",
-                          "code": "conversation_busy", "param": None}}, headers={"Retry-After": "2"})
+                          "code": code, "param": None}}, headers={"Retry-After": "2"})
 
 
 async def heartbeat(claim):
@@ -103,7 +103,7 @@ async def heartbeat(claim):
         pass
 
 
-async def prepare(request, principal, endpoint, audit, *, pending_thread=None, binding=None):
+async def prepare(request, principal, endpoint, audit, *, pending_thread=None, binding=None, tool_sessions=None):
     """Claim identity and return an optional active binding; public previous wins."""
     if not audit or not principal.key_id or not get_settings().execution_resume_enabled:
         return request, binding
@@ -127,7 +127,7 @@ async def prepare(request, principal, endpoint, audit, *, pending_thread=None, b
             ))
             if pending:
                 if logical and logical != pending.logical_id:
-                    raise conflict("Tool output belongs to a different client conversation")
+                    raise conflict("Tool output belongs to a different client conversation", "tool_conversation_mismatch")
                 logical = pending.logical_id
         if not logical:
             audit["execution_decision"] = {"action": "untracked", "reason": evidence.get("method", "no_identity")}
@@ -138,8 +138,27 @@ async def prepare(request, principal, endpoint, audit, *, pending_thread=None, b
         instant = now()
         if row.lease_token and row.lease_until and row.lease_until > instant:
             raise conflict("Another request is executing in this conversation; retry after it completes")
-        if row.state == "waiting_tool" and row.expires_at and row.expires_at > instant and not pending_thread:
-            raise conflict("This conversation is waiting for a client tool result; return its call_id first")
+        if row.state == "invalid" and tool_sessions and row.thread_id:
+            await tool_sessions.cancel_thread(principal.key_id, row.thread_id)
+        if pending_thread and row.state == "invalid":
+            raise ToolProtocolError("This tool binding was invalidated; start a new user turn with full history", "tool_binding_invalidated")
+        if pending_thread and row.thread_id and row.thread_id != pending_thread:
+            raise conflict("Tool output belongs to a superseded execution", "tool_conversation_mismatch")
+        orphaned = False
+        if row.state == "waiting_tool" and not pending_thread:
+            live = tool_sessions.has_pending(principal.key_id, row.thread_id) if tool_sessions else False
+            if live and row.expires_at and row.expires_at > instant:
+                raise conflict("This conversation is waiting for a client tool result; return its call_id first", "conversation_waiting_tool")
+            # Only a full history followed by a new user turn can rebuild. Never
+            # reinterpret an orphaned tool result as permission to rerun tools.
+            items = history_items(request)
+            full_prefix = (hashes(items) or [])[:len(row.history_hashes or [])]
+            full_history = full_prefix == row.history_hashes if row.history_hashes else bool(items and len(items)>1)
+            if not items or items[-1].get("role") != "user" or not full_history:
+                raise conflict("The pending tool call was lost; send full history with a new user message", "conversation_history_required")
+            if live:
+                await tool_sessions.cancel_thread(principal.key_id, row.thread_id)
+            orphaned = True
         expected = row.history_hashes
         items = history_items(request)
         checkpoint = hashes(items)
@@ -159,23 +178,25 @@ async def prepare(request, principal, endpoint, audit, *, pending_thread=None, b
             # behavior, but never mistake it for the Thread's full history.
             checkpoint = None
         elif row.state != "new":
-            if row.lease_token or row.state != "ready":
-                reason = "previous_execution_incomplete"
-            elif not row.expires_at or row.expires_at <= instant:
-                reason = "expired"
+            if orphaned:
+                reason = "pending_tool_lost"
+            elif row.lease_token or row.state != "ready":
+                reason = row.invalid_reason or "previous_execution_incomplete"
             elif row.config_hash != configuration(request):
                 reason = "configuration_changed"
             else:
                 delta = appended_items(request, expected)
                 active = await db.scalar(select(ResponseBinding).where(
                     ResponseBinding.response_id == row.response_id, ResponseBinding.api_key_id == principal.key_id,
-                    ResponseBinding.status == "active", ResponseBinding.expires_at > instant,
+                    ResponseBinding.status == "active",
                 ))
                 worker = await db.get(Worker, row.worker_id) if row.worker_id else None
                 if delta is None:
                     reason = "history_not_append_only"
                 elif not active:
-                    reason = "binding_released_or_expired"
+                    reason = "binding_invalidated"
+                elif worker and active.worker_generation != worker.execution_generation:
+                    reason = "worker_account_changed"
                 elif not worker or not worker.enabled or worker.status not in {WorkerStatus.ready, WorkerStatus.busy}:
                     reason = "worker_unavailable"
                 elif principal.pinned_worker_id and principal.pinned_worker_id != worker.id:
@@ -203,13 +224,13 @@ async def finish(db, audit, result, target, response_id):
     """Persist checkpoint in the same transaction as usage and response binding."""
     claim = (audit or {}).get("execution")
     if not claim:
-        return
+        return True
     row = await db.scalar(select(ExecutionSession).where(
         ExecutionSession.logical_id == claim["logical_id"],
         ExecutionSession.lease_token == claim["token"],
     ).with_for_update())
     if not row:
-        return  # Stale owner cannot overwrite a newer checkpoint.
+        return False  # Stale owner cannot recreate bindings after invalidation.
     expected = claim["history"]
     if result and expected is not None:
         expected = list(expected)
@@ -223,9 +244,10 @@ async def finish(db, audit, result, target, response_id):
     row.thread_id = result.thread_id if result else None
     row.worker_id = target.worker_id
     row.response_id = response_id
-    row.expires_at = instant + (timedelta(seconds=300) if result and result.tool_calls else
-                               timedelta(hours=get_settings().response_binding_ttl_hours))
+    row.expires_at = instant + timedelta(seconds=300) if result and result.tool_calls else None
+    row.invalid_reason = None if result else "execution_failed"
     row.lease_token = row.lease_until = None
+    return True
 
 
 @durable_write

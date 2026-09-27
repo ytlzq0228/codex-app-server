@@ -66,6 +66,8 @@ class RequestAuditMiddleware:
                     evidence["execution_outcome"] = "unknown"
                     if audit.get("execution_decision"):
                         evidence["execution"] = audit["execution_decision"]
+                    if audit.get("rejection"):
+                        evidence["rejection"] = audit["rejection"]
                     async with SessionLocal() as db:
                         db.add(UsageRecord(request_id=scope.get("state", {}).get("request_id") or "req_"+uuid4().hex,
                                            api_key_id=principal.key_id, owner_username=principal.owner_username,
@@ -74,7 +76,7 @@ class RequestAuditMiddleware:
                                            request_observation=request_observation(audit),
                                            status_code=audit["status"] if audit["complete"] else 499,
                                            duration_ms=int((time.monotonic()-started)*1000),
-                                           error_code="request_rejected" if audit["complete"] else "request_interrupted",
+                                           error_code=(audit.get("rejection") or {}).get("code", "request_rejected") if audit["complete"] else "request_interrupted",
                                            endpoint="responses" if scope["path"].endswith("responses") else "chat.completions"))
                         await db.commit()
             except Exception:

@@ -38,7 +38,15 @@ async def owned_worker(request, db, worker_id, *, lock=True, allow_admin_all=Fal
     return worker
 
 
-def update_account(worker, account):
+async def update_account(worker, account, *, force_invalidate=False):
+    from sqlalchemy.ext.asyncio import async_object_session
+    from .binding_lifecycle import invalidate_bindings
+    before = (worker.auth_mode, worker.account_email)
+    after = (account.get("type"), account.get("email")) if account else (None, None)
+    if force_invalidate or before != after:
+        worker.execution_generation = (worker.execution_generation or 0) + 1
+        if db := async_object_session(worker):
+            await invalidate_bindings(db, worker_id=worker.id, reason="worker_account_changed")
     if account and worker.failure_kind == "logged_out":
         worker.failure_kind = None
     worker.auth_mode = account.get("type") if account else None
@@ -139,7 +147,7 @@ async def contributor_account(request: Request, worker_id: UUID, csrf_token: str
     try:
         async with open_app_server(worker.endpoint, settings.app_server_token.get_secret_value(), 20) as server:
             account = (await server.call("account/read", {"refreshToken": True})).get("account")
-        update_account(worker, account)
+        await update_account(worker, account)
         if not account:
             worker.status = WorkerStatus.error
             worker.failure_kind = "logged_out"
@@ -149,7 +157,7 @@ async def contributor_account(request: Request, worker_id: UUID, csrf_token: str
         worker.status = WorkerStatus.error
         worker.failure_kind = exc.kind if isinstance(exc, WorkerFailure) else classify_worker_failure(str(exc))
         if worker.failure_kind == "logged_out":
-            update_account(worker, None)
+            await update_account(worker, None)
         await reconcile_worker(db, worker)
         await db.commit()
         raise HTTPException(502, "无法读取 Worker 账号，贡献额度已撤销，请探测状态后重试")
@@ -194,7 +202,7 @@ async def refresh_worker_account(worker_id):
         try:
             async with open_app_server(worker.endpoint, settings.app_server_token.get_secret_value(), 20) as server:
                 account = (await server.call("account/read", {"refreshToken": True})).get("account")
-            update_account(worker, account)
+            await update_account(worker, account)
             if not account:
                 worker.status = WorkerStatus.error
                 worker.failure_kind = "logged_out"
@@ -203,7 +211,7 @@ async def refresh_worker_account(worker_id):
             worker.status = WorkerStatus.error
             worker.failure_kind = exc.kind if isinstance(exc, WorkerFailure) else classify_worker_failure(str(exc))
             if worker.failure_kind == "logged_out":
-                update_account(worker, None)
+                await update_account(worker, None)
             worker.retry_after = datetime.now(timezone.utc) + timedelta(seconds=settings.worker_failure_cooldown_seconds)
         await reconcile_worker(db, worker)
         await db.commit()

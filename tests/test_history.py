@@ -136,11 +136,11 @@ def test_active_and_historical_pages_share_logical_id_and_keep_thread_actions():
         s=get_settings()
         assert client.post('/auth/login',data={'username':s.admin_username,'password':s.admin_password.get_secret_value()},follow_redirects=False).status_code==302
         active=client.get('/admin/sessions');assert active.status_code==200,active.text
-        assert conv in active.text and '2 个 Thread · 13 条活动响应绑定' in active.text
+        assert conv in active.text and '1 个逻辑会话 · 2 个 Thread' in active.text
         assert '释放 Thread' in active.text
         focused=client.get('/admin/sessions',params={'conversation':conv,'key_id':key_id,'endpoint':'responses'})
-        assert focused.status_code==200 and '2 个 Thread · 13 条活动响应绑定' in focused.text
-        assert 'class="active-conversation" open' in focused.text
+        assert focused.status_code==200 and '1 个逻辑会话 · 2 个 Thread' in focused.text
+        assert '<details' not in focused.text
         history=client.get('/admin/history',params={'conversation':conv,'key_id':key_id,'endpoint':'responses'})
         assert history.status_code==200,history.text
         assert '共 13 条请求，聚合为 1 个会话' in history.text
@@ -150,5 +150,5 @@ def test_active_and_historical_pages_share_logical_id_and_keep_thread_actions():
         deleted=client.post('/admin/sessions/'+prefix+'-0/delete',data={'csrf_token':token},headers={'X-Requested-With':'XMLHttpRequest'})
         assert deleted.status_code==200,deleted.text
         active=client.get('/admin/sessions')
-        assert '1 个 Thread · 8 条活动响应绑定' in active.text
+        assert '1 个逻辑会话 · 1 个 Thread' in active.text
         assert '共 13 条请求，聚合为 1 个会话' in client.get('/admin/history',params={'conversation':conv,'key_id':key_id}).text

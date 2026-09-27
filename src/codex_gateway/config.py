@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     worker_recovery_interval_seconds: float = 30.0
     worker_failure_cooldown_seconds: int = 300
     worker_limit_cooldown_seconds: int = 1800
-    response_binding_ttl_hours: int = 24
+    response_binding_ttl_hours: int = 24  # Legacy setting; ordinary bindings no longer expire.
     execution_resume_enabled: bool = True
     max_ws_per_key_worker: int = 10
     max_ws_per_worker: int = 40

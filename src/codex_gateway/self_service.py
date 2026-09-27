@@ -321,6 +321,7 @@ async def personal_delete(request: Request, key_id: UUID, csrf_token: str = Form
         raise HTTPException(404, "Key 不存在")
     key.enabled = False
     key.deleted_at = datetime.now(timezone.utc)
-    await db.execute(delete(ResponseBinding).where(ResponseBinding.api_key_id == key_id))
+    from .binding_lifecycle import invalidate_bindings
+    await invalidate_bindings(db, api_key_id=key_id, reason="key_deleted")
     await db.commit()
     return {"message": "Key 已删除，额度已释放，历史请求记录保留"}

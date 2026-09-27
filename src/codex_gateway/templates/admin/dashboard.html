@@ -37,12 +37,12 @@
 
     {% if page == 'sessions' %}
     <section id="sessions" class="panel">
-      <div class="section-head"><div><p class="eyebrow">THREAD BINDINGS</p><h2>Key 活动会话</h2><p class="muted">按 Thread 平铺显示当前 Worker 路由；逻辑会话链接可定位请求历史。这里只显示未过期的活动绑定，释放 Thread 不会删除请求历史。</p></div></div>
+      <div class="section-head"><div><p class="eyebrow">THREAD BINDINGS</p><h2>Key 活动会话</h2><p class="muted">按 Thread 平铺显示当前 Worker 路由；逻辑会话链接可定位请求历史。这里只显示最近 2 小时活跃的会话，较早的绑定仍保留，释放 Thread 不会删除请求历史。</p></div></div>
       {% if request.query_params.get('conversation') or request.query_params.get('key_id') or request.query_params.get('endpoint') %}
       <p class="muted">当前定位：{{ request.query_params.get('conversation', '') }} <a href="/admin/sessions">查看全部活动会话</a></p>
       {% endif %}
       {% include 'shared/active-conversations.html' %}
-      {% if not active_sessions %}<p class="empty">{{ "该会话暂无未过期的活动绑定，请求历史仍保留" if request.query_params.get("conversation") else "当前没有活动会话绑定" }}</p>{% endif %}
+      {% if not active_sessions %}<p class="empty">{{ "该会话最近 2 小时没有活动绑定；较早的绑定与请求历史仍保留" if request.query_params.get("conversation") else "最近 2 小时没有活动会话绑定" }}</p>{% endif %}
     </section>
     {% endif %}
 

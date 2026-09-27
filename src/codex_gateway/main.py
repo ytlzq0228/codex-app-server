@@ -59,7 +59,7 @@ async def lifespan(app: FastAPI):
                     "ALTER TABLE response_bindings ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ",
                     "ALTER TABLE response_bindings ADD COLUMN IF NOT EXISTS status VARCHAR(16)",
                     "ALTER TABLE response_bindings ADD COLUMN IF NOT EXISTS invalid_reason VARCHAR(500)",
-                    "UPDATE response_bindings SET last_used_at = COALESCE(last_used_at, created_at), expires_at = COALESCE(expires_at, created_at + INTERVAL '24 hours'), status = COALESCE(status, 'active')",
+                    "UPDATE response_bindings SET last_used_at = COALESCE(last_used_at, created_at), status = COALESCE(status, 'active')",
                     "CREATE INDEX IF NOT EXISTS ix_response_bindings_last_used_at ON response_bindings (last_used_at)",
                     "CREATE INDEX IF NOT EXISTS ix_response_bindings_expires_at ON response_bindings (expires_at)",
                     "CREATE INDEX IF NOT EXISTS ix_response_bindings_status ON response_bindings (status)",
@@ -126,18 +126,13 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def binding_expiry(now: datetime | None = None) -> datetime:
-    return (now or utcnow()) + timedelta(hours=get_settings().response_binding_ttl_hours)
+def binding_expiry(now: datetime | None = None):
+    # Retained for callers; ordinary execution bindings no longer time out.
+    return None
 
 
 async def expire_response_bindings(session: AsyncSession) -> int:
-    now = utcnow()
-    result = await session.execute(
-        update(ResponseBinding)
-        .where(ResponseBinding.status == "active", ResponseBinding.expires_at <= now)
-        .values(status="expired", invalid_reason="Session TTL expired")
-    )
-    return result.rowcount or 0
+    return 0
 
 
 async def touch_response_thread(session: AsyncSession, binding: ResponseBinding) -> None:
@@ -157,7 +152,7 @@ async def invalidate_response_thread(api_key_id, thread_id: str, reason: str) ->
     async with SessionLocal() as session:
         await session.execute(
             update(ResponseBinding)
-            .where(ResponseBinding.api_key_id == api_key_id, ResponseBinding.thread_id == thread_id)
+            .where(ResponseBinding.api_key_id == api_key_id, ResponseBinding.thread_id == thread_id, ResponseBinding.status == "active")
             .values(status="broken", invalid_reason=reason[:500])
         )
         await session.commit()
@@ -176,8 +171,7 @@ async def quarantine_worker(worker_id, reason: str, kind: str = "connection") ->
         worker.quarantined_at = utcnow()
         worker.retry_after = utcnow() + timedelta(seconds=cooldown)
         if kind == "logged_out":
-            worker.auth_mode = None
-            worker.plan_type = None
+            await update_account(worker, None)
         await reconcile_worker(session, worker)
         await session.commit()
 
@@ -188,7 +182,7 @@ async def recover_worker(worker: Worker) -> bool:
         async with open_app_server(worker.endpoint, settings.app_server_token.get_secret_value(), min(settings.app_server_timeout_seconds, 20)) as server:
             response = await server.call("account/read", {"refreshToken": True})
             account = response.get("account") or {}
-            update_account(worker, account)
+            await update_account(worker, account)
             if not account:
                 worker.failure_kind = "logged_out"
                 worker.failure_reason = "Codex worker is not logged in"
@@ -198,7 +192,7 @@ async def recover_worker(worker: Worker) -> bool:
         worker.status = WorkerStatus.ready
         worker.auth_mode = account.get("type")
         worker.plan_type = account.get("planType")
-        update_account(worker, account)
+        await update_account(worker, account)
         worker.last_seen_at = utcnow()
         worker.recovered_at = utcnow()
         worker.failure_kind = None
@@ -210,7 +204,7 @@ async def recover_worker(worker: Worker) -> bool:
         kind = exc.kind if isinstance(exc, WorkerFailure) else classify_worker_failure(str(exc))
         worker.failure_kind = kind
         if kind == "logged_out":
-            update_account(worker, None)
+            await update_account(worker, None)
         worker.failure_reason = str(exc)[:500]
         cooldown = settings.worker_limit_cooldown_seconds if kind == "limit" else settings.worker_failure_cooldown_seconds
         worker.retry_after = utcnow() + timedelta(seconds=cooldown)
@@ -256,6 +250,8 @@ async def request_limits_and_headers(request: Request, call_next):
 
 
 def openai_error(status_code: int, message: str, code: str, error_type: str = "invalid_request_error", param: str | None = None) -> JSONResponse:
+    if audit := current_audit.get():
+        audit["rejection"] = {"code": code, "message": message[:1000], "param": param}
     return JSONResponse(status_code=status_code, content={"error": {"message": message, "type": error_type, "code": code, "param": param}})
 
 
@@ -306,7 +302,7 @@ async def backend_error_handler(_: Request, exc: Exception) -> JSONResponse:
 
 @app.exception_handler(ToolProtocolError)
 async def tool_protocol_error_handler(_: Request, exc: ToolProtocolError):
-    return openai_error(400, str(exc), "invalid_client_tool", param="tools")
+    return openai_error(409 if exc.code == "conversation_waiting_tool" else 400, str(exc), exc.code, param="tools")
 
 
 def get_backend(request: Request) -> CompletionBackend:
@@ -391,12 +387,45 @@ async def choose_target(
                 response = await client.put(f"{settings.manager_url}/workers/{worker.container_name}/workspaces/{key_slug}", headers={"Authorization": f"Bearer {settings.manager_token.get_secret_value()}"})
             if response.status_code >= 400:
                 raise RuntimeError(f"Worker manager returned HTTP {response.status_code}")
-            return BackendTarget(connection_key=f"{key_slug}:{worker.id}", endpoint=worker.endpoint, workspace=f"{settings.workspace_worker_root}/{key_slug}", worker_id=worker.id)
+            return BackendTarget(connection_key=f"{key_slug}:{worker.id}", endpoint=worker.endpoint, workspace=f"{settings.workspace_worker_root}/{key_slug}", worker_id=worker.id, worker_generation=worker.execution_generation)
         except Exception as exc:
             await quarantine_worker(worker.id, f"Workspace preparation failed: {exc}", "connection")
             if binding or principal.pinned_worker_id:
                 break
     raise worker_unavailable(bound=binding is not None)
+
+
+async def validate_pending_worker(backend, target, session):
+    if not target or not target.worker_id:
+        return
+    worker = await session.get(Worker, target.worker_id)
+    if not worker or worker.endpoint == "removed://worker" or (target.worker_generation is not None and worker.execution_generation != target.worker_generation):
+        sessions = getattr(backend, "tool_sessions", None)
+        if sessions:
+            for run in list(sessions.runs):
+                if run.target == target:
+                    await sessions.cancel_thread(target.connection_key.split(":", 1)[0], run.thread_id)
+        raise ToolProtocolError("Worker account changed or Worker was removed; start a new user turn with full history", "tool_worker_invalidated")
+
+
+def reset_auto_resume(body, reason):
+    if not body._execution_auto_resume:
+        return
+    body.previous_response_id = None
+    body._execution_input_text = None
+    body._execution_input_items = None
+    if audit := current_audit.get():
+        audit.setdefault("execution_decision", {}).update(action="new_thread", reason=reason)
+
+
+async def choose_execution_target(principal, session, binding, body):
+    try:
+        return await choose_target(principal, session, binding)
+    except HTTPException:
+        if not body._execution_auto_resume or principal.pinned_worker_id:
+            raise
+        reset_auto_resume(body, "bound_worker_unavailable")
+        return await choose_target(principal, session)
 
 
 async def retry_target(principal: ApiPrincipal, failed: BackendTarget) -> BackendTarget:
@@ -416,20 +445,21 @@ async def complete_with_failover(body: ResponseRequest, backend: CompletionBacke
         return await backend.complete(body, target), target
     except WorkerFailure as exc:
         if exc.kind == "request":
-            raise HTTPException(400, detail={"error": {"message": worker_failure_message(exc), "type": "invalid_request_error", "code": "invalid_client_tool" if isinstance(exc.__cause__, ToolProtocolError) else "invalid_request", "param": "tools" if isinstance(exc.__cause__, ToolProtocolError) else "model"}}) from exc
+            raise HTTPException(400, detail={"error": {"message": worker_failure_message(exc), "type": "invalid_request_error", "code": exc.__cause__.code if isinstance(exc.__cause__, ToolProtocolError) else "invalid_request", "param": "tools" if isinstance(exc.__cause__, ToolProtocolError) else "model"}}) from exc
         if exc.kind == "session":
             raise HTTPException(404, detail={"error": {"message": "The previous response session is no longer available", "type": "invalid_request_error", "code": "previous_response_not_found", "param": "previous_response_id"}}) from exc
         if exc.kind == "capacity":
             raise HTTPException(503, detail={"error": {"message": "Timed out waiting for an available Codex worker connection", "type": "server_error", "code": "worker_capacity_exceeded", "param": None}}, headers={"Retry-After": "5"}) from exc
-        if target.worker_id:
+        if target.worker_id and exc.kind != "account_changed":
             await quarantine_worker(target.worker_id, str(exc), exc.kind)
         if not (allow_retry and exc.safe_to_retry):
             raise
+        reset_auto_resume(body, "worker_pre_turn_failure")
         replacement = await retry_target(principal, target)
         try:
             return await backend.complete(body, replacement), replacement
         except WorkerFailure as retry_exc:
-            if retry_exc.kind not in {"request", "session", "capacity"} and replacement.worker_id:
+            if retry_exc.kind not in {"request", "session", "capacity", "account_changed"} and replacement.worker_id:
                 await quarantine_worker(replacement.worker_id, str(retry_exc), retry_exc.kind)
             raise
 
@@ -475,14 +505,23 @@ async def save_usage(
             record.conversation_evidence["auto_resume"] = audit["execution_decision"]["action"] == "resume"
         if audit and audit.get("execution"):
             record.logical_conversation_id = audit["execution"]["logical_id"]
+        if audit and audit.get("rejection"):
+            record.conversation_evidence["rejection"] = audit["rejection"]
+            record.error_code = audit["rejection"].get("code", record.error_code)
         if result and result.tool_calls:
             record.conversation_evidence["execution_outcome"] = "waiting_client_tool"
             record.conversation_evidence["client_tool_call_ids"] = [c["call_id"] for c in result.tool_calls]
+        # Lock before inserting FK references, avoiding concurrent lock upgrades.
+        worker = await session.scalar(select(Worker).where(Worker.id == target.worker_id).with_for_update()) if target.worker_id else None
         session.add(record)
-        if (persist_binding or (audit and audit.get("execution"))) and result and principal.key_id and result.thread_id and target.worker_id:
+        generation_ok = worker is None or target.worker_generation is None or worker.execution_generation == target.worker_generation
+        checkpoint_ok = await finish_execution(session, audit, result if status_code == 200 and generation_ok else None, target, response_id)
+        retired = await session.scalar(select(ResponseBinding.response_id).where(
+            ResponseBinding.api_key_id == principal.key_id, ResponseBinding.thread_id == result.thread_id,
+            ResponseBinding.status != "active").limit(1)) if result and principal.key_id else None
+        if (persist_binding or (audit and audit.get("execution"))) and result and principal.key_id and result.thread_id and target.worker_id and generation_ok and checkpoint_ok and not retired:
             now = utcnow()
-            session.add(ResponseBinding(response_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, thread_id=result.thread_id, last_used_at=now, expires_at=binding_expiry(now), status="active"))
-        await finish_execution(session, audit, result if status_code == 200 else None, target, response_id)
+            session.add(ResponseBinding(response_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, thread_id=result.thread_id, last_used_at=now, expires_at=None, status="active", worker_generation=worker.execution_generation))
         await session.commit()
         if audit is not None:
             audit["saved"] = True
@@ -519,12 +558,13 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
                         yield sse({"type": "response.output_text.delta", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "delta": event.delta}); sequence += 1
                 break
             except WorkerFailure as exc:
-                if exc.kind not in {"request", "session", "capacity"} and target.worker_id:
+                if exc.kind not in {"request", "session", "capacity", "account_changed"} and target.worker_id:
                     await quarantine_worker(target.worker_id, str(exc), exc.kind)
                 # Retry once only when Codex confirms the turn could not have begun and
                 # no model content has reached the client.
                 if retried or chunks or not allow_retry or not exc.safe_to_retry:
                     raise
+                reset_auto_resume(body if isinstance(body, ResponseRequest) else request, "worker_pre_turn_failure")
                 target = await retry_target(principal, target)
                 retried = True
     except Exception as exc:
@@ -537,9 +577,10 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
                 if previous:
                     await invalidate_response_thread(previous.api_key_id, previous.thread_id, str(exc))
         error = {
-            "code": "invalid_client_tool" if tool_failure else "previous_response_not_found" if session_failure else "worker_capacity_exceeded" if capacity_failure else "backend_error",
+            "code": exc.__cause__.code if tool_failure else "previous_response_not_found" if session_failure else "worker_capacity_exceeded" if capacity_failure else "backend_error",
             "message": str(exc) if tool_failure else "The previous response session is no longer available" if session_failure else "Timed out waiting for an available Codex worker connection" if capacity_failure else "The Codex backend could not complete the request",
         }
+        if audit := current_audit.get(): audit["rejection"] = error
         await save_usage(response_id, principal, target, body.model, 400 if tool_failure else 404 if session_failure else 503 if capacity_failure else 502, started, error_code=error["code"], previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))
         yield sse({"type": "error", "sequence_number": sequence, **error, "param": None}); sequence += 1
         failed = {**created, "status": "failed", "error": error}
@@ -604,17 +645,19 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
                         yield chat_sse(chunk({"content": event.delta}))
                 break
             except WorkerFailure as exc:
-                if exc.kind not in {"request", "capacity"} and target.worker_id:
+                if exc.kind not in {"request", "session", "capacity", "account_changed"} and target.worker_id:
                     await quarantine_worker(target.worker_id, str(exc), exc.kind)
                 if retried or content_emitted or not allow_retry or not exc.safe_to_retry:
                     raise
+                reset_auto_resume(body if isinstance(body, ResponseRequest) else request, "worker_pre_turn_failure")
                 target = await retry_target(principal, target)
                 retried = True
     except Exception as exc:
         tool_failure = isinstance(exc, WorkerFailure) and isinstance(exc.__cause__, ToolProtocolError)
         capacity_failure = isinstance(exc, WorkerFailure) and exc.kind == "capacity"
-        error_code = "invalid_client_tool" if tool_failure else "worker_capacity_exceeded" if capacity_failure else "backend_error"
+        error_code = exc.__cause__.code if tool_failure else "worker_capacity_exceeded" if capacity_failure else "backend_error"
         error_message = str(exc) if tool_failure else "Timed out waiting for an available Codex worker connection" if capacity_failure else "The Codex backend could not complete the request"
+        if audit := current_audit.get(): audit["rejection"] = {"code": error_code, "message": error_message}
         await save_usage(completion_id, principal, target, body.model, 400 if tool_failure else 503 if capacity_failure else 502, started, error_code=error_code, request_params=body.model_dump(mode="json"))
         yield chat_sse({"error": {"message": error_message, "type": "invalid_request_error" if tool_failure else "server_error", "code": error_code}})
         yield chat_sse("[DONE]")
@@ -689,10 +732,11 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
     request = body.to_response_request()
     await validate_grammars(request)
     pending_target = backend.continuation_target(request, principal.key_id) if hasattr(backend, "continuation_target") else None
+    await validate_pending_worker(backend, pending_target, session)
     pending_thread = backend.continuation_thread(request, principal.key_id) if pending_target and hasattr(backend, "continuation_thread") else None
-    request, execution_binding = await prepare_execution(request, principal, "chat.completions", current_audit.get(), pending_thread=pending_thread)
-    target = pending_target or await choose_target(principal, session, execution_binding)
-    allow_retry = not pending_target and execution_binding is None and principal.pinned_worker_id is None
+    request, execution_binding = await prepare_execution(request, principal, "chat.completions", current_audit.get(), pending_thread=pending_thread, tool_sessions=getattr(backend,"tool_sessions",None))
+    target = pending_target or await choose_execution_target(principal, session, execution_binding, request)
+    allow_retry = not pending_target and (execution_binding is None or request._execution_auto_resume) and principal.pinned_worker_id is None
     await release_request_session(session)
     if body.stream:
         return StreamingResponse(chat_completion_stream(body, request, backend, principal, target, allow_retry), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -701,6 +745,7 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
     try:
         result, target = await complete_with_failover(request, backend, principal, target, allow_retry=allow_retry)
     except HTTPException as exc:
+        if audit := current_audit.get(): audit["rejection"] = exc.detail.get("error", {}) if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
         await save_usage(completion_id, principal, target, body.model, exc.status_code, started, error_code="invalid_request", request_params=body.model_dump(mode="json"))
         raise
     except Exception:
@@ -726,27 +771,26 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
         binding = await session.scalar(select(ResponseBinding).where(ResponseBinding.response_id == public_previous_id, ResponseBinding.api_key_id == principal.key_id))
         if not binding:
             return openai_error(404, "previous_response_id was not found", "previous_response_not_found")
-        if binding.status != "active" or binding.expires_at <= utcnow():
-            if binding.status == "active":
-                binding.status = "expired"
-                binding.invalid_reason = "Session TTL expired"
-                await session.commit()
-            return openai_error(404, "previous_response_id has expired or is no longer available", "previous_response_not_found", param="previous_response_id")
+        worker = await session.get(Worker, binding.worker_id)
+        if binding.status != "active" or not worker or binding.worker_generation != worker.execution_generation:
+            return openai_error(404, "previous_response_id is no longer available", "previous_response_not_found", param="previous_response_id")
         await touch_response_thread(session, binding)
         body = body.model_copy(update={"previous_response_id": binding.thread_id})
     pending_target = backend.continuation_target(body, principal.key_id) if hasattr(backend, "continuation_target") else None
     if pending_target and binding and pending_target.worker_id != binding.worker_id:
         return openai_error(400, "Tool output and previous_response_id refer to different Workers", "invalid_client_tool")
+    await validate_pending_worker(backend, pending_target, session)
     pending_thread = backend.continuation_thread(body, principal.key_id) if pending_target and hasattr(backend, "continuation_thread") else None
-    body, binding = await prepare_execution(body, principal, "responses", current_audit.get(), pending_thread=pending_thread, binding=binding)
-    target = pending_target or await choose_target(principal, session, binding)
+    body, binding = await prepare_execution(body, principal, "responses", current_audit.get(), pending_thread=pending_thread, binding=binding, tool_sessions=getattr(backend,"tool_sessions",None))
+    target = pending_target or await choose_execution_target(principal, session, binding, body)
     await release_request_session(session)
     if body.stream:
-        return StreamingResponse(response_stream(body, backend, principal, target, public_previous_id, not pending_target and binding is None and principal.pinned_worker_id is None), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        return StreamingResponse(response_stream(body, backend, principal, target, public_previous_id, not pending_target and (binding is None or body._execution_auto_resume) and principal.pinned_worker_id is None), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
     started = time.monotonic()
     try:
-        result, target = await complete_with_failover(body, backend, principal, target, allow_retry=not pending_target and binding is None and principal.pinned_worker_id is None)
+        result, target = await complete_with_failover(body, backend, principal, target, allow_retry=not pending_target and (binding is None or body._execution_auto_resume) and principal.pinned_worker_id is None)
     except HTTPException as exc:
+        if audit := current_audit.get(): audit["rejection"] = exc.detail.get("error", {}) if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
         response_id = f"resp_{uuid4().hex}"
         if binding and exc.status_code == 404:
             await invalidate_response_thread(binding.api_key_id, binding.thread_id, "Codex thread could not be resumed")

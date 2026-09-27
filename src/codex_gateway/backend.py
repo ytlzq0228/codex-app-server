@@ -22,6 +22,7 @@ class BackendTarget:
     endpoint: str
     workspace: str
     worker_id: UUID | None = None
+    worker_generation: int | None = None
 
 
 class WorkerFailure(RuntimeError):
@@ -182,6 +183,9 @@ class AppServerBackend:
                 audit = current_audit.get()
                 if audit is not None:
                     audit["execution_decision"].update(action="new_thread", reason="thread_resume_unavailable")
+                if target_key := (audit or {}).get("principal"):
+                    from .main import invalidate_response_thread
+                    await invalidate_response_thread(target_key.key_id, request.previous_response_id, "thread_resume_unavailable")
                 request._execution_input_text = None
                 request._execution_input_items = None
                 request.previous_response_id = None
@@ -197,14 +201,24 @@ class AppServerBackend:
         return run.thread_id if run else None
 
     async def _turn(self, request, target):
-        if definitions(request) or tool_outputs(request):
-            async for event in self.tool_sessions.stream(request, target):
-                yield event
-        else:
-            async for event in self._turn_events(request, target):
-                yield event
+        try:
+            if definitions(request) or tool_outputs(request):
+                async for event in self.tool_sessions.stream(request, target):
+                    yield event
+            else:
+                async for event in self._turn_events(request, target):
+                    yield event
+        except ToolProtocolError as exc:
+            raise WorkerFailure(str(exc), kind="request", safe_to_retry=False) from exc
 
     async def _turn_events(self, request: ResponseRequest, target: BackendTarget, tool_run=None) -> AsyncIterator[BackendStreamEvent]:
+        if target.worker_id and target.worker_generation is not None:
+            from .database import SessionLocal
+            from .models import Worker
+            async with SessionLocal() as db:
+                worker = await db.get(Worker, target.worker_id)
+                if not worker or worker.execution_generation != target.worker_generation or worker.endpoint == "removed://worker":
+                    raise WorkerFailure("Worker identity changed before execution", kind="account_changed", safe_to_retry=True)
         worker_key = str(target.worker_id or target.endpoint)
         slot_id: int | None = None
         async with self._thread_guard(request.previous_response_id):

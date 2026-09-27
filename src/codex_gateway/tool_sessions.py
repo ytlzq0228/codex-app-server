@@ -4,6 +4,8 @@ A suspended tool call owns its WS lease. Only the same API Key may return its
 result. A restart or expiry fails explicitly instead of rerunning the tool.
 """
 import asyncio
+import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from .client_tools import ToolProtocolError, tool_outputs, definitions
 
@@ -28,18 +30,40 @@ class ToolSessions:
         self.limit=limit
         self.pending={}
         self.runs=set()
+        self.retired=OrderedDict()
+
+    def retire(self, key, code):
+        self.retired[key]=(time.monotonic(),code)
+        self.retired.move_to_end(key)
+        while len(self.retired)>2048:
+            self.retired.popitem(last=False)
+
+    def has_pending(self, key, thread_id):
+        return any(r.thread_id==thread_id and r.target.connection_key.split(':',1)[0]==str(key)
+                   and not r.task.done() for r in self.runs)
+
+    async def cancel_thread(self, key, thread_id):
+        tasks=[r.task for r in self.runs if r.thread_id==thread_id and r.target.connection_key.split(':',1)[0]==str(key)]
+        for task in tasks:task.cancel()
+        await asyncio.gather(*tasks,return_exceptions=True)
 
     def find(self, request, key):
         outputs=tool_outputs(request)
         if not outputs:
             if request.previous_response_id and any(r.thread_id == request.previous_response_id and r.target.connection_key.split(':',1)[0] == str(key or 'development') for r in self.runs):
-                raise ToolProtocolError('This Thread is waiting for a client tool output; return its call_id first')
+                raise ToolProtocolError('This Thread is waiting for a client tool output; return its call_id first', 'conversation_waiting_tool')
             return None
         if len(outputs)!=1:
             raise ToolProtocolError('Return exactly one pending client tool output at a time')
         run=self.pending.get((str(key or 'development'),outputs[0][0]))
-        if run is None or run.claimed or run.task.done():
-            raise ToolProtocolError('Client tool call is unknown, expired, already consumed, or belongs to another API Key')
+        if run is not None and run.claimed:
+            raise ToolProtocolError('This client tool result has already been submitted', 'client_tool_result_duplicate')
+        if run is None or run.task.done() or run.reply is None or run.reply.done():
+            retired=self.retired.get((str(key or 'development'),outputs[0][0]))
+            code=retired[1] if retired and time.monotonic()-retired[0]<3600 else 'client_tool_call_unavailable'
+            message=('This client tool result has already been submitted' if code=='client_tool_result_duplicate'
+                     else 'Client tool call is no longer available in this gateway; start a new user turn with full history')
+            raise ToolProtocolError(message, code)
         if request.model!=run.request.model:
             raise ToolProtocolError('Cannot change model while returning a pending tool output')
         if request.previous_response_id and request.previous_response_id != run.thread_id:
@@ -58,6 +82,8 @@ class ToolSessions:
                 run.thread_id = event.thread_id or run.thread_id
                 await run.queue.put(event)
         except asyncio.CancelledError:
+            if not run.queue.full():
+                run.queue.put_nowait(ToolProtocolError('The pending execution was cancelled or invalidated', 'client_tool_call_unavailable'))
             raise
         except Exception as exc:
             await run.queue.put(exc)
@@ -87,6 +113,7 @@ class ToolSessions:
         run=self.find(request,key)
         if run:
             run.claimed=True
+            self.retire((key,run.call_id), 'client_tool_result_duplicate')
             output=tool_outputs(request)[0][1]
             run.reply.set_result(output)
         else:

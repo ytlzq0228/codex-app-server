@@ -10,7 +10,9 @@ FORBIDDEN = {'config', 'cwd', 'environments', 'permissions', 'sandbox', 'sandbox
 
 
 class ToolProtocolError(ValueError):
-    pass
+    def __init__(self, message, code="invalid_client_tool"):
+        super().__init__(message)
+        self.code = code
 
 
 def definitions(request):

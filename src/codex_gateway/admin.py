@@ -143,10 +143,15 @@ async def render_admin_page(request: Request, page: str, history_page: int, admi
         .join(ApiKey, ResponseBinding.api_key_id == ApiKey.id)
         .join(Worker, ResponseBinding.worker_id == Worker.id)
         .outerjoin(UsageRecord, (UsageRecord.request_id == ResponseBinding.response_id) & (UsageRecord.api_key_id == ResponseBinding.api_key_id))
-        .where(ApiKey.deleted_at.is_(None), ResponseBinding.status == "active", ResponseBinding.expires_at > datetime.now(timezone.utc))
+        .where(ApiKey.deleted_at.is_(None), ResponseBinding.status == "active", Worker.endpoint != "removed://worker", ResponseBinding.worker_generation == Worker.execution_generation)
         .order_by(ResponseBinding.last_used_at.desc(), ResponseBinding.response_id.desc())
     )).all()
     active_sessions, sessions_by_key = active_conversation_groups(binding_rows)
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+    active_sessions = [group for group in active_sessions if group["latest_at"] >= cutoff]
+    sessions_by_key = {}
+    for group in active_sessions:
+        sessions_by_key.setdefault(group["key"].id, []).append(group)
     if page == "sessions" and (conversation or key_id or endpoint):
         active_sessions = [group for group in active_sessions
             if (not conversation or group["conversation_id"] == conversation)
@@ -284,7 +289,8 @@ async def delete_key(request: Request, key_id: UUID, csrf_token: str = Form(...)
         raise HTTPException(404, "API key not found")
     record.enabled = False
     record.deleted_at = datetime.now(timezone.utc)
-    await session.execute(delete(ResponseBinding).where(ResponseBinding.api_key_id == key_id))
+    from .binding_lifecycle import invalidate_bindings
+    await invalidate_bindings(session, api_key_id=key_id, reason="key_deleted")
     await session.commit()
     return result("Key 已删除", f"{record.name} 已失效，活动会话已释放；请求历史仍保留。")
 
@@ -295,9 +301,10 @@ async def clear_key_sessions(request: Request, key_id: UUID, csrf_token: str = F
     record = await session.get(ApiKey, key_id)
     if not record or record.deleted_at:
         raise HTTPException(404, "API key not found")
-    deleted = await session.execute(delete(ResponseBinding).where(ResponseBinding.api_key_id == key_id))
+    from .binding_lifecycle import invalidate_bindings
+    deleted = await invalidate_bindings(session, api_key_id=key_id, reason="administrator_released")
     await session.commit()
-    return result("活动会话已清空", f"{record.name} 的 {deleted.rowcount or 0} 条响应绑定已释放。")
+    return result("活动会话已清空", f"{record.name} 的 {deleted} 条响应绑定已释放。")
 
 
 @router.post("/sessions/{response_id}/delete")
@@ -306,9 +313,10 @@ async def delete_active_session(request: Request, response_id: str, csrf_token: 
     binding = await session.get(ResponseBinding, response_id)
     if not binding:
         raise HTTPException(404, "Active session not found")
-    deleted = await session.execute(delete(ResponseBinding).where(ResponseBinding.api_key_id == binding.api_key_id, ResponseBinding.thread_id == binding.thread_id))
+    from .binding_lifecycle import invalidate_bindings
+    deleted = await invalidate_bindings(session, api_key_id=binding.api_key_id, thread_id=binding.thread_id, reason="administrator_released")
     await session.commit()
-    return result("Thread 绑定已释放", f"该 Thread 的 {deleted.rowcount or 0} 条响应绑定已释放。")
+    return result("Thread 绑定已释放", f"该 Thread 的 {deleted} 条响应绑定已释放。")
 
 
 async def default_worker(session: AsyncSession, settings: Settings) -> Worker:
@@ -377,6 +385,9 @@ async def delete_worker(request: Request, worker_id: UUID, csrf_token: str = For
             manager_message = "Worker manager could not remove the container"
         raise HTTPException(502, manager_message)
     container_was_missing = response.status_code == 404
+    from .binding_lifecycle import invalidate_bindings
+    worker.execution_generation = (worker.execution_generation or 0) + 1
+    await invalidate_bindings(session, worker_id=worker.id, reason="worker_deleted")
     worker.enabled = False
     worker.status = WorkerStatus.offline
     worker.endpoint = "removed://worker"
@@ -398,13 +409,13 @@ async def probe_worker_record(worker: Worker, session: AsyncSession, settings: S
             account = response.get("account") or {}
             if not account:
                 raise WorkerFailure("Codex worker is not logged in", kind="logged_out", safe_to_retry=True)
-            update_account(worker, account)
+            await update_account(worker, account)
             await run_healthcheck_turn(app_server, settings.upstream_model)
         was_error = worker.status == WorkerStatus.error
         worker.status = WorkerStatus.ready
         worker.auth_mode = account.get("type")
         worker.plan_type = account.get("planType")
-        update_account(worker, account)
+        await update_account(worker, account)
         worker.last_seen_at = datetime.now(timezone.utc)
         worker.recovered_at = datetime.now(timezone.utc) if was_error else worker.recovered_at
         worker.failure_kind = None
@@ -419,7 +430,7 @@ async def probe_worker_record(worker: Worker, session: AsyncSession, settings: S
         message = f"Worker 探测失败：{exc}"
         kind = exc.kind if isinstance(exc, WorkerFailure) else classify_worker_failure(str(exc))
         if kind == "logged_out":
-            update_account(worker, None)
+            await update_account(worker, None)
         worker.failure_kind = kind
         worker.failure_reason = str(exc)[:500]
         worker.quarantined_at = datetime.now(timezone.utc)
@@ -471,7 +482,7 @@ async def relogin_worker_record(worker, session, settings, *, force, poll_url):
     async def record_logout():
         nonlocal logged_out
         from .contributions import update_account
-        update_account(worker, None)
+        await update_account(worker, None, force_invalidate=True)
         worker.status = WorkerStatus.offline
         worker.failure_kind = "logged_out"
         await reconcile_worker(session, worker)

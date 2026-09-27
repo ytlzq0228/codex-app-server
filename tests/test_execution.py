@@ -94,7 +94,7 @@ def test_persistent_lease_checkpoint_and_isolation():
 
 @pytest.mark.parametrize('change,reason',[
     ('edit','history_not_append_only'),('tools','configuration_changed'),
-    ('expired','expired'),('released','binding_released_or_expired'),('worker','worker_unavailable'),
+    ('released','binding_invalidated'),('worker','worker_unavailable'),
 ])
 def test_safe_rollovers(change,reason):
     async def run():

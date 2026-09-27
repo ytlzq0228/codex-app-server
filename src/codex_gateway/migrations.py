@@ -5,6 +5,16 @@ from .security import hash_password
 
 
 async def upgrade(connection):
+    for statement in (
+        "ALTER TABLE workers ADD COLUMN IF NOT EXISTS execution_generation INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE response_bindings ADD COLUMN IF NOT EXISTS worker_generation INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE response_bindings ALTER COLUMN expires_at DROP NOT NULL",
+        "ALTER TABLE execution_sessions ADD COLUMN IF NOT EXISTS invalid_reason VARCHAR(80)",
+        "UPDATE response_bindings SET status='active', invalid_reason=NULL WHERE status='expired' AND invalid_reason='Session TTL expired'",
+        "UPDATE response_bindings SET expires_at=NULL WHERE expires_at IS NOT NULL",
+        "UPDATE execution_sessions SET expires_at=NULL WHERE state='ready' AND expires_at IS NOT NULL",
+    ):
+        await connection.execute(text(statement))
     # Only the first quota upgrade grants legacy enabled keys a base allowance.
     has_quota = await connection.scalar(text("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='users' AND column_name='quota_granted' AND table_schema=current_schema())"))
     await connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS quota_granted INTEGER NOT NULL DEFAULT 0"))

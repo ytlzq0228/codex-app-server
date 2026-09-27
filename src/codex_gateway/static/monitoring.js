@@ -49,9 +49,12 @@
     const usageSeries=[['risk','综合风险'],['five_hour','5 小时窗口'],['week','周窗口']].map(([key,label],i)=>({key,label,color:['#e35b5b','#168aad','#8462cf'][i],value:d=>d.windows[key].used}));
     const current=data.current_usage; $('monitor-usage').replaceChildren();
     if(current){
-      usageSeries.forEach(s=>{const w=current.data.windows[s.key], article=el('article');article.append(el('span',s.label),el('strong',w.used==null?'暂无数据':`${w.used.toFixed(1)}%`),el('small',`有效覆盖 ${w.covered} / ${current.data.eligible} 个 Worker · 权重覆盖 ${current.data.total_weight?(w.covered_weight/current.data.total_weight*100).toFixed(1):'0'}%`));$('monitor-usage').append(article);});
+      usageSeries.forEach(s=>{const w=current.data.windows[s.key], article=el('article');const bar=el('div',null,'monitor-progress');
+        bar.setAttribute('role','progressbar');bar.setAttribute('aria-label',s.label);bar.setAttribute('aria-valuemin','0');bar.setAttribute('aria-valuemax','100');
+        if(w.used!=null){bar.setAttribute('aria-valuenow',String(w.used));const fill=el('div',null,'monitor-progress-fill');fill.style.width=`${Math.max(0,Math.min(100,w.used))}%`;fill.style.background=s.color;bar.append(fill);}else{bar.classList.add('monitor-progress-unknown');bar.setAttribute('aria-valuetext','暂无数据');}
+        article.append(el('span',s.label),el('strong',w.used==null?'暂无数据':`${w.used.toFixed(1)}%`),bar,el('small',`有效覆盖 ${w.covered} / ${current.data.eligible} 个 Worker · 权重覆盖 ${current.data.total_weight?(w.covered_weight/current.data.total_weight*100).toFixed(1):'0'}%`));$('monitor-usage').append(article);});
       const stale=Date.now()-new Date(current.observed_at).getTime()>2*3600000;
-      $('monitor-usage').append(el('small',`${stale?'数据已过期 · ':''}采样：${stamp(current.observed_at)} · 未知套餐 ${current.data.unknown_plans} 个 Worker`));
+      $('monitor-usage').append(el('small',`${current.data.version < 2?'旧口径采样（缺失窗口未计入），下一小时更新 · ':''}${stale?'数据已过期 · ':''}采样：${stamp(current.observed_at)} · 未知套餐 ${current.data.unknown_plans} 个 Worker`));
     } else $('monitor-usage').append(el('p','等待首次小时采样'));
     chart($('monitor-usage-chart'),data.history.subscription_usage,usageSeries,3600000,true,days);
     chart($('monitor-state-chart'),data.history.worker_states,series,600000,false,days);

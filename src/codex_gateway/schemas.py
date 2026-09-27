@@ -1,6 +1,6 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 
 class OpenAIRequestModel(BaseModel):
@@ -26,6 +26,9 @@ class ResponseStreamOptions(OpenAIRequestModel):
 
 
 class ResponseRequest(OpenAIRequestModel):
+    # Server-only: never populated from client JSON or persisted as request input.
+    _execution_input_text: str | None = PrivateAttr(default=None)
+    _execution_auto_resume: bool = PrivateAttr(default=False)
     model: str
     input: str | dict[str, Any] | list[Any]
     instructions: str | None = None
@@ -156,6 +159,8 @@ class ResponseRequest(OpenAIRequestModel):
         return None
 
     def input_text(self) -> str:
+        if self._execution_input_text is not None:
+            return self._execution_input_text
         items = self.input if isinstance(self.input, list) else [self.input]
         messages = [self._item_text(item) for item in items]
         if self.instructions:

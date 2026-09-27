@@ -1,6 +1,6 @@
 """Bounded transport metadata for studying client conversation identifiers.
 
-These observations are never used for routing or thread selection.
+Explicit client identity is also used by the guarded execution continuation.
 """
 from datetime import datetime, timezone
 import json

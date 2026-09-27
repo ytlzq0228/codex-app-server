@@ -54,6 +54,8 @@ class RequestAuditMiddleware:
             await self.app(scope, observed_receive, observed_send)
         finally:
             try:
+                from .execution import cleanup
+                await cleanup(audit)
                 if audit.get("persisted_request_id"):
                     await save_delivery(audit)
                 principal = audit["principal"]
@@ -62,6 +64,8 @@ class RequestAuditMiddleware:
                     endpoint = "responses" if scope["path"].endswith("responses") else "chat.completions"
                     logical, evidence = explicit_identity(params, request_observation(audit), principal.key_id, endpoint, "")
                     evidence["execution_outcome"] = "unknown"
+                    if audit.get("execution_decision"):
+                        evidence["execution"] = audit["execution_decision"]
                     async with SessionLocal() as db:
                         db.add(UsageRecord(request_id=scope.get("state", {}).get("request_id") or "req_"+uuid4().hex,
                                            api_key_id=principal.key_id, owner_username=principal.owner_username,

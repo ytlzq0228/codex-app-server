@@ -5,7 +5,7 @@ from uuid import UUID
 import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from sqlalchemy import String, cast, delete, func, literal, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .admin_auth import (
@@ -19,6 +19,7 @@ from .app_server import AppServerError, open_app_server
 from .backend import WorkerFailure, classify_worker_failure, run_healthcheck_turn
 from .config import Settings, get_settings
 from .database import get_session
+from .history import conversation_history, active_conversation_groups
 from .models import GoogleAuthConfig, User, UserSession, ApiKey, ResponseBinding, UsageRecord, Worker, WorkerStatus
 from .quota import quota_lock, ensure_capacity, reconcile_worker
 from .user_auth import issue_session, require_user, digest
@@ -119,7 +120,7 @@ def manager_delete_succeeded(status_code: int) -> bool:
     return status_code in {204, 404}
 
 
-async def render_admin_page(request: Request, page: str, history_page: int, admin: AdminSession, session: AsyncSession):
+async def render_admin_page(request: Request, page: str, history_page: int, admin: AdminSession, session: AsyncSession, *, conversation: str = "", key_id: str = "", endpoint: str = ""):
     if page == "overview":
         stats = {
             "requests": await session.scalar(select(func.count()).select_from(UsageRecord)) or 0,
@@ -132,85 +133,28 @@ async def render_admin_page(request: Request, page: str, history_page: int, admi
     history_page_size = 30
     keys = (await session.scalars(select(ApiKey).where(ApiKey.deleted_at.is_(None)).order_by(ApiKey.created_at.desc()))).all()
     workers = (await session.scalars(select(Worker).where(Worker.endpoint != "removed://worker").order_by(Worker.created_at.asc()))).all()
-    history_total = await session.scalar(select(func.count()).select_from(UsageRecord)) or 0
-    conversation_key = func.coalesce(UsageRecord.logical_conversation_id, UsageRecord.thread_id, ResponseBinding.thread_id, UsageRecord.request_id)
-    history_group_key = (
-        func.coalesce(cast(UsageRecord.api_key_id, String), literal("development"))
-        + literal(":")
-        + func.coalesce(UsageRecord.endpoint, literal("unknown"))
-        + literal(":")
-        + conversation_key
-    )
-    grouped_history = (
-        select(history_group_key.label("group_key"), func.max(UsageRecord.created_at).label("latest_at"))
-        .select_from(UsageRecord)
-        .outerjoin(ResponseBinding, UsageRecord.request_id == ResponseBinding.response_id)
-        .group_by(history_group_key)
-        .subquery()
-    )
-    history_session_total = await session.scalar(select(func.count()).select_from(grouped_history)) or 0
-    history_pages = max(1, (history_session_total + history_page_size - 1) // history_page_size)
-    history_page = min(history_page, history_pages)
-    page_groups = (
-        select(grouped_history.c.group_key, grouped_history.c.latest_at)
-        .order_by(grouped_history.c.latest_at.desc())
-        .offset((history_page - 1) * history_page_size)
-        .limit(history_page_size)
-        .subquery()
-    )
-    history_rows = (await session.execute(
-        select(UsageRecord, ApiKey.name, Worker.name, conversation_key.label("conversation_key"), page_groups.c.latest_at)
-        .select_from(UsageRecord)
-        .outerjoin(ResponseBinding, UsageRecord.request_id == ResponseBinding.response_id)
-        .outerjoin(ApiKey, UsageRecord.api_key_id == ApiKey.id)
-        .outerjoin(Worker, UsageRecord.worker_id == Worker.id)
-        .join(page_groups, history_group_key == page_groups.c.group_key)
-        .order_by(page_groups.c.latest_at.desc(), UsageRecord.created_at.asc())
-    )).all()
-    history_groups = []
-    groups_by_identity: dict[str, dict] = {}
-    for usage, key_name, worker_name, thread_id, latest_at in history_rows:
-        identity = f"{usage.api_key_id or 'development'}:{usage.endpoint or 'unknown'}:{thread_id}"
-        group = groups_by_identity.get(identity)
-        if not group:
-            group = {
-                "identity": identity,
-                "thread_id": thread_id,
-                "endpoint": usage.endpoint or "unknown",
-                "key_name": key_name or "已删除",
-                "latest_at": latest_at,
-                "requests": [],
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "duration_ms": 0,
-                "has_error": False,
-            }
-            groups_by_identity[identity] = group
-            history_groups.append(group)
-        group["requests"].append({"usage": usage, "worker_name": worker_name or "—"})
-        group["input_tokens"] += usage.input_tokens
-        group["output_tokens"] += usage.output_tokens
-        group["duration_ms"] += usage.duration_ms
-        group["has_error"] = group["has_error"] or usage.status_code >= 400
+    history = await conversation_history(session, page=history_page, page_size=history_page_size, conversation_id=conversation, key_id=key_id, endpoint=endpoint)
+    history_total = history["request_total"]
+    history_session_total = history["total"]
+    history_page, history_pages = history["page"], history["pages"]
+    history_groups = history["groups"]
     binding_rows = (await session.execute(
-        select(ResponseBinding, ApiKey, Worker)
+        select(ResponseBinding, ApiKey, Worker, UsageRecord.logical_conversation_id, UsageRecord.thread_id, UsageRecord.endpoint)
         .join(ApiKey, ResponseBinding.api_key_id == ApiKey.id)
         .join(Worker, ResponseBinding.worker_id == Worker.id)
+        .outerjoin(UsageRecord, (UsageRecord.request_id == ResponseBinding.response_id) & (UsageRecord.api_key_id == ResponseBinding.api_key_id))
         .where(ApiKey.deleted_at.is_(None), ResponseBinding.status == "active", ResponseBinding.expires_at > datetime.now(timezone.utc))
-        .order_by(ResponseBinding.last_used_at.desc())
+        .order_by(ResponseBinding.last_used_at.desc(), ResponseBinding.response_id.desc())
     )).all()
-    active_sessions = []
-    sessions_by_key: dict[UUID, list] = {}
-    seen_threads: dict[tuple[UUID, str], dict] = {}
-    for binding, key, worker in binding_rows:
-        identity = (key.id, binding.thread_id)
-        if identity in seen_threads:
-            seen_threads[identity]["binding_count"] += 1
-            continue
-        item = {"binding": binding, "key": key, "worker": worker, "binding_count": 1}
-        seen_threads[identity] = item
-        active_sessions.append(item)
-        sessions_by_key.setdefault(key.id, []).append(item)
+    active_sessions, sessions_by_key = active_conversation_groups(binding_rows)
+    if page == "sessions" and (conversation or key_id or endpoint):
+        active_sessions = [group for group in active_sessions
+            if (not conversation or group["conversation_id"] == conversation)
+            and (not key_id or str(group["key"].id) == key_id)
+            and (not endpoint or group["endpoint"] == endpoint)]
+        sessions_by_key = {}
+        for group in active_sessions:
+            sessions_by_key.setdefault(group["key"].id, []).append(group)
     stats = {
         "requests": await session.scalar(select(func.count()).select_from(UsageRecord)) or 0,
         "input_tokens": await session.scalar(select(func.coalesce(func.sum(UsageRecord.input_tokens), 0))) or 0,
@@ -219,7 +163,7 @@ async def render_admin_page(request: Request, page: str, history_page: int, admi
     return templates(request).TemplateResponse(
         request,
         "admin/dashboard.html",
-        {"users": (await session.scalars(select(User).order_by(User.username))).all(), "page": page, "keys": keys, "workers": workers, "history_rows": history_rows, "history_groups": history_groups, "history_page": history_page, "history_pages": history_pages, "history_total": history_total, "history_session_total": history_session_total, "active_sessions": active_sessions, "sessions_by_key": sessions_by_key, "stats": stats, "csrf_token": admin.csrf_token},
+        {"users": (await session.scalars(select(User).order_by(User.username))).all(), "page": page, "keys": keys, "workers": workers, "history_groups": history_groups, "history_page": history_page, "history_pages": history_pages, "history_total": history_total, "history_session_total": history_session_total, "active_sessions": active_sessions, "sessions_by_key": sessions_by_key, "stats": stats, "csrf_token": admin.csrf_token},
     )
 
 
@@ -247,13 +191,13 @@ async def workers_admin_page(request: Request, admin: AdminSession = Depends(req
 
 
 @router.get("/sessions", response_class=HTMLResponse)
-async def sessions_page(request: Request, admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
-    return await render_admin_page(request, "sessions", 1, admin, session)
+async def sessions_page(request: Request, conversation: str = "", key_id: str = "", endpoint: str = "", admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    return await render_admin_page(request, "sessions", 1, admin, session, conversation=conversation, key_id=key_id, endpoint=endpoint)
 
 
 @router.get("/history", response_class=HTMLResponse)
-async def history_page(request: Request, history_page: int = 1, admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
-    return await render_admin_page(request, "history", history_page, admin, session)
+async def history_page(request: Request, history_page: int = 1, conversation: str = "", key_id: str = "", endpoint: str = "", admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    return await render_admin_page(request, "history", history_page, admin, session, conversation=conversation, key_id=key_id, endpoint=endpoint)
 
 
 @router.post("/keys")
@@ -364,7 +308,7 @@ async def delete_active_session(request: Request, response_id: str, csrf_token: 
         raise HTTPException(404, "Active session not found")
     deleted = await session.execute(delete(ResponseBinding).where(ResponseBinding.api_key_id == binding.api_key_id, ResponseBinding.thread_id == binding.thread_id))
     await session.commit()
-    return result("活动会话已删除", f"该会话的 {deleted.rowcount or 0} 条响应绑定已释放。")
+    return result("Thread 绑定已释放", f"该 Thread 的 {deleted.rowcount or 0} 条响应绑定已释放。")
 
 
 async def default_worker(session: AsyncSession, settings: Settings) -> Worker:

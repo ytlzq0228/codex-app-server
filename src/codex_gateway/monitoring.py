@@ -35,10 +35,11 @@ def worker_state(worker):
 
 
 def state_counts(workers):
+    workers = [worker for worker in workers if worker.endpoint != 'removed://worker']
     counts = dict.fromkeys(STATES, 0)
     for worker in workers:
         counts[worker_state(worker)] += 1
-    return {'version': 1, 'total': len(workers), 'counts': counts}
+    return {'version': 2, 'total': len(workers), 'counts': counts}
 
 
 def pool_usage(workers, weights, readings):
@@ -52,18 +53,22 @@ def pool_usage(workers, weights, readings):
         unknown_plans += int(plan not in weights)
         total_weight += weight
         windows = {}
+        reading = readings.get(str(worker.id), {})
+        succeeded = isinstance(reading.get('buckets'), list)
         for key in ('five_hour', 'week'):
-            values = [b[key]['used'] for b in readings.get(str(worker.id), {}).get('buckets', [])
+            values = [b[key]['used'] for b in reading.get('buckets', [])
                       if b.get(key) and math.isfinite(b[key]['used'])]
             if values:
                 windows[key] = max(values)
+            elif succeeded:
+                windows[key] = 0.0
         if windows:
             windows['risk'] = max(windows.values())
         for key, value in windows.items():
             totals[key][0] += value * weight
             totals[key][1] += weight
             totals[key][2] += 1
-    return {'version': 1, 'eligible': len(eligible), 'total_weight': total_weight,
+    return {'version': 2, 'eligible': len(eligible), 'total_weight': total_weight,
             'unknown_plans': unknown_plans, 'weights': {k: float(v) for k, v in weights.items()},
             'windows': {key: {'used': numerator / denominator if denominator else None,
                               'covered_weight': denominator, 'covered': count}

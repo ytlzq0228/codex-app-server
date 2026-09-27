@@ -31,6 +31,7 @@ from .request_observation import request_observation
 from .conversations import correlate, durable_write
 from .client_tools import ToolProtocolError
 from .grammar_tools import validate_grammars
+from .execution import prepare as prepare_execution, finish as finish_execution
 from .quota import reconcile_worker, enforce_quota
 from .contributions import account_monitor_loop, update_account
 from .migrations import upgrade, bootstrap_users
@@ -469,13 +470,19 @@ async def save_usage(
         cost = ((Decimal(result.input_tokens) * price.input_price + Decimal(result.output_tokens) * price.output_price) / Decimal(1_000_000)) if price and result else (Decimal(0) if price else None)
         record = UsageRecord(owner_username=principal.owner_username, request_params=request_params, request_observation=request_observation(audit), input_price=price.input_price if price else None, output_price=price.output_price if price else None, cost_usd=cost, request_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, model=model, status_code=status_code, input_tokens=result.input_tokens if result else 0, output_tokens=result.output_tokens if result else 0, duration_ms=int((time.monotonic() - started) * 1000), error_code=error_code, endpoint=endpoint, previous_response_id=previous_response_id, thread_id=thread_id or (result.thread_id if result else None))
         await correlate(session, record, result.text if result else None)
+        if audit and audit.get("execution_decision"):
+            record.conversation_evidence["execution"] = audit["execution_decision"]
+            record.conversation_evidence["auto_resume"] = audit["execution_decision"]["action"] == "resume"
+        if audit and audit.get("execution"):
+            record.logical_conversation_id = audit["execution"]["logical_id"]
         if result and result.tool_calls:
             record.conversation_evidence["execution_outcome"] = "waiting_client_tool"
             record.conversation_evidence["client_tool_call_ids"] = [c["call_id"] for c in result.tool_calls]
         session.add(record)
-        if persist_binding and result and principal.key_id and result.thread_id and target.worker_id:
+        if (persist_binding or (audit and audit.get("execution"))) and result and principal.key_id and result.thread_id and target.worker_id:
             now = utcnow()
             session.add(ResponseBinding(response_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, thread_id=result.thread_id, last_used_at=now, expires_at=binding_expiry(now), status="active"))
+        await finish_execution(session, audit, result if status_code == 200 else None, target, response_id)
         await session.commit()
         if audit is not None:
             audit["saved"] = True
@@ -682,14 +689,17 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
     request = body.to_response_request()
     await validate_grammars(request)
     pending_target = backend.continuation_target(request, principal.key_id) if hasattr(backend, "continuation_target") else None
-    target = pending_target or await choose_target(principal, session)
+    pending_thread = backend.continuation_thread(request, principal.key_id) if pending_target and hasattr(backend, "continuation_thread") else None
+    request, execution_binding = await prepare_execution(request, principal, "chat.completions", current_audit.get(), pending_thread=pending_thread)
+    target = pending_target or await choose_target(principal, session, execution_binding)
+    allow_retry = not pending_target and execution_binding is None and principal.pinned_worker_id is None
     await release_request_session(session)
     if body.stream:
-        return StreamingResponse(chat_completion_stream(body, request, backend, principal, target, principal.pinned_worker_id is None), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        return StreamingResponse(chat_completion_stream(body, request, backend, principal, target, allow_retry), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
     started = time.monotonic()
     completion_id, created = f"chatcmpl-{uuid4().hex}", int(time.time())
     try:
-        result, target = await complete_with_failover(request, backend, principal, target, allow_retry=principal.pinned_worker_id is None)
+        result, target = await complete_with_failover(request, backend, principal, target, allow_retry=allow_retry)
     except HTTPException as exc:
         await save_usage(completion_id, principal, target, body.model, exc.status_code, started, error_code="invalid_request", request_params=body.model_dump(mode="json"))
         raise
@@ -727,13 +737,15 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
     pending_target = backend.continuation_target(body, principal.key_id) if hasattr(backend, "continuation_target") else None
     if pending_target and binding and pending_target.worker_id != binding.worker_id:
         return openai_error(400, "Tool output and previous_response_id refer to different Workers", "invalid_client_tool")
+    pending_thread = backend.continuation_thread(body, principal.key_id) if pending_target and hasattr(backend, "continuation_thread") else None
+    body, binding = await prepare_execution(body, principal, "responses", current_audit.get(), pending_thread=pending_thread, binding=binding)
     target = pending_target or await choose_target(principal, session, binding)
     await release_request_session(session)
     if body.stream:
-        return StreamingResponse(response_stream(body, backend, principal, target, public_previous_id, binding is None and principal.pinned_worker_id is None), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        return StreamingResponse(response_stream(body, backend, principal, target, public_previous_id, not pending_target and binding is None and principal.pinned_worker_id is None), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
     started = time.monotonic()
     try:
-        result, target = await complete_with_failover(body, backend, principal, target, allow_retry=binding is None and principal.pinned_worker_id is None)
+        result, target = await complete_with_failover(body, backend, principal, target, allow_retry=not pending_target and binding is None and principal.pinned_worker_id is None)
     except HTTPException as exc:
         response_id = f"resp_{uuid4().hex}"
         if binding and exc.status_code == 404:

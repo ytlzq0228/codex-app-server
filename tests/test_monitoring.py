@@ -33,7 +33,7 @@ def test_exhaustive_worker_states():
     for item, expected in examples:
         assert worker_state(item) == expected
     counts = state_counts([w for w, _ in examples])
-    assert counts['total'] == sum(counts['counts'].values()) == 10
+    assert counts['total'] == sum(counts['counts'].values()) == 9
 
 
 def test_weighted_windows_missing_data_and_risk():
@@ -47,7 +47,7 @@ def test_weighted_windows_missing_data_and_risk():
     assert data['eligible'] == 3 and data['total_weight'] == 5 and data['unknown_plans'] == 1
     assert data['windows']['risk'] == {'used': 72.5, 'covered_weight': 4, 'covered': 2}
     assert data['windows']['five_hour']['used'] == 55
-    assert data['windows']['week']['used'] == 80
+    assert data['windows']['week']['used'] == 20
     assert pool_usage([a], {}, {})['windows']['risk']['used'] is None
     assert pool_usage([], {}, {})['windows']['risk']['used'] is None
 
@@ -69,7 +69,7 @@ def test_snapshots_api_weights_and_history(monkeypatch):
             async with SessionLocal() as db:
                 rows = (await db.scalars(select(MetricSnapshot).where(MetricSnapshot.metric == metric, MetricSnapshot.bucket_at == bucket))).all()
                 assert len(rows) == 1
-                assert rows[0].payload['version'] == 1
+                assert rows[0].payload['version'] == 2
     with TestClient(app) as client:
         assert client.get('/admin/monitoring', headers=AJAX).status_code in (401, 303)
         token = admin_login(client)
@@ -116,3 +116,26 @@ async def test_usage_poll_is_read_only_and_failure_is_missing(monkeypatch):
         yield
     monkeypatch.setattr(monitoring, 'open_app_server', failed)
     assert await monitoring.read_usage(item, asyncio.Semaphore(1)) == (str(item.id), {})
+
+
+def test_successful_missing_windows_are_unlimited_but_failure_is_unknown():
+    a, b, failed = worker(), worker(plan_type='pro'), worker()
+    readings = {str(a.id): {'buckets': []}, str(b.id): {'buckets': [{'five_hour': None, 'week': None}]}, str(failed.id): {}}
+    result = pool_usage([a,b,failed], {'plus': 1, 'pro': 3}, readings)
+    assert result['version'] == 2
+    for window in result['windows'].values():
+        assert window == {'used': 0, 'covered_weight': 4, 'covered': 2}
+    assert result['total_weight'] == 5
+
+
+def test_removed_workers_are_excluded_from_state_total_and_percentages():
+    active = [worker() for _ in range(4)]
+    counts = state_counts(active + [worker(endpoint='removed://worker', enabled=False, auth_mode=None)])
+    assert counts['version'] == 2
+    assert counts['total'] == 4
+    assert counts['counts']['healthy'] == 4
+    assert counts['counts']['other'] == 0
+    assert counts['counts']['healthy'] / counts['total'] == 1
+    assert state_counts([worker(endpoint='removed://worker')])['total'] == 0
+    # Disabled workers that still exist remain visible as abnormal.
+    assert state_counts([worker(enabled=False)])['counts']['other'] == 1

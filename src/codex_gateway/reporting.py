@@ -16,6 +16,7 @@ from .subscriptions import normalize_plan, subscription_summary
 from sqlalchemy.dialects.postgresql import insert
 from .self_service import render
 from .user_auth import require_user
+from .history import conversation_history
 
 router = APIRouter()
 
@@ -38,21 +39,21 @@ def date_boundary(value, label):
 
 @router.get("/user/usage")
 async def usage(request: Request, q: str = "", model: str = "", status: str = "", start: str = "", end: str = "", page: int = 1, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
-    query = usage_query(request.state.user)
+    filters = []
     if q:
-        query = query.where(UsageRecord.request_id.contains(q, autoescape=True))
+        filters.append(UsageRecord.request_id.contains(q, autoescape=True))
     if model:
-        query = query.where(UsageRecord.model == model)
-    if status == "error":
-        query = query.where(UsageRecord.status_code >= 400)
+        filters.append(UsageRecord.model == model)
     if start:
-        query = query.where(UsageRecord.created_at >= date_boundary(start, "开始"))
+        filters.append(UsageRecord.created_at >= date_boundary(start, "开始"))
     if end:
-        query = query.where(UsageRecord.created_at < date_boundary(end, "结束"))
-    total = await db.scalar(select(func.count()).select_from(query.subquery()))
-    page = max(1, min(page, max(1, (total + 29)//30)))
-    records = (await db.scalars(query.order_by(UsageRecord.created_at.desc()).offset((page-1)*30).limit(30))).all()
-    return render(request, identity, page="usage", records=records, total=total, number=page, pages=max(1,(total+29)//30))
+        filters.append(UsageRecord.created_at < date_boundary(end, "结束"))
+    history = await conversation_history(db,
+        owner=request.state.user.username if request.state.user.role == "user" else None,
+        page=page, filters=filters, status=status)
+    return render(request, identity, page="usage", history_groups=history["groups"],
+        total=history["total"], request_total=history["request_total"],
+        number=history["page"], pages=history["pages"], show_cost=True)
 
 
 @router.get("/user/usage/{request_id}")

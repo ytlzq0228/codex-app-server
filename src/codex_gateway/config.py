@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     worker_failure_cooldown_seconds: int = 300
     worker_limit_cooldown_seconds: int = 1800
     response_binding_ttl_hours: int = 24
+    execution_resume_enabled: bool = True
     max_ws_per_key_worker: int = 10
     max_ws_per_worker: int = 40
     ws_idle_ttl_seconds: float = 600.0

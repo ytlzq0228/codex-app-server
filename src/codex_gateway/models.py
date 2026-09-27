@@ -123,6 +123,23 @@ class ResponseBinding(Base):
     status: Mapped[str] = mapped_column(String(16), default="active", index=True)
     invalid_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)
 
+class ExecutionSession(Base):
+    """One fenced execution checkpoint per scoped logical conversation."""
+    __tablename__ = "execution_sessions"
+    logical_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    api_key_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("api_keys.id"), index=True)
+    endpoint: Mapped[str] = mapped_column(String(32))
+    worker_id: Mapped[UUID | None] = mapped_column(PGUUID(as_uuid=True), nullable=True)
+    thread_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    response_id: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    state: Mapped[str] = mapped_column(String(16), default="new")
+    lease_token: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    config_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    history_hashes: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
+
 class UsageRecord(Base):
     __tablename__ = "usage_records"
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)

@@ -99,11 +99,31 @@ class MockBackend:
 
 def _token_counts(params: dict[str, Any]) -> tuple[int, int]:
     usage = params.get("tokenUsage") or params.get("usage") or params
-    if isinstance(usage, dict) and isinstance(usage.get("total"), dict):
-        usage = usage["total"]
+    if isinstance(usage, dict):
+        usage = usage.get("last") or usage.get("total") or usage
     if not isinstance(usage, dict):
         return 0, 0
     return int(usage.get("inputTokens", usage.get("input_tokens", 0)) or 0), int(usage.get("outputTokens", usage.get("output_tokens", 0)) or 0)
+
+
+class TurnUsage:
+    """Count model calls in this turn, excluding totals from earlier turns."""
+
+    def __init__(self):
+        self.counts = (0, 0)
+        self.previous_total = None
+
+    def observe(self, params):
+        usage = params.get("tokenUsage") or params.get("usage") or params
+        total = usage.get("total") if isinstance(usage, dict) else None
+        current = _token_counts(total) if isinstance(total, dict) else None
+        if self.previous_total is not None and current is not None and all(a >= b for a, b in zip(current, self.previous_total)):
+            increment = tuple(a - b for a, b in zip(current, self.previous_total))
+        else:
+            increment = _token_counts(params)
+        self.counts = tuple(a + b for a, b in zip(self.counts, increment))
+        self.previous_total = current
+        return self.counts
 
 
 class AppServerBackend:
@@ -153,13 +173,26 @@ class AppServerBackend:
             try:
                 result = await app_server.call("thread/resume", {"threadId": request.previous_response_id, **thread_policy()})
             except AppServerError as exc:
-                raise WorkerFailure("The previous response session can no longer be resumed", kind="session", safe_to_retry=False) from exc
-        else:
+                if not request._execution_auto_resume:
+                    raise WorkerFailure("The previous response session can no longer be resumed", kind="session", safe_to_retry=False) from exc
+                # No turn has started. Rebuild using the original full input;
+                # never retry/replay once turn/start may have executed.
+                from .audit import current_audit
+                audit = current_audit.get()
+                if audit is not None:
+                    audit["execution_decision"].update(action="new_thread", reason="thread_resume_unavailable")
+                request._execution_input_text = None
+                request.previous_response_id = None
+        if not request.previous_response_id:
             result = await app_server.call("thread/start", {"model": self.model(request.model), "cwd": workspace, "serviceName": "codex_gateway", **thread_policy(), "dynamicTools": dynamic_specs(definitions(request)) if request.tool_choice != "none" else []})
         return result["thread"]["id"]
 
     def continuation_target(self, request, key):
         return self.tool_sessions.target_for(request, key)
+
+    def continuation_thread(self, request, key):
+        run = self.tool_sessions.find(request, key)
+        return run.thread_id if run else None
 
     async def _turn(self, request, target):
         if definitions(request) or tool_outputs(request):
@@ -192,13 +225,20 @@ class AppServerBackend:
                     if output_schema := request.output_schema():
                         turn_params["outputSchema"] = output_schema
                     turn_may_have_started = True
-                    await app_server.call("turn/start", turn_params)
-                    input_tokens = output_tokens = 0
+                    started = await app_server.call("turn/start", turn_params)
+                    turn_id = (started.get("turn") or {}).get("id")
+                    turn_usage = TurnUsage()
                     grammar_failures = 0
                     grammar_needs_correction = False
                     specs = definitions(request)
                     async for message in app_server.messages():
                         method, params = message.get("method"), message.get("params", {})
+                        event_turn = params.get("turnId") or (params.get("turn") or {}).get("id")
+                        if ((params.get("threadId") and params["threadId"] != thread_id) or
+                                (turn_id and event_turn and event_turn != turn_id)):
+                            if message.get("id") is not None and method:
+                                await app_server.reject_server_request(message)
+                            continue
                         if message.get("id") is not None and method == "item/tool/call":
                             if tool_run is None:
                                 raise WorkerFailure("Unexpected client tool request", kind="request")
@@ -215,6 +255,7 @@ class AppServerBackend:
                                 continue
                             grammar_needs_correction = False
                             await self.tool_sessions.await_result(tool_run, call)
+                            input_tokens, output_tokens = turn_usage.counts
                             yield BackendStreamEvent(tool_call=call, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens)
                             output = await self.tool_sessions.receive_result(tool_run)
                             await app_server.websocket.send(json.dumps({"id": message["id"], "result": {"contentItems": [{"type": "inputText", "text": output}], "success": True}}))
@@ -223,7 +264,7 @@ class AppServerBackend:
                         elif method == "item/agentMessage/delta":
                             yield BackendStreamEvent(delta=params.get("delta", ""), thread_id=thread_id)
                         elif method == "thread/tokenUsage/updated":
-                            input_tokens, output_tokens = _token_counts(params)
+                            turn_usage.observe(params)
                         elif method == "turn/completed":
                             if grammar_needs_correction:
                                 raise ToolProtocolError("Model ended without correcting the invalid grammar tool input; no invalid call was sent to the client")
@@ -232,6 +273,7 @@ class AppServerBackend:
                                 error = turn.get("error") or {}
                                 message = error.get("message", "Codex turn failed")
                                 raise WorkerFailure(message, kind=classify_worker_failure(message), safe_to_retry=False)
+                            input_tokens, output_tokens = turn_usage.counts
                             yield BackendStreamEvent(thread_id=thread_id, done=True, input_tokens=input_tokens, output_tokens=output_tokens)
                             return
             except asyncio.CancelledError:

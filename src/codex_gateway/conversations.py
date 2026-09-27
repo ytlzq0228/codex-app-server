@@ -1,4 +1,4 @@
-"""Explainable audit grouping. Never used to route or resume backend threads."""
+"""Scoped client identity shared by audit grouping and guarded execution resume."""
 import hashlib
 import json
 from functools import wraps
@@ -40,7 +40,8 @@ def explicit_identity(params, observation, key, endpoint, request_id):
         result = [cm.get(name), *[m.get(name) for m in metadata]]
         if header:
             result += headers.get(header, [])
-        return sorted({v for v in result if isinstance(v, str) and v and v != '[REDACTED]'})
+        return sorted({v for v in result if isinstance(v, str) and v and len(v) <= 256
+                       and not v.startswith(('[REDACTED]', '[OMITTED:', '[DEPTH LIMIT]'))})
     threads = values('thread_id', 'thread-id')
     installations = values('installation_id', 'x-codex-installation-id')
     if isinstance(cm.get('x-codex-installation-id'), str):

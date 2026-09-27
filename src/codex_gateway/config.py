@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     max_ws_per_worker: int = 40
     ws_idle_ttl_seconds: float = 600.0
     ws_acquire_timeout_seconds: float = 30.0
+    ws_ping_timeout_seconds: float = 300.0
     database_pool_size: int = 20
     database_max_overflow: int = 30
     database_pool_timeout_seconds: float = 10.0

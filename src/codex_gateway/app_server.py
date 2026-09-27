@@ -78,8 +78,13 @@ class AppServerSession:
         await self.websocket.close()
 
 
-async def connect_app_server(url: str, token: str, timeout: float = 300.0) -> AppServerSession:
-    websocket = await connect(url, additional_headers={"Authorization": f"Bearer {token}"}, open_timeout=15)
+async def connect_app_server(url: str, token: str, timeout: float = 300.0, ping_timeout: float = 300.0) -> AppServerSession:
+    websocket = await connect(
+        url,
+        additional_headers={"Authorization": f"Bearer {token}"},
+        open_timeout=15,
+        ping_timeout=ping_timeout,
+    )
     session = AppServerSession(websocket, timeout)
     try:
         await session.call("initialize", {"clientInfo": {"name": "codex_gateway", "title": "Codex Gateway", "version": "0.3.0"}, "capabilities": {"experimentalApi": True}})
@@ -91,8 +96,8 @@ async def connect_app_server(url: str, token: str, timeout: float = 300.0) -> Ap
 
 
 @asynccontextmanager
-async def open_app_server(url: str, token: str, timeout: float = 300.0) -> AsyncIterator[AppServerSession]:
-    session = await connect_app_server(url, token, timeout)
+async def open_app_server(url: str, token: str, timeout: float = 300.0, ping_timeout: float = 300.0) -> AsyncIterator[AppServerSession]:
+    session = await connect_app_server(url, token, timeout, ping_timeout)
     try:
         yield session
     finally:
@@ -112,13 +117,14 @@ class AppServerSlot:
 class AppServerPool:
     """Bounded persistent sessions with per-Key and per-Worker capacity limits."""
 
-    def __init__(self, token: str, timeout: float, max_per_group: int = 10, max_per_worker: int = 40, idle_ttl: float = 600.0, acquire_timeout: float = 30.0) -> None:
+    def __init__(self, token: str, timeout: float, max_per_group: int = 10, max_per_worker: int = 40, idle_ttl: float = 600.0, acquire_timeout: float = 30.0, ping_timeout: float = 300.0) -> None:
         self.token = token
         self.timeout = timeout
         self.max_per_group = max_per_group
         self.max_per_worker = max_per_worker
         self.idle_ttl = idle_ttl
         self.acquire_timeout = acquire_timeout
+        self.ping_timeout = ping_timeout
         self._slots: list[AppServerSlot] = []
         self._condition = asyncio.Condition()
         self._closed = False
@@ -181,7 +187,7 @@ class AppServerPool:
         try:
             if needs_connect:
                 try:
-                    slot.session = await connect_app_server(url, self.token, self.timeout)
+                    slot.session = await connect_app_server(url, self.token, self.timeout, self.ping_timeout)
                 except Exception:
                     async with self._condition:
                         if slot in self._slots:

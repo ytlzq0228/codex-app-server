@@ -249,6 +249,7 @@ MAX_WS_PER_KEY_WORKER	10	同一 Key 在同一 Worker 最多并行两个请求
 MAX_WS_PER_WORKER	40	单个 Worker 所有 Key 合计的持久 WS 上限
 WS_IDLE_TTL_SECONDS	600	回收长期空闲连接
 WS_ACQUIRE_TIMEOUT_SECONDS	30	等待连接槽位超时后返回 429/503
+WS_PING_TIMEOUT_SECONDS	300	Worker WebSocket keepalive 超时；覆盖长时间客户端工具执行
 
 请求历史界面，按照previous_response_id等线索聚合同一个会话的多个请求
 

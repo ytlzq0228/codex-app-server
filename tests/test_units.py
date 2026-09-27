@@ -6,7 +6,7 @@ import pytest
 import codex_gateway.main as main_module
 import codex_gateway.app_server as app_server_module
 from codex_gateway.auth import ApiPrincipal
-from codex_gateway.app_server import AppServerCapacityError, AppServerError, AppServerPool
+from codex_gateway.app_server import AppServerCapacityError, AppServerError, AppServerPool, connect_app_server
 from codex_gateway.backend import AppServerBackend, BackendTarget, TurnUsage, WorkerFailure, _token_counts, classify_worker_failure, run_healthcheck_turn
 from codex_gateway.config import get_settings
 from codex_gateway.main import complete_with_failover, release_request_session
@@ -108,6 +108,32 @@ def test_generic_gpt_56_client_name_maps_to_codex_variant() -> None:
     assert backend.model("gpt-5.6") == "gpt-5.6-sol"
     assert backend.model("gpt-6-sol") == "gpt-6-sol"
     assert backend.model("codex") == "codex"
+
+
+@pytest.mark.asyncio
+async def test_app_server_connection_uses_configured_ping_timeout(monkeypatch) -> None:
+    captured = {}
+
+    class FakeWebSocket:
+        async def send(self, _message):
+            return None
+
+        async def recv(self):
+            return '{"id":1,"result":{}}'
+
+        async def close(self):
+            return None
+
+    async def fake_connect(url, **kwargs):
+        captured.update(url=url, **kwargs)
+        return FakeWebSocket()
+
+    monkeypatch.setattr(app_server_module, "connect", fake_connect)
+    session = await connect_app_server("ws://worker:4500", "token", ping_timeout=300)
+    await session.close()
+
+    assert captured["ping_timeout"] == 300
+    assert captured["open_timeout"] == 15
 
 
 @pytest.mark.asyncio

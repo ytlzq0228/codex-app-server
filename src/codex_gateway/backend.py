@@ -141,6 +141,7 @@ class AppServerBackend:
             max_per_worker=settings.max_ws_per_worker,
             idle_ttl=settings.ws_idle_ttl_seconds,
             acquire_timeout=settings.ws_acquire_timeout_seconds,
+            ping_timeout=settings.ws_ping_timeout_seconds,
         )
         self.tool_sessions = ToolSessions(self._turn_events)
         self._thread_locks: dict[str, tuple[asyncio.Lock, int]] = {}

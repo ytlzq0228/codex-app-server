@@ -27,6 +27,7 @@ from .config import get_settings
 from .database import SessionLocal, engine, get_session
 from .models import ModelPrice, Base, ResponseBinding, UsageRecord, Worker, WorkerStatus
 from .audit import RequestAuditMiddleware, current_audit, request_params as captured_params
+from .request_observation import request_observation
 from .quota import reconcile_worker, enforce_quota
 from .contributions import account_monitor_loop, update_account
 from .migrations import upgrade, bootstrap_users
@@ -450,7 +451,7 @@ async def save_usage(
         if audit is None and request_params is not None and endpoint == "responses":
             request_params = {**request_params, "previous_response_id": previous_response_id}
         cost = ((Decimal(result.input_tokens) * price.input_price + Decimal(result.output_tokens) * price.output_price) / Decimal(1_000_000)) if price and result else (Decimal(0) if price else None)
-        session.add(UsageRecord(owner_username=principal.owner_username, request_params=request_params, input_price=price.input_price if price else None, output_price=price.output_price if price else None, cost_usd=cost, request_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, model=model, status_code=status_code, input_tokens=result.input_tokens if result else 0, output_tokens=result.output_tokens if result else 0, duration_ms=int((time.monotonic() - started) * 1000), error_code=error_code, endpoint=endpoint, previous_response_id=previous_response_id, thread_id=thread_id or (result.thread_id if result else None)))
+        session.add(UsageRecord(owner_username=principal.owner_username, request_params=request_params, request_observation=request_observation(audit), input_price=price.input_price if price else None, output_price=price.output_price if price else None, cost_usd=cost, request_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, model=model, status_code=status_code, input_tokens=result.input_tokens if result else 0, output_tokens=result.output_tokens if result else 0, duration_ms=int((time.monotonic() - started) * 1000), error_code=error_code, endpoint=endpoint, previous_response_id=previous_response_id, thread_id=thread_id or (result.thread_id if result else None)))
         if persist_binding and result and principal.key_id and result.thread_id and target.worker_id:
             now = utcnow()
             session.add(ResponseBinding(response_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, thread_id=result.thread_id, last_used_at=now, expires_at=binding_expiry(now), status="active"))

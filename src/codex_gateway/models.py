@@ -118,6 +118,7 @@ class UsageRecord(Base):
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     owner_username: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     request_params: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    request_observation: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     input_price: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
     output_price: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
     cost_usd: Mapped[float | None] = mapped_column(Numeric(24, 12), nullable=True)

@@ -21,6 +21,7 @@ async def upgrade(connection):
         "CREATE INDEX IF NOT EXISTS ix_api_keys_owner_username ON api_keys(owner_username)",
         "ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS owner_username VARCHAR(120)",
         "ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS request_params JSON",
+        "ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS request_observation JSON",
         "ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS input_price NUMERIC(18,6)",
         "ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS output_price NUMERIC(18,6)",
         "ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS cost_usd NUMERIC(24,12)",

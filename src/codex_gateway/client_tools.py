@@ -2,6 +2,7 @@
 import json
 import re
 from uuid import uuid4
+from .multimodal import content_parts
 
 NAME = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
 FORBIDDEN = {'config', 'cwd', 'environments', 'permissions', 'sandbox', 'sandboxPolicy',
@@ -63,12 +64,12 @@ def tool_outputs(request):
         output = item.get('output')
         if not isinstance(call_id,str) or not call_id:
             raise ToolProtocolError('Tool output requires a call_id')
-        if isinstance(output,list):
-            if any(not isinstance(p,dict) or p.get('type') not in {'text','input_text','output_text'} or not isinstance(p.get('text'),str) for p in output):
-                raise ToolProtocolError('Only text client tool outputs are supported')
-            output='\n'.join(p['text'] for p in output)
-        if not isinstance(output,str):
-            raise ToolProtocolError('Tool output must be text')
+        try:
+            parts = content_parts(output)
+        except ValueError as exc:
+            raise ToolProtocolError(str(exc)) from exc
+        if isinstance(output, list):
+            output = parts
         outputs.append((call_id,output))
     if len({i for i,_ in outputs})!=len(outputs):
         raise ToolProtocolError('Duplicate tool output call_id')
@@ -80,6 +81,13 @@ def validate(request):
         if (request.model_extra or {}).get(name) is not None:
             raise ToolProtocolError(f'{name} cannot override the Worker security policy')
     specs=definitions(request)
+    # Validate historical outputs as well as the pending output at the tail.
+    for item in request.input if isinstance(request.input, list) else [request.input]:
+        if isinstance(item, dict) and item.get('type') in {'function_call_output', 'custom_tool_call_output'}:
+            try:
+                content_parts(item.get('output'))
+            except ValueError as exc:
+                raise ToolProtocolError(str(exc)) from exc
     outputs = tool_outputs(request)
     if request.previous_response_id and specs and not outputs:
         raise ToolProtocolError("Client tool requests must send full history or return a pending call_id; tool definitions cannot be attached to a resumed Worker thread")

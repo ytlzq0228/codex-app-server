@@ -7,7 +7,7 @@ Realtime, Fine-tuning, etc.) are not gateway targets.
 
 Status legend: **Compatible** means both wire format and behavior are provided;
 **Partial** means common clients work but semantics differ; **Missing** is a
-planned gap; **Out of scope** conflicts with the text-only Codex backend or the
+planned gap; **Out of scope** conflicts with the Codex backend capabilities or the
 no-content-retention design.
 
 ## Cross-cutting protocol
@@ -40,7 +40,8 @@ no-content-retention design.
 | Create text response | `POST /v1/responses` | Implemented | Compatible | Done |
 | String/message input | String or typed input-item union | String, message, direct text item | Compatible for text | Done |
 | Tool-call history input | Function/custom call and call-output items | Serialized into textual history | Partial | P1: preserve typed semantics where app-server permits |
-| Image/file input | URL, file ID, base64 and file input items | Explicitly rejected | Out of scope now | Needs multimodal ingestion design |
+| Image input | URL, file ID, base64 | HTTP(S) URLs and base64 data URLs; ordered text/image input and client tool results | Partial | Supported; file IDs are rejected; see [images](images.md) |
+| File input | File input items | Explicitly rejected | Out of scope now | Requires file ingestion |
 | Instructions | Per-request developer instruction | Flattened into prompt text | Partial | P1: map to app-server developer instructions if exposed |
 | `previous_response_id` | Stored response continuation | Private response-to-thread mapping | Compatible for persisted keys | Done |
 | Response storage/retrieve/delete | Store plus GET/DELETE response endpoints | Stores only thread binding; no body retrieval | Out of scope by privacy design | Do not store content unless PRD changes |
@@ -74,7 +75,8 @@ no-content-retention design.
 | Create text completion | `POST /v1/chat/completions` | Implemented as Responses adapter | Compatible for text | Done |
 | Message roles | developer/system/user/assistant/tool/function | Text roles accepted; prior tool-call messages rejected | Partial | P1 |
 | Text content parts | String or typed text parts | Implemented | Compatible | Done |
-| Image/audio/file content | Multimodal content parts | Explicitly rejected | Out of scope now | Needs multimodal backend |
+| Image content | Multimodal image parts | HTTP(S)/base64 `image_url` parts preserved through Responses adapter | Compatible for URL/data images | See [images](images.md) |
+| Audio/file content | Audio/file parts | Explicitly rejected | Out of scope now | Requires additional ingestion |
 | Data-only SSE | Chunks followed by `[DONE]` | Implemented | Compatible | Done |
 | Stream usage | Final empty choices chunk when requested | Implemented | Compatible | Done |
 | `n` choices | Multiple choices where model supports it | Only `n=1` | Missing | P2 |

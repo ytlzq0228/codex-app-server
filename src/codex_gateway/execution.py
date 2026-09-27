@@ -25,22 +25,27 @@ def now():
 
 
 def normal_item(item):
-    """Ignore transport IDs/annotations, preserve semantic text and tool identity."""
-    from .schemas import ResponseRequest
+    """Ignore transport IDs/annotations, preserve text, images and tool identity."""
+    from .multimodal import content_parts
+    def semantic_content(content):
+        parts = content_parts(content)
+        if any(p['type'] == 'input_image' for p in parts):
+            return parts
+        return '\n'.join(p['text'] for p in parts)
     if not isinstance(item, dict):
         return None
     kind = item.get("type", "message")
     if kind == "additional_tools":
         return None
     if kind == "message" and item.get("role") in {"user", "assistant", "developer", "system"}:
-        return {"role": item["role"], "text": ResponseRequest._content_text(item.get("content"))}
+        return {"role": item["role"], "text": semantic_content(item.get("content"))}
     if kind in {"function_call", "custom_tool_call"}:
         return {"type": kind, "call_id": item.get("call_id"), "name": item.get("name"),
                 "namespace": item.get("namespace"), "input": item.get("arguments", item.get("input"))}
     if kind in {"function_call_output", "custom_tool_call_output"}:
         output = item.get("output")
         return {"type": kind, "call_id": item.get("call_id"),
-                "output": output if isinstance(output, str) else ResponseRequest._content_text(output)}
+                "output": semantic_content(output)}
     return None
 
 
@@ -179,6 +184,7 @@ async def prepare(request, principal, endpoint, audit, *, pending_thread=None, b
                     chosen = active
                     request = request.model_copy(update={"previous_response_id": row.thread_id})
                     request._execution_input_text = "\n\n".join(request._item_text(i) for i in delta)
+                    request._execution_input_items = delta
                     request._execution_auto_resume = True
                     action, reason = "resume", "explicit_identity_and_history_prefix"
         token = str(uuid4())

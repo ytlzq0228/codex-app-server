@@ -1,6 +1,6 @@
 # Codex App Server Gateway
 
-FastAPI gateway exposing OpenAI-compatible `/v1/responses` and `/v1/chat/completions` text APIs backed by isolated Codex app-server workers. Both endpoints support JSON and SSE responses. The gateway also provides persistent per-Key app-server connections, Responses thread continuation, pooled or pinned worker scheduling, request-level usage accounting and price snapshots, device-code login, and restricted worker lifecycle management.
+FastAPI gateway exposing OpenAI-compatible `/v1/responses` and `/v1/chat/completions` APIs with text/image input and text output, backed by isolated Codex app-server workers. Both endpoints support JSON and SSE responses, including text/image results from client tools. See [image input and tool results](docs/images.md). The gateway also provides persistent per-Key app-server connections, Responses thread continuation, pooled or pinned worker scheduling, request-level usage accounting and price snapshots, device-code login, and restricted worker lifecycle management.
 
 ```bash
 cp .env.example .env

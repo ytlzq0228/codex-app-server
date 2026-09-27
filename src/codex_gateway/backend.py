@@ -13,6 +13,7 @@ from .client_tools import definitions, dynamic_specs, public_call, tool_outputs,
 from .tool_sessions import ToolSessions
 from .grammar_tools import call_matches_grammar
 from .schemas import BackendResult, BackendStreamEvent, ResponseRequest
+from .multimodal import dynamic_output
 
 
 @dataclass(frozen=True)
@@ -182,6 +183,7 @@ class AppServerBackend:
                 if audit is not None:
                     audit["execution_decision"].update(action="new_thread", reason="thread_resume_unavailable")
                 request._execution_input_text = None
+                request._execution_input_items = None
                 request.previous_response_id = None
         if not request.previous_response_id:
             result = await app_server.call("thread/start", {"model": self.model(request.model), "cwd": workspace, "serviceName": "codex_gateway", **thread_policy(), "dynamicTools": dynamic_specs(definitions(request)) if request.tool_choice != "none" else []})
@@ -215,7 +217,7 @@ class AppServerBackend:
                         raise WorkerFailure("Codex worker is not logged in", kind="logged_out", safe_to_retry=True)
                     thread_id = await self._start_thread(app_server, request, workspace)
                     turn_params = {
-                        "threadId": thread_id, "input": [{"type": "text", "text": request.input_text()}],
+                        "threadId": thread_id, "input": request.worker_input(),
                         "cwd": workspace, **turn_policy(),
                         "model": self.model(request.model),
                     }
@@ -258,7 +260,7 @@ class AppServerBackend:
                             input_tokens, output_tokens = turn_usage.counts
                             yield BackendStreamEvent(tool_call=call, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens)
                             output = await self.tool_sessions.receive_result(tool_run)
-                            await app_server.websocket.send(json.dumps({"id": message["id"], "result": {"contentItems": [{"type": "inputText", "text": output}], "success": True}}))
+                            await app_server.websocket.send(json.dumps({"id": message["id"], "result": {"contentItems": dynamic_output(output), "success": True}}))
                         elif message.get("id") is not None and method:
                             await app_server.reject_server_request(message)
                         elif method == "item/agentMessage/delta":

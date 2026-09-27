@@ -1,6 +1,7 @@
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
+from .multimodal import IMAGE_TYPES, content_parts, user_parts
 
 
 class OpenAIRequestModel(BaseModel):
@@ -28,6 +29,7 @@ class ResponseStreamOptions(OpenAIRequestModel):
 class ResponseRequest(OpenAIRequestModel):
     # Server-only: never populated from client JSON or persisted as request input.
     _execution_input_text: str | None = PrivateAttr(default=None)
+    _execution_input_items: list[Any] | None = PrivateAttr(default=None)
     _execution_auto_resume: bool = PrivateAttr(default=False)
     model: str
     input: str | dict[str, Any] | list[Any]
@@ -112,15 +114,14 @@ class ResponseRequest(OpenAIRequestModel):
         if not isinstance(item, dict):
             return True
         item_type = item.get("type")
-        if item_type in {"input_image", "input_file", "computer_screenshot", "item_reference"}:
+        if item_type in {"input_file", "computer_screenshot", "item_reference"}:
             return True
-        if item_type not in {None, "message", "additional_tools", "input_text", "output_text", "text", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output"}:
+        if item_type not in {None, "message", "additional_tools", "input_text", "output_text", "text", "input_image", "image_url", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output"}:
             return True
-        content = item.get("content")
-        if isinstance(content, list):
-            for part in content:
-                if isinstance(part, dict) and part.get("type") not in {None, "text", "input_text", "output_text"}:
-                    return True
+        if item_type in IMAGE_TYPES:
+            content_parts([item])
+        elif item_type in {None, "message"}:
+            content_parts(item.get("content"))
         return False
 
     def unsupported(self) -> tuple[str, str] | None:
@@ -130,8 +131,11 @@ class ResponseRequest(OpenAIRequestModel):
         except ToolProtocolError as exc:
             return "tools", str(exc)
         items = self.input if isinstance(self.input, list) else [self.input]
-        if any(self._item_is_unsupported(item) for item in items):
-            return "input", "This input item type is not supported by the text gateway"
+        try:
+            if any(self._item_is_unsupported(item) for item in items):
+                return "input", "This input item type is not supported by the gateway"
+        except ValueError as exc:
+            return "input", str(exc)
         if self.tool_choice not in (None, "none", "auto"):
             return "tool_choice", "Forced tool calling is not supported by this Codex gateway"
         if self.background:
@@ -167,6 +171,38 @@ class ResponseRequest(OpenAIRequestModel):
             messages.insert(0, self.instructions)
         return "\n\n".join(text for text in messages if text)
 
+    def worker_input(self) -> list[dict[str, Any]]:
+        """Keep image positions and role boundaries in flattened conversation input."""
+        items = self._execution_input_items
+        if items is None:
+            items = self.input if isinstance(self.input, list) else [self.input]
+        result = []
+        if self.instructions and self._execution_input_items is None:
+            result.append({"type": "text", "text": self.instructions})
+        for item in items:
+            if isinstance(item, dict):
+                kind = item.get("type")
+                if kind == "additional_tools":
+                    continue
+                if kind in IMAGE_TYPES:
+                    result.extend(user_parts([item]))
+                    continue
+                if kind in {None, "message", "function_call_output", "custom_tool_call_output"}:
+                    tool = kind in {"function_call_output", "custom_tool_call_output"}
+                    content = item.get("output" if tool else "content")
+                    parts = user_parts(content)
+                    if any(p["type"] == "image" for p in parts):
+                        label = "TOOL OUTPUT" if tool else str(item.get("role") or "user").upper()
+                        result.append({"type": "text", "text": label + ":\n"})
+                        result.extend(parts)
+                        continue
+            if text := self._item_text(item):
+                result.append({"type": "text", "text": text})
+        # Preserve the exact existing text-only prompt and execution delta behavior.
+        if not any(p["type"] == "image" for p in result):
+            return [{"type": "text", "text": self.input_text()}]
+        return result
+
 
 class ChatMessage(OpenAIRequestModel):
     role: Literal["user", "assistant", "system", "developer", "tool", "function"]
@@ -186,8 +222,6 @@ class ChatMessage(OpenAIRequestModel):
         for part in self.content:
             if part.get("type") in {"text", "input_text", "output_text"}:
                 texts.append(str(part.get("text", "")))
-            elif part.get("type") in {"image_url", "input_image"}:
-                texts.append("[image omitted: this gateway supports text input only]")
         return "\n".join(texts)
 
     def has_non_text_content(self) -> bool:
@@ -239,8 +273,9 @@ class ChatCompletionRequest(OpenAIRequestModel):
     def ensure_messages(self) -> "ChatCompletionRequest":
         if not self.messages:
             raise ValueError("messages must not be empty")
-        if not any(message.text().strip() for message in self.messages):
-            raise ValueError("messages must contain text")
+        if not any(message.text().strip() or isinstance(message.content, list) and message.content
+                   for message in self.messages):
+            raise ValueError("messages must contain text or image content")
         return self
 
     def unsupported(self) -> tuple[str, str] | None:
@@ -260,21 +295,22 @@ class ChatCompletionRequest(OpenAIRequestModel):
         if any((self.model_extra or {}).get(k) is not None for k in FORBIDDEN):
             return "config", "Client overrides of Worker security policy are forbidden"
         try:
-            validate(self.to_response_request())
+            request = self.to_response_request()
+            validate(request)
         except (ToolProtocolError, ValueError, TypeError, KeyError) as exc:
             return "tools", str(exc)
-        if any(message.has_non_text_content() for message in self.messages):
-            return "messages", "Only text message content is supported"
+        if unsupported := request.unsupported():
+            return ("messages" if unsupported[0] == "input" else unsupported[0]), unsupported[1]
         return None
 
     def to_response_request(self) -> ResponseRequest:
         items = []
         for message in self.messages:
             if message.role == "tool":
-                items.append({"type":"function_call_output", "call_id":message.tool_call_id, "output":message.text()})
+                items.append({"type":"function_call_output", "call_id":message.tool_call_id, "output":message.content if message.content is not None else message.text()})
             else:
-                if message.text():
-                    items.append({"role":message.role, "content":message.text()})
+                if message.content or message.text():
+                    items.append({"role":message.role, "content":message.content if message.content is not None else message.text()})
                 for call in message.tool_calls or []:
                     if call.get("type") != "function":
                         raise ValueError("Only function tool_calls are supported in Chat Completions")

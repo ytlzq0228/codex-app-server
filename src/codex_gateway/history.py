@@ -1,7 +1,7 @@
 """Shared, owner-scoped conversation pagination for admin and user history."""
 from decimal import Decimal
 
-from sqlalchemy import String, cast, func, literal, select
+from sqlalchemy import String, cast, func, literal, or_, select
 
 from .models import ApiKey, ResponseBinding, UsageRecord, Worker
 
@@ -38,9 +38,9 @@ async def conversation_history(db, *, owner=None, page=1, page_size=30, filters=
         ).where(*scope, *filters)
         eligible = eligible.where(ranked.c.group_key.in_(matches))
     if status == 'error':
-        eligible = eligible.where(ranked.c.status_code >= 400)
+        eligible = eligible.where(ranked.c.status_code >= 400, ranked.c.status_code != 499)
     elif status == 'success':
-        eligible = eligible.where(ranked.c.status_code < 400)
+        eligible = eligible.where(or_(ranked.c.status_code < 400, ranked.c.status_code == 499))
     eligible = eligible.subquery()
     total = await db.scalar(select(func.count()).select_from(eligible)) or 0
     request_total = await db.scalar(select(func.count()).select_from(ranked).join(
@@ -56,7 +56,7 @@ async def conversation_history(db, *, owner=None, page=1, page_size=30, filters=
         .outerjoin(ApiKey, UsageRecord.api_key_id == ApiKey.id)
         .outerjoin(Worker, UsageRecord.worker_id == Worker.id)
         .order_by(selected.c.latest_at.desc(), selected.c.group_key,
-                  UsageRecord.created_at.asc(), UsageRecord.id.asc()))).all()
+                  UsageRecord.created_at.desc(), UsageRecord.id.desc()))).all()
     groups = {}
     for usage, key_name, worker_name, conversation_id, latest_at, identity, worker_thread in rows:
         group = groups.setdefault(identity, {
@@ -72,7 +72,7 @@ async def conversation_history(db, *, owner=None, page=1, page_size=30, filters=
             group['thread_ids'].append(worker_thread)
         for field in ('input_tokens', 'output_tokens', 'duration_ms'):
             group[field] += getattr(usage, field)
-        group['latest_status'] = usage.status_code
+        group.setdefault('latest_status', usage.status_code)
         group['cost_usd'] += usage.cost_usd or Decimal(0)
         group['unpriced'] |= usage.cost_usd is None
     return {'groups': list(groups.values()), 'total': total, 'request_total': request_total,

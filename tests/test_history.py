@@ -35,7 +35,7 @@ def test_conversation_pagination_latest_status_filters_and_owner_scope():
                 record('other-owner','recovered',503,2,owner=bob),
                 record('failing-old','failing',200,3),record('failing-new','failing',500,4),
                 record('different-key','recovered',200,5,api_key_id=key.id),
-                record('standalone',None,200,6),
+                record('standalone',None,499,6),
                 record('tie-low','tie',200,7,id=UUID(int=tie_id)),
                 record('tie-high','tie',504,7,id=UUID(int=tie_id+1)),
             ])
@@ -50,7 +50,7 @@ def test_conversation_pagination_latest_status_filters_and_owner_scope():
             recovered=next(g for g in groups if g['thread_id']=='recovered' and len(g['requests'])==2)
             assert recovered['latest_status']==200
             assert recovered['input_tokens']==20 and recovered['cost_usd']==Decimal('0.2')
-            assert [r['usage'].status_code for r in recovered['requests']]==[502,200]
+            assert [r['usage'].status_code for r in recovered['requests']]==[200,502]
             assert next(g for g in groups if g['thread_id']=='tie')['latest_status']==504
             assert groups[0]['thread_id']=='legacy-thread'
             assert all(r['usage'].owner_username==alice for g in groups for r in g['requests'])
@@ -58,6 +58,7 @@ def test_conversation_pagination_latest_status_filters_and_owner_scope():
             assert filtered['total']==1 and filtered['groups'][0]['latest_status']==200
             assert len(filtered['groups'][0]['requests'])==2
             assert (await conversation_history(db,owner=alice,status='error'))['total']==2
+            assert (await conversation_history(db,owner=alice,status='success'))['total']==4
             assert (await conversation_history(db,owner=alice,status='error',filters=[UsageRecord.request_id==prefix+'-old']))['total']==0
             pages=[await conversation_history(db,owner=alice,page=p,page_size=1) for p in range(1,7)]
             assert len({p['groups'][0]['identity'] for p in pages})==6
@@ -80,6 +81,9 @@ def test_conversation_pagination_latest_status_filters_and_owner_scope():
             assert client.get('/user/usage/'+prefix+'-other-owner').status_code==404
             assert '共 0 个会话' in client.get('/user/usage',params={'q':prefix+'-old','status':'error'}).text
             assert 'data-toggle-history' in response.text and '/static/history.js' in response.text
+            cancelled=client.get('/user/usage',params={'q':prefix+'-standalone'})
+            assert 'badge-ok' in cancelled.text and '>499</span>' in cancelled.text
+            assert '共 0 个会话' in client.get('/user/usage',params={'q':prefix+'-standalone','status':'error'}).text
         finally:app.dependency_overrides.pop(require_user,None)
         settings=get_settings()
         assert client.post('/auth/login',data={'username':settings.admin_username,'password':settings.admin_password.get_secret_value()},follow_redirects=False).status_code==302
@@ -87,6 +91,8 @@ def test_conversation_pagination_latest_status_filters_and_owner_scope():
         assert admin.status_code==200,admin.text
         assert '含失败请求' not in admin.text
         assert '最近请求状态' in admin.text
+        assert '<body data-csrf-token=' in admin.text and 'class="admin-page ' in admin.text
+        assert 'class="admin-page ' in client.get('/admin/users').text
 
 
 def test_active_conversation_grouping_does_not_cross_keys_or_interfaces():
@@ -119,8 +125,8 @@ def test_active_and_historical_pages_share_logical_id_and_keep_thread_actions():
             other=ApiKey(name=prefix+'other',prefix=prefix[:19]+'x',key_hash=prefix[::-1]*2)
             db.add_all([key,other]);await db.flush()
             worker=await db.scalar(select(Worker).limit(1))
-            for i in range(13):
-                thread='thread-'+prefix+('-a' if i<5 else '-b')
+            for i in range(25):
+                thread='thread-'+prefix+('-a' if i<10 else '-b')
                 rid=prefix+'-'+str(i)
                 db.add(UsageRecord(request_id=rid,api_key_id=key.id,logical_conversation_id=conv,
                     thread_id=thread,worker_id=worker.id,model='test-model',status_code=200,
@@ -143,15 +149,19 @@ def test_active_and_historical_pages_share_logical_id_and_keep_thread_actions():
         assert '<details' not in focused.text
         history=client.get('/admin/history',params={'conversation':conv,'key_id':key_id,'endpoint':'responses'})
         assert history.status_code==200,history.text
-        assert '共 13 条请求，聚合为 1 个会话' in history.text
+        assert '共 25 条请求，聚合为 1 个会话' in history.text
         assert '2 个 Worker Thread' in history.text
         assert 'unrelated-thread' not in history.text
+        assert history.text.count('data-history-request') == 25
+        assert history.text.count('data-history-request hidden') == 5
+        assert 'data-history-more' in history.text and '更多（剩余 5 条）' in history.text
+        assert history.text.index(prefix+'-24') < history.text.index(prefix+'-23')
         token=re.search(r'name="csrf_token" value="([^"]+)"',active.text)[1]
         deleted=client.post('/admin/sessions/'+prefix+'-0/delete',data={'csrf_token':token},headers={'X-Requested-With':'XMLHttpRequest'})
         assert deleted.status_code==200,deleted.text
         active=client.get('/admin/sessions')
         assert '1 个逻辑会话 · 1 个 Thread' in active.text
-        assert '共 13 条请求，聚合为 1 个会话' in client.get('/admin/history',params={'conversation':conv,'key_id':key_id}).text
+        assert '共 25 条请求，聚合为 1 个会话' in client.get('/admin/history',params={'conversation':conv,'key_id':key_id}).text
 
 
 def test_history_time_bounds_require_timezone_and_normalize_to_utc():

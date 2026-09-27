@@ -12,3 +12,19 @@ document.querySelectorAll('tr[data-history-row]').forEach(row => row.addEventLis
   if (event.target.closest('button, a, form')) return;
   row.querySelector('[data-toggle-history]')?.click();
 }));
+
+document.querySelectorAll('[data-history-more]').forEach(button => {
+  const detail = button.closest('.history-conversation-detail');
+  const batchSize = Number(button.dataset.batchSize) || 20;
+  const hiddenRows = () => Array.from(detail.querySelectorAll('[data-history-request][hidden]'));
+  const update = () => {
+    const remaining = hiddenRows().length;
+    button.hidden = remaining === 0;
+    button.textContent = remaining ? `更多（剩余 ${remaining} 条）` : '已显示全部';
+  };
+  button.addEventListener('click', () => {
+    hiddenRows().slice(0, batchSize).forEach(row => { row.hidden = false; });
+    update();
+  });
+  update();
+});

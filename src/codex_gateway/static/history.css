@@ -4,6 +4,7 @@
 .history-conversation-detail > td { padding: 14px 18px 20px; background: #f8faf8; }
 .history-conversation-detail table { background: white; border: 1px solid var(--line); border-radius: 12px; }
 .conversation-summary { display: flex; flex-wrap: wrap; gap: 18px; margin: 0 0 12px; color: var(--muted); font-size: 12px; }
+.history-more { display: flex; justify-content: center; margin-top: 14px; }
 
 .history-filters { display: grid; grid-template-columns: minmax(200px,1.4fr) minmax(230px,1.6fr) minmax(160px,1fr); gap: 18px 16px; padding: 20px; margin: 0 0 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); align-items: end; }
 .history-filters label, .history-key-field { display: grid; gap: 8px; min-width: 0; font-size: 13px; font-weight: 600; color: var(--muted); }

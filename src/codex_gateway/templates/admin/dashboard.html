@@ -7,8 +7,8 @@
   <link rel="stylesheet" href="/static/admin.css">
   <link rel="stylesheet" href="/static/admin-features.css">
   <script defer src="/static/admin.js"></script>
-<link rel="stylesheet" href="/static/modals.css"><script defer src="/static/modals.js"></script><link rel="stylesheet" href="/static/controls.css"><link rel="stylesheet" href="/static/worker-rate-limits.css"><script defer src="/static/worker-rate-limits.js"></script><link rel="stylesheet" href="/static/history.css"><script defer src="/static/history-filters.js"></script><script defer src="/static/local-time.js"></script></head>
-<body data-csrf-token="{{ csrf_token }}" class="{{ 'worker-page' if page == 'admin_workers' else '' }}">
+<link rel="stylesheet" href="/static/modals.css"><script defer src="/static/modals.js"></script><link rel="stylesheet" href="/static/controls.css"><link rel="stylesheet" href="/static/worker-rate-limits.css"><script defer src="/static/worker-rate-limits.js"></script><link rel="stylesheet" href="/static/history.css"><script defer src="/static/history.js"></script><script defer src="/static/history-filters.js"></script><script defer src="/static/local-time.js"></script></head>
+<body data-csrf-token="{{ csrf_token }}" class="admin-page {{ 'worker-page' if page == 'admin_workers' else '' }}">
   {% include "shared/sidebar.html" %}
 
   <main class="content">

@@ -87,15 +87,6 @@ document.querySelectorAll('[data-edit-key]').forEach(button => button.addEventLi
   form.elements.pinned_worker_id.value = button.dataset.pinnedWorkerId;
   dialog.showModal();
 }));
-document.querySelectorAll('[data-toggle-history]').forEach(button => button.addEventListener('click', () => {
-  const detail = document.getElementById(button.dataset.toggleHistory);
-  detail.hidden = !detail.hidden;
-  button.textContent = detail.hidden ? '详情' : '收起';
-}));
-document.querySelectorAll('tr[data-history-row]').forEach(row => row.addEventListener('click', event => {
-  if (event.target.closest('button, a, form')) return;
-  row.querySelector('[data-toggle-history]')?.click();
-}));
 document.querySelectorAll('[data-close-result]').forEach(button => button.addEventListener('click', () => {
   stopLoginPoll();
   resultDialog.close();

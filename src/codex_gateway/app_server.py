@@ -53,8 +53,10 @@ class AppServerSession:
         while True:
             raw = await asyncio.wait_for(self.websocket.recv(), self.timeout)
             message = json.loads(raw)
-            if message.get("id") != request_id:
-                if message.get("id") is not None and message.get("method"):
+            if message.get("method") or message.get("id") != request_id:
+                if message.get("id") is not None and message.get("method") == "item/tool/call":
+                    self.pending_notifications.append(message)
+                elif message.get("id") is not None and message.get("method"):
                     await self.reject_server_request(message)
                 elif message.get("method"):
                     self.pending_notifications.append(message)
@@ -66,8 +68,11 @@ class AppServerSession:
 
     async def reject_server_request(self, message: dict[str, Any]) -> None:
         method = message.get("method", "")
-        result = {"decision": "decline"} if "requestApproval" in method else {"error": "unsupported client request"}
-        await self.websocket.send(json.dumps({"id": message["id"], "result": result}))
+        if method in {"item/commandExecution/requestApproval", "item/fileChange/requestApproval", "execCommandApproval", "applyPatchApproval"}:
+            response = {"id":message["id"], "result":{"decision":"decline"}}
+        else:
+            response = {"id":message["id"], "error":{"code":-32601,"message":"Worker-side actions are disabled by the gateway"}}
+        await self.websocket.send(json.dumps(response))
 
     async def close(self) -> None:
         await self.websocket.close()
@@ -77,7 +82,7 @@ async def connect_app_server(url: str, token: str, timeout: float = 300.0) -> Ap
     websocket = await connect(url, additional_headers={"Authorization": f"Bearer {token}"}, open_timeout=15)
     session = AppServerSession(websocket, timeout)
     try:
-        await session.call("initialize", {"clientInfo": {"name": "codex_gateway", "title": "Codex Gateway", "version": "0.3.0"}})
+        await session.call("initialize", {"clientInfo": {"name": "codex_gateway", "title": "Codex Gateway", "version": "0.3.0"}, "capabilities": {"experimentalApi": True}})
         await session.notify("initialized")
     except Exception:
         await session.close()
@@ -185,7 +190,11 @@ class AppServerPool:
                     raise
             if not slot.session:
                 raise RuntimeError("app-server connection slot was not initialized")
-            yield slot.session, slot.slot_id
+            try:
+                yield slot.session, slot.slot_id
+            except BaseException:
+                await self.invalidate(group_key, slot.slot_id)
+                raise
         finally:
             async with self._condition:
                 if slot in self._slots:

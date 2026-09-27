@@ -29,6 +29,7 @@ from .models import ModelPrice, Base, ResponseBinding, UsageRecord, Worker, Work
 from .audit import RequestAuditMiddleware, current_audit, request_params as captured_params
 from .request_observation import request_observation
 from .conversations import correlate, durable_write
+from .client_tools import ToolProtocolError
 from .quota import reconcile_worker, enforce_quota
 from .contributions import account_monitor_loop, update_account
 from .migrations import upgrade, bootstrap_users
@@ -297,6 +298,11 @@ async def backend_error_handler(_: Request, exc: Exception) -> JSONResponse:
     return openai_error(502, "The Codex backend could not complete the request", "backend_error", "server_error")
 
 
+@app.exception_handler(ToolProtocolError)
+async def tool_protocol_error_handler(_: Request, exc: ToolProtocolError):
+    return openai_error(400, str(exc), "invalid_client_tool", param="tools")
+
+
 def get_backend(request: Request) -> CompletionBackend:
     return request.app.state.backend
 
@@ -307,7 +313,7 @@ def response_object(response_id: str, body: ResponseRequest, result: BackendResu
         "id": response_id, "object": "response", "created_at": created_at, "completed_at": created_at if status == "completed" else None,
         "status": status, "model": body.model,
         "previous_response_id": previous_response_id,
-        "output": [{"id": message_id or f"msg_{uuid4().hex}", "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": result.text, "annotations": []}]}],
+        "output": ([{"id": message_id or f"msg_{uuid4().hex}", "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": result.text, "annotations": []}]}] if result.text or not result.tool_calls else []) + result.tool_calls,
         "usage": {"input_tokens": result.input_tokens, "input_tokens_details": {"cached_tokens": 0}, "output_tokens": result.output_tokens, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": result.input_tokens + result.output_tokens},
         "metadata": body.metadata or {}, "error": None, "incomplete_details": None,
         "instructions": body.instructions, "max_output_tokens": body.max_output_tokens,
@@ -338,6 +344,9 @@ def chat_completion_object(completion_id: str, created: int, body: ChatCompletio
         "usage": {"prompt_tokens": result.input_tokens, "completion_tokens": result.output_tokens, "total_tokens": result.input_tokens + result.output_tokens},
         "system_fingerprint": None,
     }
+    if result.tool_calls:
+        payload["choices"][0]["message"]["tool_calls"] = [{"id":c["call_id"], "type":"function", "function":{"name":c["name"], "arguments":c["arguments"]}} for c in result.tool_calls]
+        payload["choices"][0]["finish_reason"] = "tool_calls"
     if body.service_tier:
         payload["service_tier"] = body.service_tier
     return payload
@@ -455,6 +464,9 @@ async def save_usage(
         cost = ((Decimal(result.input_tokens) * price.input_price + Decimal(result.output_tokens) * price.output_price) / Decimal(1_000_000)) if price and result else (Decimal(0) if price else None)
         record = UsageRecord(owner_username=principal.owner_username, request_params=request_params, request_observation=request_observation(audit), input_price=price.input_price if price else None, output_price=price.output_price if price else None, cost_usd=cost, request_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, model=model, status_code=status_code, input_tokens=result.input_tokens if result else 0, output_tokens=result.output_tokens if result else 0, duration_ms=int((time.monotonic() - started) * 1000), error_code=error_code, endpoint=endpoint, previous_response_id=previous_response_id, thread_id=thread_id or (result.thread_id if result else None))
         await correlate(session, record, result.text if result else None)
+        if result and result.tool_calls:
+            record.conversation_evidence["execution_outcome"] = "waiting_client_tool"
+            record.conversation_evidence["client_tool_call_ids"] = [c["call_id"] for c in result.tool_calls]
         session.add(record)
         if persist_binding and result and principal.key_id and result.thread_id and target.worker_id:
             now = utcnow()
@@ -471,8 +483,8 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
     created = {"id": response_id, "object": "response", "created_at": int(time.time()), "completed_at": None, "status": "in_progress", "model": body.model, "previous_response_id": public_previous_id, "output": [], "error": None, "incomplete_details": None, "instructions": body.instructions, "metadata": body.metadata or {}, "max_output_tokens": body.max_output_tokens, "parallel_tool_calls": body.parallel_tool_calls if body.parallel_tool_calls is not None else True, "reasoning": body.reasoning, "store": False, "temperature": body.temperature, "text": body.text or {"format": {"type": "text"}}, "tool_choice": body.tool_choice or "auto", "tools": body.tools or [], "top_p": body.top_p, "truncation": body.truncation or "disabled", "usage": None}
     yield sse({"type": "response.created", "sequence_number": sequence, "response": created}); sequence += 1
     yield sse({"type": "response.in_progress", "sequence_number": sequence, "response": created}); sequence += 1
-    yield sse({"type": "response.output_item.added", "sequence_number": sequence, "output_index": 0, "item": {"id": message_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []}}); sequence += 1
-    yield sse({"type": "response.content_part.added", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": "", "annotations": []}}); sequence += 1
+    message_started = False
+    tool_calls = []
     chunks: list[str] = []
     thread_id = ""
     input_tokens = output_tokens = 0
@@ -484,7 +496,13 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
                     thread_id = event.thread_id or thread_id
                     input_tokens = event.input_tokens or input_tokens
                     output_tokens = event.output_tokens or output_tokens
+                    if event.tool_call:
+                        tool_calls.append(event.tool_call)
                     if event.delta:
+                        if not message_started:
+                            yield sse({"type": "response.output_item.added", "sequence_number": sequence, "output_index": 0, "item": {"id": message_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []}}); sequence += 1
+                            yield sse({"type": "response.content_part.added", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": "", "annotations": []}}); sequence += 1
+                            message_started = True
                         chunks.append(event.delta)
                         yield sse({"type": "response.output_text.delta", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "delta": event.delta}); sequence += 1
                 break
@@ -515,13 +533,24 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
         yield sse({"type": "response.failed", "sequence_number": sequence, "response": failed})
         return
     text = "".join(chunks).rstrip()
-    result = BackendResult(text=text, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens)
+    result = BackendResult(text=text, tool_calls=tool_calls, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens)
     await save_usage(response_id, principal, target, body.model, 200, started, result, persist_binding=True, previous_response_id=public_previous_id, request_params=body.model_dump(mode="json"))
-    yield sse({"type": "response.output_text.done", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "text": text}); sequence += 1
-    part = {"type": "output_text", "text": text, "annotations": []}
-    yield sse({"type": "response.content_part.done", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "part": part}); sequence += 1
-    item = {"id": message_id, "type": "message", "status": "completed", "role": "assistant", "content": [part]}
-    yield sse({"type": "response.output_item.done", "sequence_number": sequence, "output_index": 0, "item": item}); sequence += 1
+    if message_started or not tool_calls:
+        if not message_started:
+            yield sse({"type": "response.output_item.added", "sequence_number": sequence, "output_index": 0, "item": {"id": message_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []}}); sequence += 1
+            yield sse({"type": "response.content_part.added", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": "", "annotations": []}}); sequence += 1
+        yield sse({"type": "response.output_text.done", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "text": text}); sequence += 1
+        part = {"type": "output_text", "text": text, "annotations": []}
+        yield sse({"type": "response.content_part.done", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "part": part}); sequence += 1
+        item = {"id": message_id, "type": "message", "status": "completed", "role": "assistant", "content": [part]}
+        yield sse({"type": "response.output_item.done", "sequence_number": sequence, "output_index": 0, "item": item}); sequence += 1
+    for index, call in enumerate(tool_calls, start=1 if message_started else 0):
+        argument_key = "arguments" if call["type"] == "function_call" else "input"
+        event_name = "response.function_call_arguments" if argument_key == "arguments" else "response.custom_tool_call_input"
+        yield sse({"type":"response.output_item.added", "sequence_number":sequence, "output_index":index, "item":{**call, "status":"in_progress", argument_key:""}}); sequence += 1
+        yield sse({"type":event_name+".delta", "sequence_number":sequence, "output_index":index, "item_id":call["id"], "delta":call[argument_key]}); sequence += 1
+        yield sse({"type":event_name+".done", "sequence_number":sequence, "output_index":index, "item_id":call["id"], argument_key:call[argument_key]}); sequence += 1
+        yield sse({"type":"response.output_item.done", "sequence_number":sequence, "output_index":index, "item":call}); sequence += 1
     yield sse({"type": "response.completed", "sequence_number": sequence, "response": response_object(response_id, body, result, message_id=message_id, previous_response_id=public_previous_id)})
 
 
@@ -544,6 +573,7 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
     thread_id = ""
     input_tokens = output_tokens = 0
     output_chunks = []
+    tool_calls = []
     content_emitted = False
     retried = False
     try:
@@ -553,6 +583,8 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
                     thread_id = event.thread_id or thread_id
                     input_tokens = event.input_tokens or input_tokens
                     output_tokens = event.output_tokens or output_tokens
+                    if event.tool_call:
+                        tool_calls.append(event.tool_call)
                     if event.delta:
                         output_chunks.append(event.delta)
                         content_emitted = True
@@ -573,9 +605,11 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
         yield chat_sse({"error": {"message": error_message, "type": "server_error", "code": error_code}})
         yield chat_sse("[DONE]")
         return
-    result = BackendResult(text="".join(output_chunks), thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens)
+    result = BackendResult(text="".join(output_chunks), tool_calls=tool_calls, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens)
     await save_usage(completion_id, principal, target, body.model, 200, started, result, request_params=body.model_dump(mode="json"))
-    yield chat_sse(chunk({}, "stop"))
+    for index, call in enumerate(tool_calls):
+        yield chat_sse(chunk({"tool_calls":[{"index":index,"id":call["call_id"],"type":"function","function":{"name":call["name"],"arguments":call["arguments"]}}]}))
+    yield chat_sse(chunk({}, "tool_calls" if tool_calls else "stop"))
     if body.stream_options and body.stream_options.include_usage:
         yield chat_sse(chunk({}, usage={"prompt_tokens": input_tokens, "completion_tokens": output_tokens, "total_tokens": input_tokens + output_tokens}))
     yield chat_sse("[DONE]")
@@ -639,7 +673,8 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
     if unsupported := body.unsupported():
         return openai_error(400, unsupported[1], "unsupported_parameter", param=unsupported[0])
     request = body.to_response_request()
-    target = await choose_target(principal, session)
+    pending_target = backend.continuation_target(request, principal.key_id) if hasattr(backend, "continuation_target") else None
+    target = pending_target or await choose_target(principal, session)
     await release_request_session(session)
     if body.stream:
         return StreamingResponse(chat_completion_stream(body, request, backend, principal, target, principal.pinned_worker_id is None), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -680,7 +715,10 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
             return openai_error(404, "previous_response_id has expired or is no longer available", "previous_response_not_found", param="previous_response_id")
         await touch_response_thread(session, binding)
         body = body.model_copy(update={"previous_response_id": binding.thread_id})
-    target = await choose_target(principal, session, binding)
+    pending_target = backend.continuation_target(body, principal.key_id) if hasattr(backend, "continuation_target") else None
+    if pending_target and binding and pending_target.worker_id != binding.worker_id:
+        return openai_error(400, "Tool output and previous_response_id refer to different Workers", "invalid_client_tool")
+    target = pending_target or await choose_target(principal, session, binding)
     await release_request_session(session)
     if body.stream:
         return StreamingResponse(response_stream(body, backend, principal, target, public_previous_id, binding is None and principal.pinned_worker_id is None), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

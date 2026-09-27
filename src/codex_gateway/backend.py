@@ -7,6 +7,9 @@ from uuid import UUID, uuid4
 
 from .app_server import AppServerCapacityError, AppServerError, AppServerPool
 from .config import Settings
+from .worker_policy import thread_policy, turn_policy
+from .client_tools import definitions, dynamic_specs, public_call, tool_outputs, ToolProtocolError
+from .tool_sessions import ToolSessions
 from .schemas import BackendResult, BackendStreamEvent, ResponseRequest
 
 
@@ -42,7 +45,7 @@ async def run_healthcheck_turn(app_server: Any, model: str, cwd: str = "/workspa
     """Run a minimal real turn; account/read alone cannot detect exhausted quota."""
     result = await app_server.call(
         "thread/start",
-        {"model": model, "cwd": cwd, "approvalPolicy": "never", "sandbox": "workspace-write", "serviceName": "codex_gateway_healthcheck"},
+        {"model": model, "cwd": cwd, "serviceName": "codex_gateway_healthcheck", **thread_policy()},
     )
     thread_id = result["thread"]["id"]
     await app_server.call(
@@ -51,8 +54,7 @@ async def run_healthcheck_turn(app_server: Any, model: str, cwd: str = "/workspa
             "threadId": thread_id,
             "input": [{"type": "text", "text": "Reply with OK only."}],
             "cwd": cwd,
-            "approvalPolicy": "never",
-            "sandboxPolicy": {"type": "workspaceWrite", "writableRoots": [cwd], "networkAccess": False},
+            **turn_policy(),
             "model": model,
             "effort": "low",
         },
@@ -114,6 +116,7 @@ class AppServerBackend:
             idle_ttl=settings.ws_idle_ttl_seconds,
             acquire_timeout=settings.ws_acquire_timeout_seconds,
         )
+        self.tool_sessions = ToolSessions(self._turn_events)
         self._thread_locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self._thread_locks_guard = asyncio.Lock()
 
@@ -146,14 +149,25 @@ class AppServerBackend:
     async def _start_thread(self, app_server, request: ResponseRequest, workspace: str) -> str:
         if request.previous_response_id:
             try:
-                result = await app_server.call("thread/resume", {"threadId": request.previous_response_id})
+                result = await app_server.call("thread/resume", {"threadId": request.previous_response_id, **thread_policy()})
             except AppServerError as exc:
                 raise WorkerFailure("The previous response session can no longer be resumed", kind="session", safe_to_retry=False) from exc
         else:
-            result = await app_server.call("thread/start", {"model": self.model(request.model), "cwd": workspace, "approvalPolicy": "never", "sandbox": "workspace-write", "serviceName": "codex_gateway"})
+            result = await app_server.call("thread/start", {"model": self.model(request.model), "cwd": workspace, "serviceName": "codex_gateway", **thread_policy(), "dynamicTools": dynamic_specs(definitions(request)) if request.tool_choice != "none" else []})
         return result["thread"]["id"]
 
-    async def _turn(self, request: ResponseRequest, target: BackendTarget) -> AsyncIterator[BackendStreamEvent]:
+    def continuation_target(self, request, key):
+        return self.tool_sessions.target_for(request, key)
+
+    async def _turn(self, request, target):
+        if definitions(request) or tool_outputs(request):
+            async for event in self.tool_sessions.stream(request, target):
+                yield event
+        else:
+            async for event in self._turn_events(request, target):
+                yield event
+
+    async def _turn_events(self, request: ResponseRequest, target: BackendTarget, tool_run=None) -> AsyncIterator[BackendStreamEvent]:
         worker_key = str(target.worker_id or target.endpoint)
         slot_id: int | None = None
         async with self._thread_guard(request.previous_response_id):
@@ -167,8 +181,7 @@ class AppServerBackend:
                     thread_id = await self._start_thread(app_server, request, workspace)
                     turn_params = {
                         "threadId": thread_id, "input": [{"type": "text", "text": request.input_text()}],
-                        "cwd": workspace, "approvalPolicy": "never",
-                        "sandboxPolicy": {"type": "workspaceWrite", "writableRoots": [workspace], "networkAccess": False},
+                        "cwd": workspace, **turn_policy(),
                         "model": self.model(request.model),
                     }
                     effort = (request.reasoning or {}).get("effort")
@@ -181,7 +194,16 @@ class AppServerBackend:
                     input_tokens = output_tokens = 0
                     async for message in app_server.messages():
                         method, params = message.get("method"), message.get("params", {})
-                        if message.get("id") is not None and method:
+                        if message.get("id") is not None and method == "item/tool/call":
+                            if tool_run is None:
+                                raise WorkerFailure("Unexpected client tool request", kind="request")
+                            call = public_call(definitions(request), params)
+                            await self.tool_sessions.await_result(tool_run, call)
+                            yield BackendStreamEvent(tool_call=call, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens)
+                            output = await self.tool_sessions.receive_result(tool_run)
+                            import json
+                            await app_server.websocket.send(json.dumps({"id": message["id"], "result": {"contentItems": [{"type": "inputText", "text": output}], "success": True}}))
+                        elif message.get("id") is not None and method:
                             await app_server.reject_server_request(message)
                         elif method == "item/agentMessage/delta":
                             yield BackendStreamEvent(delta=params.get("delta", ""), thread_id=thread_id)
@@ -195,6 +217,12 @@ class AppServerBackend:
                                 raise WorkerFailure(message, kind=classify_worker_failure(message), safe_to_retry=False)
                             yield BackendStreamEvent(thread_id=thread_id, done=True, input_tokens=input_tokens, output_tokens=output_tokens)
                             return
+            except asyncio.CancelledError:
+                if slot_id is not None:
+                    await self.pool.invalidate(target.connection_key, slot_id)
+                raise
+            except ToolProtocolError as exc:
+                raise WorkerFailure(str(exc), kind="request", safe_to_retry=False) from exc
             except WorkerFailure:
                 raise
             except AppServerCapacityError as exc:
@@ -209,15 +237,19 @@ class AppServerBackend:
     async def complete(self, request: ResponseRequest, target: BackendTarget) -> BackendResult:
         chunks: list[str] = []
         terminal = BackendStreamEvent()
+        calls = []
         async for event in self._turn(request, target):
             terminal = event
+            if event.tool_call:
+                calls.append(event.tool_call)
             if event.delta:
                 chunks.append(event.delta)
-        return BackendResult(text="".join(chunks), thread_id=terminal.thread_id or "", input_tokens=terminal.input_tokens, output_tokens=terminal.output_tokens)
+        return BackendResult(text="".join(chunks), tool_calls=calls, thread_id=terminal.thread_id or "", input_tokens=terminal.input_tokens, output_tokens=terminal.output_tokens)
 
     async def stream(self, request: ResponseRequest, target: BackendTarget) -> AsyncIterator[BackendStreamEvent]:
         async for event in self._turn(request, target):
             yield event
 
     async def close(self) -> None:
+        await self.tool_sessions.close()
         await self.pool.close()

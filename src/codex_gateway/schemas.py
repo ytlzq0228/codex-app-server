@@ -111,6 +111,8 @@ class ResponseRequest(OpenAIRequestModel):
         item_type = item.get("type")
         if item_type in {"input_image", "input_file", "computer_screenshot", "item_reference"}:
             return True
+        if item_type not in {None, "message", "additional_tools", "input_text", "output_text", "text", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output"}:
+            return True
         content = item.get("content")
         if isinstance(content, list):
             for part in content:
@@ -119,6 +121,11 @@ class ResponseRequest(OpenAIRequestModel):
         return False
 
     def unsupported(self) -> tuple[str, str] | None:
+        from .client_tools import validate, ToolProtocolError
+        try:
+            validate(self)
+        except ToolProtocolError as exc:
+            return "tools", str(exc)
         items = self.input if isinstance(self.input, list) else [self.input]
         if any(self._item_is_unsupported(item) for item in items):
             return "input", "This input item type is not supported by the text gateway"
@@ -242,16 +249,38 @@ class ChatCompletionRequest(OpenAIRequestModel):
             return "logprobs", "Token log probabilities are not supported by this Codex gateway"
         if self.prediction is not None:
             return "prediction", "Predicted output is not supported by this Codex gateway"
-        if any(message.tool_calls or message.function_call for message in self.messages):
-            return "messages", "Tool-call messages are not supported"
+        if self.functions or any(message.function_call for message in self.messages):
+            return "functions", "Legacy function_call format is unsupported; use tools/tool_calls"
+        from .client_tools import FORBIDDEN, ToolProtocolError, validate
+        if any((self.model_extra or {}).get(k) is not None for k in FORBIDDEN):
+            return "config", "Client overrides of Worker security policy are forbidden"
+        try:
+            validate(self.to_response_request())
+        except (ToolProtocolError, ValueError, TypeError, KeyError) as exc:
+            return "tools", str(exc)
         if any(message.has_non_text_content() for message in self.messages):
             return "messages", "Only text message content is supported"
         return None
 
     def to_response_request(self) -> ResponseRequest:
-        text = "\n\n".join(f"{message.role.upper()}:\n{message.text()}" for message in self.messages if message.text())
+        items = []
+        for message in self.messages:
+            if message.role == "tool":
+                items.append({"type":"function_call_output", "call_id":message.tool_call_id, "output":message.text()})
+            else:
+                if message.text():
+                    items.append({"role":message.role, "content":message.text()})
+                for call in message.tool_calls or []:
+                    if call.get("type") != "function":
+                        raise ValueError("Only function tool_calls are supported in Chat Completions")
+                    items.append({"type":"function_call", "call_id":call["id"], "name":call["function"]["name"], "arguments":call["function"]["arguments"]})
+        tools = []
+        for tool in self.tools or []:
+            if tool.get("type") != "function" or not isinstance(tool.get("function"), dict):
+                raise ValueError("Chat Completions supports only function tools")
+            tools.append({**tool["function"], "type":"function"})
         return ResponseRequest(
-            model=self.model, input=text, stream=self.stream,
+            model=self.model, input=items, stream=self.stream, tools=tools, tool_choice=self.tool_choice,
             max_output_tokens=self.max_completion_tokens or self.max_tokens,
             temperature=self.temperature, top_p=self.top_p, metadata=self.metadata,
             store=self.store, reasoning={"effort": self.reasoning_effort} if self.reasoning_effort else None,
@@ -263,12 +292,14 @@ class ChatCompletionRequest(OpenAIRequestModel):
 
 class BackendResult(BaseModel):
     text: str
+    tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     thread_id: str
     input_tokens: int = 0
     output_tokens: int = 0
 
 
 class BackendStreamEvent(BaseModel):
+    tool_call: dict[str, Any] | None = None
     delta: str = ""
     thread_id: str | None = None
     done: bool = False

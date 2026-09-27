@@ -65,7 +65,7 @@ async def conversation_history(db, *, owner=None, page=1, page_size=30, filters=
             'active_url': history_link(conversation_id, usage.api_key_id, usage.endpoint or 'unknown').replace('/admin/history?', '/admin/sessions?'), 'endpoint': usage.endpoint or 'unknown',
             'key_name': key_name or '已删除', 'latest_at': latest_at, 'requests': [],
             'input_tokens': 0, 'output_tokens': 0, 'duration_ms': 0,
-            'cost_usd': Decimal(0), 'unpriced': False,
+            'cost_usd': Decimal(0), 'unpriced_count': 0,
         })
         group['requests'].append({'usage': usage, 'worker_name': worker_name or '—', 'thread_id': worker_thread})
         if worker_thread and worker_thread not in group['thread_ids']:
@@ -74,7 +74,7 @@ async def conversation_history(db, *, owner=None, page=1, page_size=30, filters=
             group[field] += getattr(usage, field)
         group.setdefault('latest_status', usage.status_code)
         group['cost_usd'] += usage.cost_usd or Decimal(0)
-        group['unpriced'] |= usage.cost_usd is None
+        group['unpriced_count'] += int(usage.cost_usd is None)
     return {'groups': list(groups.values()), 'total': total, 'request_total': request_total,
             'page': page, 'pages': pages}
 

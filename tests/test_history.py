@@ -50,6 +50,7 @@ def test_conversation_pagination_latest_status_filters_and_owner_scope():
             recovered=next(g for g in groups if g['thread_id']=='recovered' and len(g['requests'])==2)
             assert recovered['latest_status']==200
             assert recovered['input_tokens']==20 and recovered['cost_usd']==Decimal('0.2')
+            assert recovered['unpriced_count']==0
             assert [r['usage'].status_code for r in recovered['requests']]==[200,502]
             assert next(g for g in groups if g['thread_id']=='tie')['latest_status']==504
             assert groups[0]['thread_id']=='legacy-thread'
@@ -77,6 +78,8 @@ def test_conversation_pagination_latest_status_filters_and_owner_scope():
             top=re.search(r'<tr class="history-row".*?</tr>',response.text,re.S)[0]
             assert 'badge-ok' in top and '>200</span>' in top and '502' not in top
             assert prefix+'-old' in response.text and prefix+'-new' in response.text
+            assert '总价格（USD）' in response.text and '价格（USD）' in response.text
+            assert '0.200000000000' in response.text and response.text.count('0.100000000000') >= 2
             assert prefix+'-other-owner' not in response.text
             assert client.get('/user/usage/'+prefix+'-other-owner').status_code==404
             assert '共 0 个会话' in client.get('/user/usage',params={'q':prefix+'-old','status':'error'}).text
@@ -91,6 +94,7 @@ def test_conversation_pagination_latest_status_filters_and_owner_scope():
         assert admin.status_code==200,admin.text
         assert '含失败请求' not in admin.text
         assert '最近请求状态' in admin.text
+        assert '总价格（USD）' in admin.text and '价格（USD）' in admin.text
         assert '<body data-csrf-token=' in admin.text and 'class="admin-page ' in admin.text
         assert 'class="admin-page ' in client.get('/admin/users').text
 

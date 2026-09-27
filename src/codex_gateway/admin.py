@@ -170,7 +170,7 @@ async def render_admin_page(request: Request, page: str, history_page: int, admi
     return templates(request).TemplateResponse(
         request,
         "admin/dashboard.html",
-        {"users": (await session.scalars(select(User).order_by(User.username))).all(), "page": page, "history_keys": history_keys, "keys": keys, "workers": workers, "history_groups": history_groups, "history_page": history_page, "history_pages": history_pages, "history_total": history_total, "history_session_total": history_session_total, "active_sessions": active_sessions, "sessions_by_key": sessions_by_key, "stats": stats, "csrf_token": admin.csrf_token},
+        {"users": (await session.scalars(select(User).order_by(User.username))).all(), "page": page, "history_keys": history_keys, "keys": keys, "workers": workers, "history_groups": history_groups, "history_page": history_page, "history_pages": history_pages, "history_total": history_total, "history_session_total": history_session_total, "active_sessions": active_sessions, "sessions_by_key": sessions_by_key, "stats": stats, "csrf_token": admin.csrf_token, "show_cost": page == "history"},
     )
 
 

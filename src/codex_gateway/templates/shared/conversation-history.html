@@ -1,6 +1,6 @@
 <div class="table-wrap">
   <table>
-    <thead><tr><th>最近请求</th><th>逻辑会话 ID</th><th>Key</th><th>接口</th><th>请求数</th><th>最近请求状态</th><th>总 Token</th><th></th></tr></thead>
+    <thead><tr><th>最近请求</th><th>逻辑会话 ID</th><th>Key</th><th>接口</th><th>请求数</th><th>最近请求状态</th><th>总 Token</th>{% if show_cost %}<th>总价格（USD）</th>{% endif %}<th></th></tr></thead>
     <tbody>
       {% for group in history_groups %}
       <tr class="history-row" data-history-row="history-group-{{ loop.index }}">
@@ -11,20 +11,21 @@
         <td>{{ group.requests|length }}</td>
         <td><span class="badge {{ 'badge-error' if group.latest_status >= 400 and group.latest_status != 499 else 'badge-ok' }}">{{ group.latest_status }}</span></td>
         <td>{{ group.input_tokens + group.output_tokens }}</td>
+        {% if show_cost %}<td>{{ group.cost_usd }}{% if group.unpriced_count %}<small>另有 {{ group.unpriced_count }} 条未定价</small>{% endif %}</td>{% endif %}
         <td><button type="button" class="button button-small" data-toggle-history="history-group-{{ loop.index }}">展开</button></td>
       </tr>
       <tr id="history-group-{{ loop.index }}" class="history-detail history-conversation-detail" hidden>
-        <td colspan="8">
+        <td colspan="{{ 9 if show_cost else 8 }}">
           <div class="conversation-summary">
             <span>Worker Thread：{% for thread_id in group.thread_ids %}<code>{{ thread_id }}</code>{{ " / " if not loop.last else "" }}{% else %}未记录{% endfor %}</span>
             <span>输入 {{ group.input_tokens }} Token</span>
             <span>输出 {{ group.output_tokens }} Token</span>
             <span>累计耗时 {{ group.duration_ms }} ms</span>
-            {% if show_cost %}<span>USD：{{ group.cost_usd }}{{ "（含未定价请求）" if group.unpriced else "" }}</span>{% endif %}
+            {% if show_cost %}<span>总价格 USD：{{ group.cost_usd }}{% if group.unpriced_count %}（另有 {{ group.unpriced_count }} 条未定价）{% endif %}</span>{% endif %}
           </div>
           <div class="table-wrap">
             <table>
-              <thead><tr><th>时间</th><th>请求 ID</th><th>Previous Response</th><th>Worker</th><th>模型</th><th>状态</th><th>Token</th><th>耗时</th>{% if show_cost %}<th>USD</th>{% endif %}</tr></thead>
+              <thead><tr><th>时间</th><th>请求 ID</th><th>Previous Response</th><th>Worker</th><th>模型</th><th>状态</th><th>Token</th><th>耗时</th>{% if show_cost %}<th>价格（USD）</th>{% endif %}</tr></thead>
               <tbody>
                 {% for item in group.requests %}{% set usage = item.usage %}
                 <tr data-history-request{% if loop.index > 20 %} hidden{% endif %}>
@@ -46,7 +47,7 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="8" class="empty">暂无请求历史</td></tr>
+      <tr><td colspan="{{ 9 if show_cost else 8 }}" class="empty">暂无请求历史</td></tr>
       {% endfor %}
     </tbody>
   </table>

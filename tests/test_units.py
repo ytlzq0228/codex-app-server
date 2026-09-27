@@ -141,6 +141,38 @@ async def test_safe_failure_retries_once_on_another_worker(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(("probe_ok", "expected"), [(True, False), (False, True)])
+async def test_worker_quarantine_uses_inference_probe_as_final_verdict(monkeypatch, probe_ok, expected) -> None:
+    worker_id = uuid4()
+    worker = type("WorkerRecord", (), {"failure_kind": None, "failure_reason": None})()
+    calls = []
+
+    class FakeSession:
+        async def scalar(self, _query):
+            return worker
+
+    class FakeSessionContext:
+        async def __aenter__(self):
+            return FakeSession()
+
+        async def __aexit__(self, *_args):
+            return None
+
+    async def fake_probe(probed_worker, _session, _settings):
+        calls.append(probed_worker)
+        if not probe_ok:
+            probed_worker.failure_kind = "connection"
+            probed_worker.failure_reason = "health check failed"
+        return {"ok": probe_ok}
+
+    monkeypatch.setattr(main_module, "SessionLocal", FakeSessionContext)
+    monkeypatch.setattr(main_module, "probe_worker_record", fake_probe)
+
+    assert await main_module.quarantine_worker(worker_id, "request stream failed", "connection") is expected
+    assert calls == [worker]
+
+
+@pytest.mark.asyncio
 async def test_ambiguous_started_turn_is_never_replayed(monkeypatch) -> None:
     worker_id = uuid4()
     target = BackendTarget("first", "ws://first", "/workspace/key", worker_id)

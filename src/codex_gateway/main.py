@@ -20,7 +20,7 @@ from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .admin import auth_router as admin_auth_router
-from .admin import router as admin_router
+from .admin import probe_worker_record, router as admin_router
 from .admin import user_router as admin_user_router
 from .auth import ApiPrincipal, require_api_key
 from .app_server import open_app_server
@@ -163,22 +163,25 @@ async def invalidate_response_thread(api_key_id, thread_id: str, reason: str) ->
         await session.commit()
 
 
-async def quarantine_worker(worker_id, reason: str, kind: str = "connection") -> None:
+async def quarantine_worker(worker_id, reason: str, kind: str = "connection") -> bool:
+    """Confirm a suspected failure with the same inference probe used by Worker 管理."""
     settings = get_settings()
-    cooldown = settings.worker_limit_cooldown_seconds if kind == "limit" else settings.worker_failure_cooldown_seconds
     async with SessionLocal() as session:
-        worker = await session.scalar(select(Worker).where(Worker.id == worker_id).with_for_update().execution_options(populate_existing=True))
+        worker = await session.scalar(select(Worker).where(Worker.id == worker_id).execution_options(populate_existing=True))
         if not worker:
-            return
-        worker.status = WorkerStatus.error
-        worker.failure_kind = kind
-        worker.failure_reason = reason[:500]
-        worker.quarantined_at = utcnow()
-        worker.retry_after = utcnow() + timedelta(seconds=cooldown)
-        if kind == "logged_out":
-            await update_account(worker, None)
-        await reconcile_worker(session, worker)
-        await session.commit()
+            return False
+        result = await probe_worker_record(worker, session, settings)
+        if result["ok"]:
+            logger.warning(
+                "Worker failure rejected by inference probe: worker_id=%s reported_kind=%s reported_reason=%s",
+                worker_id, kind, reason,
+            )
+            return False
+        logger.warning(
+            "Worker failure confirmed by inference probe: worker_id=%s reported_kind=%s reported_reason=%s final_kind=%s final_reason=%s",
+            worker_id, kind, reason, worker.failure_kind, worker.failure_reason,
+        )
+        return True
 
 
 async def recover_worker(worker: Worker) -> bool:

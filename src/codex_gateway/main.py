@@ -30,6 +30,7 @@ from .audit import RequestAuditMiddleware, current_audit, request_params as capt
 from .request_observation import request_observation
 from .conversations import correlate, durable_write
 from .client_tools import ToolProtocolError
+from .grammar_tools import validate_grammars
 from .quota import reconcile_worker, enforce_quota
 from .contributions import account_monitor_loop, update_account
 from .migrations import upgrade, bootstrap_users
@@ -89,7 +90,11 @@ async def lifespan(app: FastAPI):
     app.state.backend = MockBackend() if settings.backend == "mock" else AppServerBackend(settings)
     recovery_task = asyncio.create_task(worker_recovery_loop(), name="worker-recovery")
     contribution_task = asyncio.create_task(account_monitor_loop(), name="worker-contributions") if settings.backend != "mock" else None
+    from .monitoring import monitoring_loop
+    monitoring_task = asyncio.create_task(monitoring_loop(), name="monitoring-snapshots")
     yield
+    monitoring_task.cancel()
+    await asyncio.gather(monitoring_task, return_exceptions=True)
     if contribution_task:
         contribution_task.cancel()
         await asyncio.gather(contribution_task, return_exceptions=True)
@@ -410,7 +415,7 @@ async def complete_with_failover(body: ResponseRequest, backend: CompletionBacke
         return await backend.complete(body, target), target
     except WorkerFailure as exc:
         if exc.kind == "request":
-            raise HTTPException(400, detail={"error": {"message": worker_failure_message(exc), "type": "invalid_request_error", "code": "invalid_request", "param": "model"}}) from exc
+            raise HTTPException(400, detail={"error": {"message": worker_failure_message(exc), "type": "invalid_request_error", "code": "invalid_client_tool" if isinstance(exc.__cause__, ToolProtocolError) else "invalid_request", "param": "tools" if isinstance(exc.__cause__, ToolProtocolError) else "model"}}) from exc
         if exc.kind == "session":
             raise HTTPException(404, detail={"error": {"message": "The previous response session is no longer available", "type": "invalid_request_error", "code": "previous_response_not_found", "param": "previous_response_id"}}) from exc
         if exc.kind == "capacity":
@@ -517,6 +522,7 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
                 retried = True
     except Exception as exc:
         session_failure = isinstance(exc, WorkerFailure) and exc.kind == "session"
+        tool_failure = isinstance(exc, WorkerFailure) and isinstance(exc.__cause__, ToolProtocolError)
         capacity_failure = isinstance(exc, WorkerFailure) and exc.kind == "capacity"
         if session_failure and principal.key_id and public_previous_id:
             async with SessionLocal() as session:
@@ -524,10 +530,10 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
                 if previous:
                     await invalidate_response_thread(previous.api_key_id, previous.thread_id, str(exc))
         error = {
-            "code": "previous_response_not_found" if session_failure else "worker_capacity_exceeded" if capacity_failure else "backend_error",
-            "message": "The previous response session is no longer available" if session_failure else "Timed out waiting for an available Codex worker connection" if capacity_failure else "The Codex backend could not complete the request",
+            "code": "invalid_client_tool" if tool_failure else "previous_response_not_found" if session_failure else "worker_capacity_exceeded" if capacity_failure else "backend_error",
+            "message": str(exc) if tool_failure else "The previous response session is no longer available" if session_failure else "Timed out waiting for an available Codex worker connection" if capacity_failure else "The Codex backend could not complete the request",
         }
-        await save_usage(response_id, principal, target, body.model, 404 if session_failure else 503 if capacity_failure else 502, started, error_code=error["code"], previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))
+        await save_usage(response_id, principal, target, body.model, 400 if tool_failure else 404 if session_failure else 503 if capacity_failure else 502, started, error_code=error["code"], previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))
         yield sse({"type": "error", "sequence_number": sequence, **error, "param": None}); sequence += 1
         failed = {**created, "status": "failed", "error": error}
         yield sse({"type": "response.failed", "sequence_number": sequence, "response": failed})
@@ -598,11 +604,12 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
                 target = await retry_target(principal, target)
                 retried = True
     except Exception as exc:
+        tool_failure = isinstance(exc, WorkerFailure) and isinstance(exc.__cause__, ToolProtocolError)
         capacity_failure = isinstance(exc, WorkerFailure) and exc.kind == "capacity"
-        error_code = "worker_capacity_exceeded" if capacity_failure else "backend_error"
-        error_message = "Timed out waiting for an available Codex worker connection" if capacity_failure else "The Codex backend could not complete the request"
-        await save_usage(completion_id, principal, target, body.model, 503 if capacity_failure else 502, started, error_code=error_code, request_params=body.model_dump(mode="json"))
-        yield chat_sse({"error": {"message": error_message, "type": "server_error", "code": error_code}})
+        error_code = "invalid_client_tool" if tool_failure else "worker_capacity_exceeded" if capacity_failure else "backend_error"
+        error_message = str(exc) if tool_failure else "Timed out waiting for an available Codex worker connection" if capacity_failure else "The Codex backend could not complete the request"
+        await save_usage(completion_id, principal, target, body.model, 400 if tool_failure else 503 if capacity_failure else 502, started, error_code=error_code, request_params=body.model_dump(mode="json"))
+        yield chat_sse({"error": {"message": error_message, "type": "invalid_request_error" if tool_failure else "server_error", "code": error_code}})
         yield chat_sse("[DONE]")
         return
     result = BackendResult(text="".join(output_chunks), tool_calls=tool_calls, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens)
@@ -673,6 +680,7 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
     if unsupported := body.unsupported():
         return openai_error(400, unsupported[1], "unsupported_parameter", param=unsupported[0])
     request = body.to_response_request()
+    await validate_grammars(request)
     pending_target = backend.continuation_target(request, principal.key_id) if hasattr(backend, "continuation_target") else None
     target = pending_target or await choose_target(principal, session)
     await release_request_session(session)
@@ -699,6 +707,7 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
         return openai_error(400, f"Model '{body.model}' is not available", "model_not_found", param="model")
     if unsupported := body.unsupported():
         return openai_error(400, unsupported[1], "unsupported_parameter", param=unsupported[0])
+    await validate_grammars(body)
     public_previous_id = body.previous_response_id
     binding = None
     if public_previous_id:

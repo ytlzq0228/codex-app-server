@@ -60,6 +60,16 @@ class SubscriptionPlan(Base):
     __tablename__ = "subscription_plans"
     name: Mapped[str] = mapped_column(String(120), primary_key=True)
     monthly_price: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    weight: Mapped[float] = mapped_column(Numeric(18, 6), default=1, server_default="1")
+
+class MetricSnapshot(Base):
+    """Versioned aggregate observations; source events remain in their own tables."""
+    __tablename__ = "metric_snapshots"
+    metric: Mapped[str] = mapped_column(String(80), primary_key=True)
+    bucket_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    payload: Mapped[dict] = mapped_column(JSON)
+
 
 class SubscriptionCost(Base):
     __tablename__ = "subscription_costs"

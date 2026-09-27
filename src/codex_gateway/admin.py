@@ -120,6 +120,14 @@ def manager_delete_succeeded(status_code: int) -> bool:
 
 
 async def render_admin_page(request: Request, page: str, history_page: int, admin: AdminSession, session: AsyncSession):
+    if page == "overview":
+        stats = {
+            "requests": await session.scalar(select(func.count()).select_from(UsageRecord)) or 0,
+            "input_tokens": await session.scalar(select(func.coalesce(func.sum(UsageRecord.input_tokens), 0))) or 0,
+            "output_tokens": await session.scalar(select(func.coalesce(func.sum(UsageRecord.output_tokens), 0))) or 0,
+        }
+        return templates(request).TemplateResponse(request, "admin/dashboard.html",
+            {"page": page, "stats": stats, "csrf_token": admin.csrf_token})
     history_page = max(history_page, 1)
     history_page_size = 30
     keys = (await session.scalars(select(ApiKey).where(ApiKey.deleted_at.is_(None)).order_by(ApiKey.created_at.desc()))).all()
@@ -218,6 +226,14 @@ async def render_admin_page(request: Request, page: str, history_page: int, admi
 @router.get("", response_class=HTMLResponse)
 async def dashboard(request: Request, admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     return await render_admin_page(request, "overview", 1, admin, session)
+
+
+@router.get("/monitoring")
+async def overview_monitoring(days: int = 7, admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    if days not in (1, 7, 30, 90):
+        raise HTTPException(400, "历史范围应为 1、7、30 或 90 天")
+    from .monitoring import monitoring_data
+    return JSONResponse(await monitoring_data(session, days), headers={"Cache-Control": "no-store"})
 
 
 @router.get("/api-keys", response_class=HTMLResponse)

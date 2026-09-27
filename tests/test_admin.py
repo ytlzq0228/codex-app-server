@@ -65,7 +65,8 @@ def test_admin_navigation_uses_four_isolated_pages() -> None:
         sessions = client.get("/admin/sessions").text
         history = client.get("/admin/history").text
 
-        assert 'id="overview"' in overview and 'id="workers"' in overview and 'id="keys"' in overview
+        assert 'id="overview"' in overview and 'id="monitoring"' in overview
+        assert 'id="workers"' not in overview and 'id="keys"' not in overview
         assert 'id="sessions"' not in overview and 'id="history"' not in overview
         assert 'id="keys"' in keys and 'id="workers"' not in keys and 'id="overview"' not in keys
         assert 'id="workers"' in workers and 'id="keys"' not in workers and 'Worker 管理' in workers
@@ -133,7 +134,7 @@ def test_key_can_be_edited_and_soft_deleted_without_losing_history() -> None:
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
         assert edited.status_code == 200
-        assert renamed in client.get("/admin").text
+        assert renamed in client.get("/admin/api-keys").text
 
         assert client.get("/v1/models", headers={"Authorization": f"Bearer {raw_key}"}).status_code == 200
         api_response = client.post("/v1/responses", headers={"Authorization": f"Bearer {raw_key}"}, json={"model": "gpt-6-sol", "input": "history retention test"})

@@ -21,8 +21,8 @@ def test_namespace_alias_and_strict_unsupported_formats():
     assert json.loads(call['arguments'])=={'query':'dns'}
     assert r.input_text()=='USER:\nhello'
     r.tools=[{'type':'custom','name':'exec','format':{'type':'grammar','syntax':'lark','definition':'start: /.+/'}}]
-    assert r.unsupported()[0]=='tools'
-    assert 'grammar' in r.unsupported()[1]
+    assert r.unsupported() is None
+    assert definitions(r)[0]['grammar']['syntax']=='lark'
     r.tools=[{'type':'local_shell','name':'shell'}]
     assert r.unsupported()
 

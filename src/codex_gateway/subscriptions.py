@@ -21,7 +21,7 @@ async def subscription_summary(db):
     for name in sorted({normalize_plan(w.plan_type) for w in workers} - {''}):
         await remember_plan(db, name)
     plans = (await db.scalars(select(SubscriptionPlan).order_by(SubscriptionPlan.name))).all()
-    rows = {p.name: dict(name=p.name, price=p.monthly_price, count=0, subtotal=Decimal(0)) for p in plans}
+    rows = {p.name: dict(name=p.name, price=p.monthly_price, weight=p.weight, count=0, subtotal=Decimal(0)) for p in plans}
     unknown = 0
     for worker in workers:
         if worker.endpoint == 'removed://worker' or not worker.auth_mode or worker.failure_kind == 'logged_out':

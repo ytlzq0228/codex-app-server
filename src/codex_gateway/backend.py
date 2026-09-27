@@ -1,4 +1,5 @@
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from .config import Settings
 from .worker_policy import thread_policy, turn_policy
 from .client_tools import definitions, dynamic_specs, public_call, tool_outputs, ToolProtocolError
 from .tool_sessions import ToolSessions
+from .grammar_tools import call_matches_grammar
 from .schemas import BackendResult, BackendStreamEvent, ResponseRequest
 
 
@@ -192,16 +194,29 @@ class AppServerBackend:
                     turn_may_have_started = True
                     await app_server.call("turn/start", turn_params)
                     input_tokens = output_tokens = 0
+                    grammar_failures = 0
+                    grammar_needs_correction = False
+                    specs = definitions(request)
                     async for message in app_server.messages():
                         method, params = message.get("method"), message.get("params", {})
                         if message.get("id") is not None and method == "item/tool/call":
                             if tool_run is None:
                                 raise WorkerFailure("Unexpected client tool request", kind="request")
-                            call = public_call(definitions(request), params)
+                            call = public_call(specs, params)
+                            if not await call_matches_grammar(specs, params, call):
+                                grammar_failures += 1
+                                grammar_needs_correction = True
+                                if grammar_failures > 2:
+                                    raise ToolProtocolError("Model tool input did not match the client grammar after two corrections")
+                                await app_server.websocket.send(json.dumps({"id": message["id"], "result": {
+                                    "contentItems": [{"type": "inputText", "text": "Tool was NOT executed. Your input did not fully match its declared grammar. Call the tool again with a corrected input string matching the grammar in the tool description; do not add Markdown fences."}],
+                                    "success": False,
+                                }}))
+                                continue
+                            grammar_needs_correction = False
                             await self.tool_sessions.await_result(tool_run, call)
                             yield BackendStreamEvent(tool_call=call, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens)
                             output = await self.tool_sessions.receive_result(tool_run)
-                            import json
                             await app_server.websocket.send(json.dumps({"id": message["id"], "result": {"contentItems": [{"type": "inputText", "text": output}], "success": True}}))
                         elif message.get("id") is not None and method:
                             await app_server.reject_server_request(message)
@@ -210,6 +225,8 @@ class AppServerBackend:
                         elif method == "thread/tokenUsage/updated":
                             input_tokens, output_tokens = _token_counts(params)
                         elif method == "turn/completed":
+                            if grammar_needs_correction:
+                                raise ToolProtocolError("Model ended without correcting the invalid grammar tool input; no invalid call was sent to the client")
                             turn = params.get("turn", {})
                             if turn.get("status") == "failed":
                                 error = turn.get("error") or {}

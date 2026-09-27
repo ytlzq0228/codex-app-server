@@ -152,16 +152,19 @@ async def price(request: Request, model: str = Form(..., min_length=1, max_lengt
 
 
 @router.post("/admin/subscription-plans")
-async def subscription_plan(request: Request, name: str = Form(..., min_length=1, max_length=120), monthly_price: Decimal = Form(...), csrf_token: str = Form(...), identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
+async def subscription_plan(request: Request, name: str = Form(..., min_length=1, max_length=120), monthly_price: Decimal = Form(...), weight: Decimal = Form(Decimal("1")), csrf_token: str = Form(...), identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
     verify_csrf(request, identity, csrf_token)
     name = normalize_plan(name)
     if not name:
         raise HTTPException(400, "套餐名称不能为空")
     amount = valid_amount(monthly_price)
-    await db.execute(insert(SubscriptionPlan).values(name=name, monthly_price=amount).on_conflict_do_update(
-        index_elements=['name'], set_={'monthly_price': amount}))
+    weight = valid_amount(weight)
+    if weight <= 0 or weight.as_tuple().exponent < -6:
+        raise HTTPException(400, "套餐权重必须大于 0，最多六位小数")
+    await db.execute(insert(SubscriptionPlan).values(name=name, monthly_price=amount, weight=weight).on_conflict_do_update(
+        index_elements=['name'], set_={'monthly_price': amount, 'weight': weight}))
     await db.commit()
-    return {"message": "套餐月费已保存，当前月订阅费用已重新计算"}
+    return {"message": "套餐月费及权重已保存，权重从下一次用量采样生效"}
 
 
 @router.post("/admin/subscription-cost")

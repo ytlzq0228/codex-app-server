@@ -1,0 +1,14 @@
+<link rel="stylesheet" href="/static/monitoring.css">
+<script defer src="/static/monitoring.js"></script>
+<div id="monitoring">
+  <div class="section-head"><label>历史范围 <select id="monitor-days"><option value="1">最近 24 小时</option><option value="7" selected>最近 7 天</option><option value="30">最近 30 天</option><option value="90">最近 90 天</option></select></label><span id="monitor-status" role="status">正在读取监控数据…</span></div>
+  <section class="panel">
+    <div class="section-head"><div><p class="eyebrow">SUBSCRIPTION POOL</p><h2>当前订阅池总用量</h2></div><a href="/admin/finance">配置套餐权重</a></div>
+    <div id="monitor-usage" class="monitor-metrics"></div>
+    <p class="muted">显示最近一次小时采样。每个 Worker 取所有额度窗口中最高的已用百分比，再按套餐权重加权平均（Σ 权重 × 已用比例 / Σ 已知用量的权重）。重置窗口不对齐，用于评估当前风险。</p>
+    <p class="muted">包含仍登录的 Worker（含停用及隔离），排除未登录及已删除记录；同一账号的多个 Worker 分别计入。未知套餐按权重 1；读取失败或缺失窗口不视为 0%，请结合覆盖率判断。</p>
+    <div id="monitor-usage-chart" class="monitor-chart"></div>
+  </section>
+  <section class="panel"><div class="section-head"><div><p class="eyebrow">WORKER HEALTH</p><h2>Worker 状态</h2></div></div><div id="monitor-pie" class="monitor-pie-layout"></div><p class="muted">分母为所有已创建且仍保留记录的 Worker。已删除记录、停用、排空及无法归类的故障计入其他异常；登录状态沿用最近探测结果。</p></section>
+  <section class="panel"><div class="section-head"><div><h2>Worker 历史波动</h2><p class="muted">每 10 分钟保存一次各状态数量。历史从功能启用后开始，采样中断处留空，不补造数据。时间按浏览器本地时区显示。</p></div></div><div id="monitor-state-chart" class="monitor-chart"></div></section>
+</div>

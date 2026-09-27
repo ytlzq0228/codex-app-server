@@ -11,6 +11,7 @@ async def upgrade(connection):
     if not has_quota:
         await connection.execute(text("UPDATE users u SET quota_granted=(SELECT COUNT(*) FROM api_keys k WHERE k.owner_username=u.username AND k.enabled AND k.deleted_at IS NULL)"))
     for statement in (
+        "ALTER TABLE subscription_plans ADD COLUMN IF NOT EXISTS weight NUMERIC(18,6) NOT NULL DEFAULT 1",
         "ALTER TABLE workers ALTER COLUMN name TYPE VARCHAR(180)",
         "ALTER TABLE workers ADD COLUMN IF NOT EXISTS owner_username VARCHAR(120) REFERENCES users(username)",
         "ALTER TABLE workers ADD COLUMN IF NOT EXISTS account_email VARCHAR(320)",

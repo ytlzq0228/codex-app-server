@@ -125,7 +125,7 @@ async def render_admin_page(request: Request, page: str, history_page: int, admi
     keys = (await session.scalars(select(ApiKey).where(ApiKey.deleted_at.is_(None)).order_by(ApiKey.created_at.desc()))).all()
     workers = (await session.scalars(select(Worker).where(Worker.endpoint != "removed://worker").order_by(Worker.created_at.asc()))).all()
     history_total = await session.scalar(select(func.count()).select_from(UsageRecord)) or 0
-    conversation_key = func.coalesce(UsageRecord.thread_id, ResponseBinding.thread_id, UsageRecord.request_id)
+    conversation_key = func.coalesce(UsageRecord.logical_conversation_id, UsageRecord.thread_id, ResponseBinding.thread_id, UsageRecord.request_id)
     history_group_key = (
         func.coalesce(cast(UsageRecord.api_key_id, String), literal("development"))
         + literal(":")

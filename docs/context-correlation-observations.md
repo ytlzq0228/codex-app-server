@@ -30,3 +30,11 @@ HAProxy 须追加真实连接来源到 XFF，并覆盖 X-Forwarded-Proto；不�
 每种客户端测试：新会话、多轮追问、另开会话、编辑历史或分叉、重试、并发、上下文压缩、客户端重启。在请求详情中比较 headers、query_params 与 request_params 中的 metadata/client_metadata，并检查哪些 ID 随会话、轮次或上下文窗口变化。仅记录标识，不据此改变转发。
 
 后续自动续用需要：API Key 范围内的客户端标识映射、前序输入和实际输出校验、增量转换、并发/重试/分叉处理，以及 Worker 和工作目录一致性。
+
+## 第一阶段关联（2026-09-27）
+
+新增 logical_conversation_id、conversation_evidence、history_expected_hash。明确客户端 Thread 标识在 API Key、接口、originator、安装 ID 范围内聚合；标识冲突不合并，thread_title 单独分类。有效 previous_response_id 优先继承前序归属。未提供完整标识的历史请求可能仍然分开，避免猜测来源。
+
+Chat Completions 的纯文本历史规范化摘要匹配此前输入及实际输出，同时校验模型/tools/tool_choice，并在同 Key、同接口下寻找最多 3 条候选。只记录 shadow 结果，不据此合并或续用；复杂工具/多模态内容暂不推断。旧请求没有实际回答摘要，无法可靠回填这类匹配。
+
+成功/失败记录在终止事件前落库，持久化使用 AnyIO 取消保护。execution_outcome 与 response_transport_complete 分别描述执行结果和 HTTP 收尾；完成后断连不再覆盖为 499。旧 499 记录不擅自改成成功，也不填造用量。

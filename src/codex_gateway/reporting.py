@@ -60,7 +60,7 @@ async def detail(request: Request, request_id: str, identity=Depends(require_use
     record = await db.scalar(usage_query(request.state.user).where(UsageRecord.request_id == request_id))
     if not record:
         raise HTTPException(404, "请求不存在")
-    return render(request, identity, page="detail", record=record, params=json.dumps(record.request_params, ensure_ascii=False, indent=2), observation=json.dumps(record.request_observation, ensure_ascii=False, indent=2))
+    return render(request, identity, page="detail", record=record, params=json.dumps(record.request_params, ensure_ascii=False, indent=2), observation=json.dumps(record.request_observation, ensure_ascii=False, indent=2), correlation=json.dumps(record.conversation_evidence, ensure_ascii=False, indent=2))
 
 
 @router.get("/admin/finance")

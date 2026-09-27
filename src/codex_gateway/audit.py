@@ -9,6 +9,8 @@ from uuid import uuid4
 from .config import get_settings
 from .database import SessionLocal
 from .models import UsageRecord
+from .conversations import explicit_identity, durable_write
+from sqlalchemy import select
 from .request_observation import capture_transport, request_observation
 
 current_audit: ContextVar[dict | None] = ContextVar("gateway_audit", default=None)
@@ -52,13 +54,19 @@ class RequestAuditMiddleware:
             await self.app(scope, observed_receive, observed_send)
         finally:
             try:
+                if audit.get("persisted_request_id"):
+                    await save_delivery(audit)
                 principal = audit["principal"]
                 if principal and not audit["saved"]:
                     params = request_params(audit)
+                    endpoint = "responses" if scope["path"].endswith("responses") else "chat.completions"
+                    logical, evidence = explicit_identity(params, request_observation(audit), principal.key_id, endpoint, "")
+                    evidence["execution_outcome"] = "unknown"
                     async with SessionLocal() as db:
                         db.add(UsageRecord(request_id=scope.get("state", {}).get("request_id") or "req_"+uuid4().hex,
                                            api_key_id=principal.key_id, owner_username=principal.owner_username,
                                            model=str(params.get("model", "unknown"))[:120], request_params=params,
+                                           logical_conversation_id=logical, conversation_evidence=evidence,
                                            request_observation=request_observation(audit),
                                            status_code=audit["status"] if audit["complete"] else 499,
                                            duration_ms=int((time.monotonic()-started)*1000),
@@ -79,3 +87,15 @@ def request_params(audit):
         return params if isinstance(params, dict) else {"_request": params}
     except (ValueError, UnicodeDecodeError):
         return {"_capture_error": "invalid JSON"}
+
+
+@durable_write
+async def save_delivery(audit):
+    # Model completion and HTTP stream closure are independent outcomes.
+    async with SessionLocal() as db:
+        record = await db.scalar(select(UsageRecord).where(UsageRecord.request_id == audit["persisted_request_id"]))
+        if record:
+            record.request_observation = {**(record.request_observation or {}),
+                "response_http_status": audit["status"],
+                "response_transport_complete": audit["complete"]}
+            await db.commit()

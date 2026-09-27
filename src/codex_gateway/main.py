@@ -28,6 +28,7 @@ from .database import SessionLocal, engine, get_session
 from .models import ModelPrice, Base, ResponseBinding, UsageRecord, Worker, WorkerStatus
 from .audit import RequestAuditMiddleware, current_audit, request_params as captured_params
 from .request_observation import request_observation
+from .conversations import correlate, durable_write
 from .quota import reconcile_worker, enforce_quota
 from .contributions import account_monitor_loop, update_account
 from .migrations import upgrade, bootstrap_users
@@ -427,6 +428,7 @@ def worker_failure_message(exc: Exception) -> str:
         return raw
 
 
+@durable_write
 async def save_usage(
     response_id: str,
     principal: ApiPrincipal,
@@ -451,13 +453,16 @@ async def save_usage(
         if audit is None and request_params is not None and endpoint == "responses":
             request_params = {**request_params, "previous_response_id": previous_response_id}
         cost = ((Decimal(result.input_tokens) * price.input_price + Decimal(result.output_tokens) * price.output_price) / Decimal(1_000_000)) if price and result else (Decimal(0) if price else None)
-        session.add(UsageRecord(owner_username=principal.owner_username, request_params=request_params, request_observation=request_observation(audit), input_price=price.input_price if price else None, output_price=price.output_price if price else None, cost_usd=cost, request_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, model=model, status_code=status_code, input_tokens=result.input_tokens if result else 0, output_tokens=result.output_tokens if result else 0, duration_ms=int((time.monotonic() - started) * 1000), error_code=error_code, endpoint=endpoint, previous_response_id=previous_response_id, thread_id=thread_id or (result.thread_id if result else None)))
+        record = UsageRecord(owner_username=principal.owner_username, request_params=request_params, request_observation=request_observation(audit), input_price=price.input_price if price else None, output_price=price.output_price if price else None, cost_usd=cost, request_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, model=model, status_code=status_code, input_tokens=result.input_tokens if result else 0, output_tokens=result.output_tokens if result else 0, duration_ms=int((time.monotonic() - started) * 1000), error_code=error_code, endpoint=endpoint, previous_response_id=previous_response_id, thread_id=thread_id or (result.thread_id if result else None))
+        await correlate(session, record, result.text if result else None)
+        session.add(record)
         if persist_binding and result and principal.key_id and result.thread_id and target.worker_id:
             now = utcnow()
             session.add(ResponseBinding(response_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, thread_id=result.thread_id, last_used_at=now, expires_at=binding_expiry(now), status="active"))
         await session.commit()
         if audit is not None:
             audit["saved"] = True
+            audit["persisted_request_id"] = response_id
 
 
 async def response_stream(body: ResponseRequest, backend: CompletionBackend, principal: ApiPrincipal, target: BackendTarget, public_previous_id: str | None, allow_retry: bool = True) -> AsyncIterator[str]:
@@ -504,20 +509,20 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
             "code": "previous_response_not_found" if session_failure else "worker_capacity_exceeded" if capacity_failure else "backend_error",
             "message": "The previous response session is no longer available" if session_failure else "Timed out waiting for an available Codex worker connection" if capacity_failure else "The Codex backend could not complete the request",
         }
+        await save_usage(response_id, principal, target, body.model, 404 if session_failure else 503 if capacity_failure else 502, started, error_code=error["code"], previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))
         yield sse({"type": "error", "sequence_number": sequence, **error, "param": None}); sequence += 1
         failed = {**created, "status": "failed", "error": error}
         yield sse({"type": "response.failed", "sequence_number": sequence, "response": failed})
-        await save_usage(response_id, principal, target, body.model, 404 if session_failure else 503 if capacity_failure else 502, started, error_code=error["code"], previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))
         return
     text = "".join(chunks).rstrip()
+    result = BackendResult(text=text, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens)
+    await save_usage(response_id, principal, target, body.model, 200, started, result, persist_binding=True, previous_response_id=public_previous_id, request_params=body.model_dump(mode="json"))
     yield sse({"type": "response.output_text.done", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "text": text}); sequence += 1
     part = {"type": "output_text", "text": text, "annotations": []}
     yield sse({"type": "response.content_part.done", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "part": part}); sequence += 1
     item = {"id": message_id, "type": "message", "status": "completed", "role": "assistant", "content": [part]}
     yield sse({"type": "response.output_item.done", "sequence_number": sequence, "output_index": 0, "item": item}); sequence += 1
-    result = BackendResult(text=text, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens)
     yield sse({"type": "response.completed", "sequence_number": sequence, "response": response_object(response_id, body, result, message_id=message_id, previous_response_id=public_previous_id)})
-    await save_usage(response_id, principal, target, body.model, 200, started, result, persist_binding=True, previous_response_id=public_previous_id, request_params=body.model_dump(mode="json"))
 
 
 async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseRequest, backend: CompletionBackend, principal: ApiPrincipal, target: BackendTarget, allow_retry: bool = True) -> AsyncIterator[str]:
@@ -538,6 +543,7 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
     yield chat_sse(chunk({"role": "assistant", "content": ""}))
     thread_id = ""
     input_tokens = output_tokens = 0
+    output_chunks = []
     content_emitted = False
     retried = False
     try:
@@ -548,6 +554,7 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
                     input_tokens = event.input_tokens or input_tokens
                     output_tokens = event.output_tokens or output_tokens
                     if event.delta:
+                        output_chunks.append(event.delta)
                         content_emitted = True
                         yield chat_sse(chunk({"content": event.delta}))
                 break
@@ -562,16 +569,16 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
         capacity_failure = isinstance(exc, WorkerFailure) and exc.kind == "capacity"
         error_code = "worker_capacity_exceeded" if capacity_failure else "backend_error"
         error_message = "Timed out waiting for an available Codex worker connection" if capacity_failure else "The Codex backend could not complete the request"
+        await save_usage(completion_id, principal, target, body.model, 503 if capacity_failure else 502, started, error_code=error_code, request_params=body.model_dump(mode="json"))
         yield chat_sse({"error": {"message": error_message, "type": "server_error", "code": error_code}})
         yield chat_sse("[DONE]")
-        await save_usage(completion_id, principal, target, body.model, 503 if capacity_failure else 502, started, error_code=error_code, request_params=body.model_dump(mode="json"))
         return
-    result = BackendResult(text="", thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens)
+    result = BackendResult(text="".join(output_chunks), thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens)
+    await save_usage(completion_id, principal, target, body.model, 200, started, result, request_params=body.model_dump(mode="json"))
     yield chat_sse(chunk({}, "stop"))
     if body.stream_options and body.stream_options.include_usage:
         yield chat_sse(chunk({}, usage={"prompt_tokens": input_tokens, "completion_tokens": output_tokens, "total_tokens": input_tokens + output_tokens}))
     yield chat_sse("[DONE]")
-    await save_usage(completion_id, principal, target, body.model, 200, started, result, request_params=body.model_dump(mode="json"))
 
 
 @app.middleware("http")

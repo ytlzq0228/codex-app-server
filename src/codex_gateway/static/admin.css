@@ -4,3 +4,4 @@
 .sidebar .brand{margin-bottom:24px}.sidebar nav{min-height:0;overflow-y:auto;display:block;flex:1}.nav-section{display:grid;gap:4px;margin-bottom:18px}.nav-section h2{font-size:13px;font-weight:900;letter-spacing:.03em;color:#eef8f2;margin:8px 0 6px;padding:10px 13px;border-radius:10px;background:rgba(217,248,107,.12);border:1px solid rgba(217,248,107,.18)}.nav-section h2#admin-nav-heading{background:rgba(255,255,255,.11);border-color:rgba(255,255,255,.14)}.sidebar .logout-form{padding-top:12px;flex-shrink:0}@media(max-width:720px){.sidebar nav{display:none}}
 .admin-page .content{max-width:none;padding-left:24px;padding-right:24px}
 @media(max-width:720px){.admin-page .content{padding-left:16px;padding-right:16px}}
+.login-card .stack-form{margin-bottom:14px}

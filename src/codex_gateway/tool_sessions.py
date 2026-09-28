@@ -43,6 +43,28 @@ class ToolSessions:
         return any(r.thread_id==thread_id and r.target.connection_key.split(':',1)[0]==str(key)
                    and not r.task.done() for r in self.runs)
 
+    def can_supersede_with_user_turn(self, request, key, thread_id, checkpoint_length=0):
+        """Find the active pending call output after a verified history checkpoint.
+
+        The suspended run cannot accept both inputs atomically. Execution recovery
+        may cancel it and rebuild from verified full history without dropping the
+        user's new turn.
+        """
+        raw_items = request.input if isinstance(request.input, list) else []
+        items = [item for item in raw_items
+                 if not (isinstance(item, dict) and item.get('type') == 'additional_tools')]
+        if len(items) <= checkpoint_length or not isinstance(items[-1], dict) or items[-1].get('role') != 'user':
+            return False
+        matches = []
+        for item in items[checkpoint_length:]:
+            if not isinstance(item, dict) or item.get('type') not in {'function_call_output', 'custom_tool_call_output'}:
+                continue
+            run = self.pending.get((str(key or 'development'), item.get('call_id')))
+            if (run and run.thread_id == thread_id and not run.claimed and not run.task.done()
+                    and run.reply is not None and not run.reply.done()):
+                matches.append(item)
+        return len(matches) == 1
+
     async def cancel_thread(self, key, thread_id):
         tasks=[r.task for r in self.runs if r.thread_id==thread_id and r.target.connection_key.split(':',1)[0]==str(key)]
         for task in tasks:task.cancel()

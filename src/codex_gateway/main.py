@@ -83,7 +83,7 @@ async def lifespan(app: FastAPI):
                 await upgrade(connection)
     async with SessionLocal() as session:
         await bootstrap_users(session, settings)
-        worker = await session.scalar(select(Worker).where(Worker.name == "worker-1"))
+        worker = await session.scalar(select(Worker).where(Worker.container_name == "codex-worker-1"))
         if not worker:
             worker = Worker(owner_username=settings.admin_username, name="worker-1", container_name="codex-worker-1", endpoint=settings.app_server_url, status=WorkerStatus.ready)
             session.add(worker)

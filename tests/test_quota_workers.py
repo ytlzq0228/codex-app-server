@@ -403,6 +403,27 @@ def test_admin_can_rename_worker_without_changing_runtime_identity(worker_servic
         assert blank.status_code == 400
 
 
+def test_renamed_default_worker_survives_gateway_restart():
+    async def default_worker_id():
+        async with SessionLocal() as db:
+            return str(await db.scalar(select(Worker.id).where(Worker.container_name == 'codex-worker-1')))
+
+    renamed = f"默认 Worker {uuid4().hex[:8]}"
+    with TestClient(app) as client:
+        token = admin_login(client)
+        worker_id = client.portal.call(default_worker_id)
+        response = client.post('/admin/workers/' + worker_id + '/name',
+            data={'csrf_token': token, 'name': renamed}, headers=AJAX)
+        assert response.status_code == 200, response.text
+    with TestClient(app) as client:
+        assert client.get('/healthz').status_code == 200
+        async def defaults():
+            async with SessionLocal() as db:
+                return (await db.scalars(select(Worker).where(Worker.container_name == 'codex-worker-1'))).all()
+        workers = client.portal.call(defaults)
+        assert len(workers) == 1 and workers[0].name == renamed
+
+
 def test_duplicate_account_quota_lifecycle_and_transfer(worker_services):
     with TestClient(app) as client:
         alice,pw=create_person(client)

@@ -8,12 +8,21 @@
   const link = document.getElementById('gemini-login-link');
   const code = document.getElementById('gemini-auth-code');
   const account = document.getElementById('gemini-login-account');
+  const progress = document.getElementById('gemini-login-progress');
+  const progressText = document.getElementById('gemini-login-progress-text');
   let current;
   const visible = run => current === run && !run.closed;
+  function showProgress(message) {
+    progressText.textContent = message || '正在完成登录设置，请稍候…';
+    progress.hidden = false;
+    dialog.setAttribute('aria-busy', 'true');
+  }
   function hideControls() {
     options.hidden = true; options.replaceChildren();
     authorization.hidden = true; link.removeAttribute('href');
     account.hidden = true; account.replaceChildren();
+    progress.hidden = true;
+    dialog.removeAttribute('aria-busy');
   }
   async function call(run, action, extra = {}) {
     const body = new FormData();
@@ -26,7 +35,7 @@
   }
   function render(run, data) {
     if (!visible(run)) return;
-    const view = JSON.stringify([data.stage, data.menu_id, data.login_url, data.logged_in, data.error]);
+    const view = JSON.stringify([data.stage, data.menu_id, data.login_url, data.logged_in, data.error, data.title, data.message]);
     if (view === run.view) return;
     run.view = view; hideControls();
     title.textContent = data.title || '登录 Gemini 订阅账号';
@@ -41,7 +50,10 @@
       account.hidden = false; return;
     }
     if (data.error) { status.textContent = data.error; run.done = true; return; }
-    if (data.stage === 'choose') {
+    if (data.stage !== 'waiting') run.confirmingTerms = false;
+    if (data.stage === 'waiting') {
+      showProgress(run.confirmingTerms ? '正在完成登录设置，请稍候…' : (data.message || '正在等待登录服务响应…'));
+    } else if (data.stage === 'choose') {
       options.hidden = false;
       for (const option of data.options || []) {
         const button = document.createElement('button');
@@ -66,9 +78,17 @@
   async function submit(run, input) {
     if (!visible(run) || run.busy || run.done) return;
     run.busy = true; clearTimeout(run.timer);
+    const confirmingTerms = input.menu_id === 'onboarding-terms';
+    if (confirmingTerms) {
+      run.confirmingTerms = true;
+      run.view = null; hideControls();
+      title.textContent = '正在完成登录设置';
+      status.textContent = '条款已确认，登录服务正在初始化账号环境。';
+      showProgress('正在完成登录设置，请稍候…');
+    }
     dialog.querySelectorAll('#gemini-login-options button, #gemini-code-form button').forEach(button => button.disabled = true);
     try { await call(run, 'input', input); }
-    catch (error) { if (visible(run)) status.textContent = error.message; }
+    catch (error) { if (visible(run)) { run.confirmingTerms = false; progress.hidden = true; dialog.removeAttribute('aria-busy'); status.textContent = error.message; } }
     finally {
       run.busy = false;
       if (visible(run)) {
@@ -86,9 +106,11 @@
     current = run; hideControls(); code.value = '';
     document.querySelector('#gemini-code-form button').disabled = false;
     title.textContent = '登录 Gemini 订阅账号'; status.textContent = '正在启动登录…'; dialog.showModal();
+    showProgress('正在启动登录服务…');
     try {
       if (fields.get('force') === 'true') {
         status.textContent = '正在退出当前账号…';
+        showProgress('正在安全退出原账号…');
         await call(run, 'logout'); run.reload = true;
         if (run.closed) { location.reload(); return; }
         status.textContent = '原账号已退出，正在准备重新登录…';

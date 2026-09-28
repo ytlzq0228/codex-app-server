@@ -2,6 +2,7 @@
 from sqlalchemy import select, text, update
 from .models import AdminUser, ApiKey, User, Worker
 from .security import hash_password
+from .worker_names import archived_worker_name
 
 
 async def upgrade(connection):
@@ -73,6 +74,7 @@ async def upgrade(connection):
         AND NOT EXISTS (SELECT 1 FROM workers WHERE provider='codex' AND lower(trim(plan_type))=old.name)
     """))
     await migrate_email_usernames(connection)
+    await migrate_deleted_worker_names(connection)
 
 
 async def bootstrap_users(db, settings):
@@ -89,6 +91,28 @@ async def bootstrap_users(db, settings):
     await db.execute(text("UPDATE usage_records u SET owner_username=k.owner_username FROM api_keys k WHERE u.api_key_id=k.id AND u.owner_username IS NULL"))
 
     await db.execute(update(Worker).where(Worker.owner_username.is_(None)).values(owner_username=settings.admin_username))
+
+
+async def migrate_deleted_worker_names(connection):
+    """Release names held by historical soft-deleted workers."""
+    rows = (await connection.execute(text("""
+        SELECT id, name, container_name FROM workers
+        WHERE endpoint='removed://worker' ORDER BY created_at, id
+    """))).all()
+    if not rows:
+        return
+
+    names = set((await connection.execute(text("SELECT name FROM workers"))).scalars())
+    container_names = set((await connection.execute(text("SELECT container_name FROM workers"))).scalars())
+    for row in rows:
+        names.discard(row.name)
+        container_names.discard(row.container_name)
+        name = archived_worker_name(row.name, row.id, names)
+        container_name = archived_worker_name(row.container_name, row.id, container_names)
+        if name != row.name or container_name != row.container_name:
+            await connection.execute(text("""
+                UPDATE workers SET name=:name, container_name=:container_name WHERE id=:id
+            """), {"id": row.id, "name": name, "container_name": container_name})
 
 
 async def migrate_email_usernames(connection):

@@ -1,4 +1,8 @@
 .gemini-login-dialog .result-message{color:var(--muted);line-height:1.7;margin:0 0 20px}
+.gemini-login-progress{display:flex;align-items:center;gap:12px;margin:0 0 20px;padding:14px 16px;border:1px solid #c8ddd1;border-radius:12px;background:var(--green-soft);color:var(--green-dark);font-size:13px;font-weight:700}
+.gemini-login-spinner{width:20px;height:20px;flex:0 0 auto;border:3px solid rgba(22,115,74,.2);border-top-color:var(--green);border-radius:50%;animation:gemini-login-spin .8s linear infinite}
+@keyframes gemini-login-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.gemini-login-spinner{animation:none}}
 .gemini-login-options{display:grid;gap:10px}
 .gemini-login-options .button{text-align:left;padding:14px 16px;white-space:normal}
 .gemini-login-dialog .button-wide{display:block;text-decoration:none;padding:12px}

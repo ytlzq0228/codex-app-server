@@ -88,7 +88,9 @@ def login_view(display, url=None):
             label = match[3].strip()
             translations = {"Continue with Google Cloud": "使用 Google Cloud 企业账号登录",
                             "Other sign-in options": "其他登录方式",
-                            "Continue with Google": "使用 Google 账号登录"}
+                            "Continue with Google": "使用 Google 账号登录",
+                            "Google OAuth": "使用 Google OAuth 登录",
+                            "Use a Google Cloud project": "使用 Google Cloud 企业账号登录"}
             options.append({"id": index, "label": translations.get(label, label)})
             if match[1]:
                 selected = index
@@ -107,6 +109,16 @@ def login_view(display, url=None):
                 "login_url": url}
     return {"stage": "waiting", "title": "正在准备登录",
             "message": "正在等待登录服务响应，请稍候。"}
+
+async def wait_for_login_view(session, timeout=8):
+    """Give the CLI time to draw its first actionable screen."""
+    deadline = time.monotonic() + timeout
+    state = session.state()
+    while (state.get("stage") == "waiting" and not state.get("error")
+           and session.task and not session.task.done() and time.monotonic() < deadline):
+        await asyncio.sleep(.1)
+        state = session.state()
+    return state
 
 class Login:
     def __init__(self):
@@ -200,7 +212,7 @@ class LoginInput(BaseModel):
 async def login_start():
     global login
     if login and login.task and not login.task.done():
-        return login.state()
+        return await wait_for_login_view(login)
     if lock.locked():
         raise HTTPException(409, "Worker is executing")
     await lock.acquire()
@@ -212,7 +224,7 @@ async def login_start():
         login.owns_lock = False
         lock.release()
         raise
-    return login.state()
+    return await wait_for_login_view(login)
 
 @app.post("/login/status", dependencies=[Depends(authorize)])
 async def login_status(body: LoginInput):

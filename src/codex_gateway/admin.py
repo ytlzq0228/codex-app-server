@@ -25,6 +25,7 @@ from .quota import quota_lock, ensure_capacity, reconcile_worker
 from .subscriptions import DEFAULT_PLAN_COLOR, plan_pill_style
 from .user_auth import issue_session, require_user, digest
 from .security import generate_api_key, hash_api_key, hash_password, verify_password
+from .worker_names import archived_worker_name
 
 auth_router = APIRouter(prefix="/auth", tags=["auth"])
 user_router = APIRouter(prefix="/user", tags=["user-auth"])
@@ -383,8 +384,10 @@ async def delete_worker(request: Request, worker_id: UUID, csrf_token: str = For
     worker = await session.scalar(select(Worker).where(Worker.id == worker_id).with_for_update().execution_options(populate_existing=True))
     if not worker or worker.endpoint == "removed://worker":
         raise HTTPException(404, "Worker not found")
+    original_name = worker.name
+    original_container_name = worker.container_name
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.delete(f"{settings.manager_url}/workers/{worker.container_name}", headers={"Authorization": f"Bearer {settings.manager_token.get_secret_value()}"})
+        response = await client.delete(f"{settings.manager_url}/workers/{original_container_name}", headers={"Authorization": f"Bearer {settings.manager_token.get_secret_value()}"})
     if not manager_delete_succeeded(response.status_code):
         try:
             manager_message = response.json().get("detail", "Worker manager could not remove the container")
@@ -398,12 +401,16 @@ async def delete_worker(request: Request, worker_id: UUID, csrf_token: str = For
     worker.enabled = False
     worker.status = WorkerStatus.offline
     worker.endpoint = "removed://worker"
+    names = set((await session.scalars(select(Worker.name).where(Worker.id != worker.id))).all())
+    container_names = set((await session.scalars(select(Worker.container_name).where(Worker.id != worker.id))).all())
+    worker.name = archived_worker_name(worker.name, worker.id, names)
+    worker.container_name = archived_worker_name(worker.container_name, worker.id, container_names)
     await reconcile_worker(session, worker)
     await session.commit()
     message = (
-        f"{worker.name} 的容器已经不存在；活动记录已清理，历史记录仍保留用于审计。"
+        f"{original_name} 的容器已经不存在；活动记录已清理，历史记录仍保留用于审计。"
         if container_was_missing
-        else f"{worker.name} 的受管容器已删除，历史记录仍保留用于审计。"
+        else f"{original_name} 的受管容器已删除，历史记录仍保留用于审计。"
     )
     return result("Worker 已删除", message)
 

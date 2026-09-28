@@ -75,6 +75,10 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(view["stage"], "choose")
         self.assertEqual(view["selected"], 0)
         self.assertEqual(view["options"][0]["label"], "使用 Google Cloud 企业账号登录")
+        view = service.login_view("Select login method:\n > 1. Google OAuth\n   2. Use a Google Cloud project")
+        self.assertEqual(view["stage"], "choose")
+        self.assertEqual([option["label"] for option in view["options"]],
+                         ["使用 Google OAuth 登录", "使用 Google Cloud 企业账号登录"])
         view = service.login_view("After authenticating, copy the code displayed in the browser and paste it below:", "https://accounts.google.com/o/oauth2/auth?test=1")
         self.assertEqual(view["stage"], "authorize")
         view = service.login_view("Select project:\n  1. project-a\n> 2. project-b", "https://accounts.google.com/old")

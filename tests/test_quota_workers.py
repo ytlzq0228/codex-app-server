@@ -338,9 +338,18 @@ def test_worker_names_and_pending_login_guard(worker_services):
         second=r.json()['worker_id']
         assert name+'-worker-07' in client.get('/user/workers').text
         assert client.post('/user/workers/'+second+'/delete',data={'csrf_token':token},headers=AJAX).status_code==200
-        assert 'value="08"' in client.get('/user/workers').text
-        assert client.post('/user/workers',data={'csrf_token':token,'suffix':'07'},headers=AJAX).status_code==409
-        third=contribute(client,token)
+        assert 'value="02"' in client.get('/user/workers').text
+        async def archived_names():
+            async with SessionLocal() as db:
+                deleted = await db.get(Worker, UUID(second))
+                return deleted.name, deleted.container_name
+        archived_name, archived_container = client.portal.call(archived_names)
+        assert archived_name == 'deleteed-' + name + '-worker-07'
+        assert archived_container.startswith('deleteed-contrib-')
+        assert worker_services['deleted'][-1].endswith('/' + archived_container.removeprefix('deleteed-'))
+        replacement = client.post('/user/workers',data={'csrf_token':token,'suffix':'07'},headers=AJAX)
+        assert replacement.status_code==200,replacement.text
+        third=replacement.json()['worker_id']
         probe(client,token,third)
         worker_services['account']=None
         probe(client,token,worker)

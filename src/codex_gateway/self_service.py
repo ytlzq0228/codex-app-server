@@ -18,7 +18,7 @@ from .config import get_settings
 from .database import get_session
 from .models import ApiKey, GoogleAuthConfig, OAuthState, User, Worker, WorkerStatus
 from .security import generate_api_key, hash_api_key, hash_password
-from .user_auth import digest, issue_session, require_user
+from .user_auth import cookie_secure, digest, issue_session, require_user
 
 from .usernames import username_prefix
 
@@ -172,7 +172,7 @@ async def edit_user(request: Request, username: str, role: str = Form(...), emai
 
 
 @router.get("/auth/google")
-async def google_start(db: AsyncSession = Depends(get_session)):
+async def google_start(request: Request, db: AsyncSession = Depends(get_session)):
     settings = get_settings()
     config = await google_config(db)
     state, verifier = secrets.token_urlsafe(32), secrets.token_urlsafe(48)
@@ -181,7 +181,7 @@ async def google_start(db: AsyncSession = Depends(get_session)):
     await db.commit()
     params = dict(client_id=config.client_id, redirect_uri=config.redirect_uri, response_type="code", scope="openid email profile", state=state, prompt="select_account", code_challenge=base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode(), code_challenge_method="S256")
     response = RedirectResponse("https://accounts.google.com/o/oauth2/v2/auth?"+urlencode(params), 302)
-    response.set_cookie("google_state", state, httponly=True, secure=settings.admin_cookie_secure, samesite="lax", max_age=600)
+    response.set_cookie("google_state", state, httponly=True, secure=cookie_secure(settings, request), samesite="lax", max_age=600)
     return response
 
 
@@ -230,7 +230,7 @@ async def google_callback(request: Request, state: str = "", code: str = "", db:
         raise HTTPException(403, "账号已停用")
     response = RedirectResponse("/user/account" if user.must_change_password else ("/user/overview" if user.role == "user" else "/admin"), 302)
     response.delete_cookie("google_state")
-    return await issue_session(db, user, settings, response)
+    return await issue_session(db, user, settings, response, request)
 
 
 async def google_config(db):

@@ -44,6 +44,15 @@ class UserSession(Base):
     session_version: Mapped[int] = mapped_column(Integer)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
+class LoginFailure(Base):
+    """Password-login failure counters, keyed by account and by client address."""
+    __tablename__ = "login_failures"
+    scope: Mapped[str] = mapped_column(String(180), primary_key=True)
+    failures: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    first_failed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_failed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
 class OAuthState(Base):
     __tablename__ = "oauth_states"
     state_hash: Mapped[str] = mapped_column(String(64), primary_key=True)

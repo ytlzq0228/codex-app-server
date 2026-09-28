@@ -7,7 +7,6 @@ from fastapi.testclient import TestClient
 
 import codex_gateway.admin as admin_module
 from codex_gateway.admin import login_worker_endpoint, manager_delete_succeeded
-from codex_gateway.admin_auth import create_admin_session, decode_admin_session
 from codex_gateway.admin_auth import SESSION_COOKIE
 from codex_gateway.config import get_settings
 from codex_gateway.main import app
@@ -93,14 +92,14 @@ def test_admin_can_change_password_and_invalidate_old_session() -> None:
         old_cookie = client.cookies.get(SESSION_COOKIE)
 
         wrong = client.post(
-            "/admin/password",
+            "/user/account/password",
             data={"current_password": "wrong", "new_password": new_password, "confirm_password": new_password, "csrf_token": csrf},
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
         assert wrong.status_code == 400
 
         changed = client.post(
-            "/admin/password",
+            "/user/account/password",
             data={"current_password": old_password, "new_password": new_password, "confirm_password": new_password, "csrf_token": csrf},
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
@@ -113,7 +112,7 @@ def test_admin_can_change_password_and_invalidate_old_session() -> None:
         dashboard = client.get("/admin")
         new_csrf = re.search(r'name="csrf_token" value="([^"]+)"', dashboard.text).group(1)
         restored = client.post(
-            "/admin/password",
+            "/user/account/password",
             data={"current_password": new_password, "new_password": old_password, "confirm_password": old_password, "csrf_token": new_csrf},
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
@@ -187,12 +186,14 @@ def test_admin_ajax_action_requires_csrf() -> None:
         assert response.status_code == 403
 
 
-def test_signed_admin_cookie_rejects_tampering() -> None:
-    settings = get_settings()
-    token, csrf = create_admin_session(settings, "admin")
-    session = decode_admin_session(token, settings)
-    assert session and session.csrf_token == csrf
-    assert decode_admin_session(token + "x", settings) is None
+def test_forged_session_cookie_is_rejected() -> None:
+    with TestClient(app) as client:
+        csrf = login(client)
+        cookie = client.cookies.get(SESSION_COOKIE)
+        for forged in ("garbage", cookie + "x", cookie[:-1]):
+            response = client.get("/admin", headers={"cookie": f"{SESSION_COOKIE}={forged}"}, follow_redirects=False)
+            assert response.status_code == 303, forged
+        assert csrf
 
 
 def test_delete_worker_treats_missing_container_as_success() -> None:

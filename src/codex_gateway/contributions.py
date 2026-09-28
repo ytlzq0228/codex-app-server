@@ -94,6 +94,9 @@ async def contribute_worker(request: Request, name: str = Form("", max_length=80
         Worker.owner_username == identity.username, Worker.endpoint != "removed://worker"))).all()
     if any(awaiting_login(worker) for worker in existing):
         raise HTTPException(409, "名下存在未登录或尚未确认登录的 Worker，请先登录并探测，或删除后再创建")
+    # Each Worker is a container: cap how many one account can ask the manager to run.
+    if len(existing) >= settings.max_workers_per_user:
+        raise HTTPException(409, f"名下 Worker 数量已达上限 {settings.max_workers_per_user} 个，请删除后再创建")
     if name:
         raise HTTPException(400, "名称前缀由当前用户名生成，只允许修改数字后缀")
     suffix = suffix or await next_worker_suffix(db, identity.username)

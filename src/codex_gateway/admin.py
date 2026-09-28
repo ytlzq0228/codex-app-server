@@ -24,6 +24,7 @@ from .models import GoogleAuthConfig, User, UserSession, ApiKey, ResponseBinding
 from .quota import quota_lock, ensure_capacity, reconcile_worker
 from .subscriptions import DEFAULT_PLAN_COLOR, plan_pill_style
 from .user_auth import issue_session, require_user, digest
+from .login_throttle import clear as clear_login_failures, guard as guard_login, record_failure, scopes as login_scopes
 from .security import generate_api_key, hash_api_key, hash_password, verify_password
 from .worker_names import archived_worker_name
 
@@ -53,6 +54,8 @@ async def login(
     session: AsyncSession = Depends(get_session),
 ):
     username = username.strip()
+    attempt = login_scopes(request, username)
+    await guard_login(session, attempt)
     # Full-email login is permitted only for the exact stored email, never by
     # dropping a supplied domain and authenticating an unrelated prefix owner.
     if "@" in username:
@@ -62,18 +65,19 @@ async def login(
         user = await session.get(User, username)
     google = await session.get(GoogleAuthConfig, 1)
     if not user or not user.enabled or not user.password_hash or not verify_password(password, user.password_hash):
+        await record_failure(session, attempt)
         return templates(request).TemplateResponse(
             request,
             "login.html",
             {"next": safe_next_url(next), "error": "用户名或密码错误", "google_enabled": bool(google and google.enabled)},
             status_code=401,
         )
+    await clear_login_failures(session, attempt)
     destination = "/user/account" if user.must_change_password else ("/user/overview" if user.role == "user" else safe_next_url(next))
-    return await issue_session(session, user, settings, RedirectResponse(destination, status_code=302))
+    return await issue_session(session, user, settings, RedirectResponse(destination, status_code=302), request)
 
 
 @user_router.post("/account/password")
-@router.post("/password")
 async def change_password(
     request: Request,
     current_password: str = Form(...),
@@ -95,7 +99,7 @@ async def change_password(
     user.password_hash = hash_password(new_password)
     user.session_version += 1
     user.must_change_password = False
-    return await issue_session(session, user, settings, result("密码已更新", "密码已修改，其他会话已失效。"))
+    return await issue_session(session, user, settings, result("密码已更新", "密码已修改，其他会话已失效。"), request)
 
 
 @auth_router.post("/logout")

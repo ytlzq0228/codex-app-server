@@ -1,4 +1,10 @@
 """Mock backend tests should not require a running Docker worker manager."""
+import os
+
+# The development API key has no default any more; the suite opts into it before
+# any Settings instance is built and cached.
+os.environ.setdefault("CODEX_GATEWAY_DEV_API_KEY", "cag_dev_local")
+
 import httpx
 import pytest
 from codex_gateway.config import get_settings

@@ -5,6 +5,7 @@ import docker
 from docker.errors import APIError, NotFound
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel
+from typing import Literal
 
 app = FastAPI(title="Codex Worker Manager", docs_url=None, redoc_url=None, openapi_url=None)
 client = docker.from_env()
@@ -16,6 +17,7 @@ WORKSPACE_SLOT_COUNT = int(os.environ.get("CODEX_MAX_WS_PER_KEY_WORKER", "10"))
 
 class WorkerSpec(BaseModel):
     name: str
+    provider: Literal["codex", "gemini"] = "codex"
 
 
 def authorize(authorization: str | None) -> None:
@@ -47,18 +49,18 @@ def create_worker(spec: WorkerSpec, authorization: str | None = Header(default=N
         raise HTTPException(400, "invalid worker name")
     try:
         container = client.containers.run(
-            os.environ["CODEX_WORKER_IMAGE"], name=spec.name, detach=True,
+            os.environ.get("GEMINI_WORKER_IMAGE", "codex-antigravity-worker:1.2.12") if spec.provider == "gemini" else os.environ["CODEX_WORKER_IMAGE"], name=spec.name, detach=True,
             environment={"CODEX_WORKER_TOKEN": os.environ["CODEX_WORKER_TOKEN"]},
-            labels={MANAGED_LABEL: "true", "io.codex-gateway.worker": spec.name},
+            labels={MANAGED_LABEL: "true", "io.codex-gateway.worker": spec.name, "io.codex-gateway.provider": spec.provider},
             network=os.environ["CODEX_DOCKER_NETWORK"], read_only=True,
-            volumes={f"{spec.name}-codex-home": {"bind": "/home/codex/.codex", "mode": "rw"}, f"{spec.name}-workspaces": {"bind": "/workspace", "mode": "rw"}},
+            volumes={(f"{spec.name}-gemini-home" if spec.provider == "gemini" else f"{spec.name}-codex-home"): {"bind": "/home/agy" if spec.provider == "gemini" else "/home/codex/.codex", "mode": "rw"}, f"{spec.name}-workspaces": {"bind": "/workspace", "mode": "rw"}},
             tmpfs={"/tmp": "size=256m,nosuid,nodev", "/run/codex": "size=1m,noexec,nosuid,nodev,uid=10001,gid=10001"},
             cap_drop=["ALL"], security_opt=["no-new-privileges:true"], pids_limit=256,
             mem_limit="4g", nano_cpus=2_000_000_000, restart_policy={"Name": "unless-stopped"},
         )
     except APIError as exc:
         raise HTTPException(409, "could not create worker") from exc
-    return {"id": container.id, "name": spec.name, "endpoint": f"ws://{spec.name}:4500"}
+    return {"id": container.id, "name": spec.name, "endpoint": f"{'http' if spec.provider == 'gemini' else 'ws'}://{spec.name}:4500"}
 
 
 @app.put("/workers/{name}/workspaces/{workspace_id}")

@@ -33,8 +33,20 @@ def plan_pill_style(color):
     return f'background-color:{color};color:{foreground}'
 
 
-async def remember_plan(db, name):
+def plan_key(name, provider="codex"):
     name = normalize_plan(name)
+    return name if not name or provider == "codex" else provider + ":" + name
+
+
+def plan_label(name):
+    provider, sep, value = name.partition(":")
+    if sep and provider in {"gemini", "claude"}:
+        return {"gemini": "Gemini", "claude": "Claude"}[provider] + " · " + value
+    return "OpenAI · " + name
+
+
+async def remember_plan(db, name, provider="codex"):
+    name = plan_key(name, provider)
     if name:
         await db.execute(insert(SubscriptionPlan).values(name=name).on_conflict_do_nothing(index_elements=['name']))
 
@@ -42,16 +54,16 @@ async def remember_plan(db, name):
 async def subscription_summary(db):
     workers = (await db.scalars(select(Worker))).all()
     # Also discover legacy/manual worker records, retaining plans after logout.
-    for name in sorted({normalize_plan(w.plan_type) for w in workers} - {''}):
-        await remember_plan(db, name)
+    for worker in workers:
+        await remember_plan(db, worker.plan_type, worker.provider or "codex")
     plans = (await db.scalars(select(SubscriptionPlan).order_by(SubscriptionPlan.name))).all()
-    rows = {p.name: dict(name=p.name, price=p.monthly_price, weight=p.weight,
+    rows = {p.name: dict(name=p.name, label=plan_label(p.name), price=p.monthly_price, weight=p.weight,
         color=safe_plan_color(p.color), style=plan_pill_style(p.color), count=0, subtotal=Decimal(0)) for p in plans}
     unknown = 0
     for worker in workers:
         if worker.endpoint == 'removed://worker' or not worker.auth_mode or worker.failure_kind == 'logged_out':
             continue
-        name = normalize_plan(worker.plan_type)
+        name = plan_key(worker.plan_type, worker.provider or "codex")
         if not name:
             unknown += 1
             continue

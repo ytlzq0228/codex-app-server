@@ -52,6 +52,7 @@ class OAuthState(Base):
 
 class ModelPrice(Base):
     __tablename__ = "model_prices"
+    provider: Mapped[str] = mapped_column(String(16), default="codex", server_default="codex", index=True)
     model: Mapped[str] = mapped_column(String(120), primary_key=True)
     input_price: Mapped[float] = mapped_column(Numeric(18, 6))
     output_price: Mapped[float] = mapped_column(Numeric(18, 6))
@@ -81,7 +82,9 @@ class SubscriptionCost(Base):
 
 class Worker(Base):
     __tablename__ = "workers"
+    provider: Mapped[str] = mapped_column(String(16), default="codex", server_default="codex", index=True)
     owner_username: Mapped[str | None] = mapped_column(ForeignKey("users.username"), index=True)
+    provider_project: Mapped[str | None] = mapped_column(String(180), nullable=True)
     account_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
     account_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
@@ -117,6 +120,7 @@ class ApiKey(Base):
 
 class ResponseBinding(Base):
     __tablename__ = "response_bindings"
+    provider: Mapped[str] = mapped_column(String(16), default="codex", server_default="codex", index=True)
     response_id: Mapped[str] = mapped_column(String(80), primary_key=True)
     api_key_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("api_keys.id"), index=True)
     worker_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("workers.id"), index=True)
@@ -131,6 +135,7 @@ class ResponseBinding(Base):
 class ExecutionSession(Base):
     """One fenced execution checkpoint per scoped logical conversation."""
     __tablename__ = "execution_sessions"
+    provider: Mapped[str] = mapped_column(String(16), default="codex", server_default="codex", index=True)
     logical_id: Mapped[str] = mapped_column(String(80), primary_key=True)
     api_key_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("api_keys.id"), index=True)
     endpoint: Mapped[str] = mapped_column(String(32))
@@ -148,6 +153,7 @@ class ExecutionSession(Base):
 
 class UsageRecord(Base):
     __tablename__ = "usage_records"
+    provider: Mapped[str] = mapped_column(String(16), default="codex", server_default="codex", index=True)
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     owner_username: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     request_params: Mapped[dict | None] = mapped_column(JSON, nullable=True)

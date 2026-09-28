@@ -107,6 +107,8 @@ async def prepare(request, principal, endpoint, audit, *, pending_thread=None, b
     """Claim identity and return an optional active binding; public previous wins."""
     if not audit or not principal.key_id or not get_settings().execution_resume_enabled:
         return request, binding
+    from .providers import provider_for
+    provider = provider_for(request.model)
     from .audit import request_params
     from .request_observation import request_observation
     observation = request_observation(audit)
@@ -133,8 +135,10 @@ async def prepare(request, principal, endpoint, audit, *, pending_thread=None, b
             audit["execution_decision"] = {"action": "untracked", "reason": evidence.get("method", "no_identity")}
             return request, binding
         await db.execute(insert(ExecutionSession).values(logical_id=logical, api_key_id=principal.key_id,
-                          endpoint=endpoint, state="new").on_conflict_do_nothing(index_elements=["logical_id"]))
+                          endpoint=endpoint, provider=provider, state="new").on_conflict_do_nothing(index_elements=["logical_id"]))
         row = await db.scalar(select(ExecutionSession).where(ExecutionSession.logical_id == logical).with_for_update())
+        if (row.provider or "codex") != provider:
+            raise conflict("Continuation cannot change provider", "provider_mismatch")
         instant = now()
         if row.lease_token and row.lease_until and row.lease_until > instant:
             raise conflict("Another request is executing in this conversation; retry after it completes")
@@ -208,6 +212,8 @@ async def prepare(request, principal, endpoint, audit, *, pending_thread=None, b
                     request._execution_input_items = delta
                     request._execution_auto_resume = True
                     action, reason = "resume", "explicit_identity_and_history_prefix"
+        if provider != "codex" and row.state != "new" and action == "new_thread":
+            raise conflict("Gemini conversation cannot be safely resumed; start a new conversation", "conversation_resume_unavailable")
         token = str(uuid4())
         claim = {"logical_id": logical, "token": token, "history": checkpoint,
                  "config": (row.config_hash if pending_thread and row.config_hash else configuration(request)),
@@ -243,6 +249,7 @@ async def finish(db, audit, result, target, response_id):
     row.state = ("waiting_tool" if result.tool_calls else "ready") if result else "invalid"
     row.thread_id = result.thread_id if result else None
     row.worker_id = target.worker_id
+    row.provider = target.provider
     row.response_id = response_id
     row.expires_at = instant + timedelta(seconds=300) if result and result.tool_calls else None
     row.invalid_reason = None if result else "execution_failed"

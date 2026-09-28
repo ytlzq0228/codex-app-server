@@ -45,6 +45,57 @@ async def summary(name):
         return await quota_summary(db,name)
 
 
+@pytest.mark.parametrize("provider,auth,plan", [
+    ("codex", "chatgpt", "plus"),
+    ("gemini", "google-subscription", "gcp-ge-plus-tier"),
+])
+def test_usage_exhaustion_preserves_quota_and_enabled_keys(provider, auth, plan):
+    async def check():
+        async with SessionLocal() as db:
+            owner = "limit-" + uuid4().hex[:12]
+            db.add(User(username=owner, enabled=True, quota_granted=0))
+            await db.flush()
+            worker = Worker(name=owner, container_name=owner, owner_username=owner,
+                provider=provider, endpoint="http://test", enabled=True,
+                status=WorkerStatus.ready, auth_mode=auth, plan_type=plan,
+                account_email="paid@example.test", account_checked_at=datetime.now(timezone.utc))
+            key = ApiKey(name=owner, prefix=owner, key_hash=uuid4().hex,
+                         owner_username=owner, enabled=True)
+            db.add_all([worker, key])
+            await reconcile_worker(db, worker)
+            assert (await quota_summary(db, owner))["total"] == 1
+            worker.status = WorkerStatus.error
+            worker.failure_kind = "limit"
+            worker.retry_after = datetime.now(timezone.utc) + timedelta(hours=1)
+            await reconcile_worker(db, worker)
+            q = await quota_summary(db, owner)
+            assert q["contributed"] == q["total"] == q["used"] == 1
+            assert key.enabled
+            # Genuine connectivity loss still removes credit and disables the key.
+            worker.failure_kind = "connection"
+            await reconcile_worker(db, worker)
+            assert (await quota_summary(db, owner))["total"] == 0
+            assert not key.enabled
+            worker.status = WorkerStatus.ready
+            worker.failure_kind = None
+            await reconcile_worker(db, worker)
+            assert (await quota_summary(db, owner))["total"] == 1
+            assert not key.enabled  # Recovery must not automatically enable keys.
+            # Limit state must not bypass explicit disable, deletion or logout.
+            worker.status = WorkerStatus.error
+            worker.failure_kind = "limit"
+            for attr, value in [("enabled", False), ("endpoint", "removed://worker"),
+                                ("auth_mode", None), ("plan_type", "free")]:
+                previous = getattr(worker, attr)
+                setattr(worker, attr, value)
+                await db.flush()
+                assert (await quota_summary(db, owner))["contributed"] == 0
+                setattr(worker, attr, previous)
+            await db.rollback()
+    with TestClient(app) as client:
+        client.portal.call(check)
+
+
 @pytest.fixture
 def worker_services(monkeypatch):
     import codex_gateway.admin as admin

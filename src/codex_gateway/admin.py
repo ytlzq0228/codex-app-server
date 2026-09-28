@@ -336,13 +336,15 @@ async def default_worker(session: AsyncSession, settings: Settings) -> Worker:
 
 
 @router.post("/workers")
-async def create_worker(request: Request, name: str = Form(min_length=1, max_length=48), csrf_token: str = Form(...), admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
+async def create_worker(request: Request, name: str = Form(min_length=1, max_length=48), provider: str = Form("codex"), csrf_token: str = Form(...), admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
     verify_csrf(request, admin, csrf_token)
+    if provider not in {"codex", "gemini"}:
+        raise HTTPException(400, "不支持的 Worker 类型")
     name = name.strip().lower().replace("_", "-")
     if not WORKER_NAME_RE.fullmatch(name):
         raise HTTPException(400, "Worker 名称必须以小写字母开头，并且只能包含小写字母、数字和连字符")
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(f"{settings.manager_url}/workers", json={"name": name}, headers={"Authorization": f"Bearer {settings.manager_token.get_secret_value()}"})
+        response = await client.post(f"{settings.manager_url}/workers", json={"name": name, "provider": provider}, headers={"Authorization": f"Bearer {settings.manager_token.get_secret_value()}"})
     if response.status_code >= 400:
         try:
             manager_message = response.json().get("detail", "Worker manager could not create the container")
@@ -351,7 +353,7 @@ async def create_worker(request: Request, name: str = Form(min_length=1, max_len
         status_code = response.status_code if 400 <= response.status_code < 500 else 502
         raise HTTPException(status_code, manager_message)
     data = response.json()
-    session.add(Worker(owner_username=admin.username, name=name, container_name=data["name"], endpoint=data["endpoint"], status=WorkerStatus.offline))
+    session.add(Worker(provider=provider, owner_username=admin.username, name=name, container_name=data["name"], endpoint=data["endpoint"], status=WorkerStatus.offline))
     await session.commit()
     return result("Worker 已创建", f"{name} 的容器已经创建，可在列表中登录并探测状态。")
 
@@ -407,6 +409,9 @@ async def delete_worker(request: Request, worker_id: UUID, csrf_token: str = For
 
 
 async def probe_worker_record(worker: Worker, session: AsyncSession, settings: Settings) -> dict:
+    if (worker.provider or "codex") == "gemini":
+        from .gemini_backend import probe_gemini
+        return await probe_gemini(worker, session, settings)
     from .contributions import update_account
     try:
         async with open_app_server(worker.endpoint, settings.app_server_token.get_secret_value(), settings.app_server_timeout_seconds) as app_server:
@@ -482,6 +487,8 @@ async def login_worker_endpoint(endpoint: str, settings: Settings, *, force: boo
 
 
 async def relogin_worker_record(worker, session, settings, *, force, poll_url):
+    if (worker.provider or "codex") == "gemini":
+        return {"message": "请在我的 Worker 页面使用 Gemini 登录窗口", "provider": "gemini"}
     logged_out = False
 
     async def record_logout():

@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     model_name: str = ""  # Legacy environment setting; no longer exposes a model alias.
     upstream_model: str = "gpt-6-sol"
     allowed_models: str = "gpt-6-sol,gpt-6-astra,gpt-6-luna,gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna,gpt-5.6"
+    model_providers: str = ""  # Explicit public-model:provider entries
     model_aliases: str = "gpt-5.6:gpt-5.6-sol"
     app_server_url: str = "ws://worker-1:4500"
     app_server_token: SecretStr = SecretStr("development-worker-token-change-me")
@@ -49,6 +50,16 @@ class Settings(BaseSettings):
     def public_models(self) -> list[str]:
         configured = [model.strip() for model in self.allowed_models.split(",") if model.strip()]
         return list(dict.fromkeys(configured))
+
+    def provider_map(self) -> dict[str, str]:
+        result = {}
+        for entry in self.model_providers.split(","):
+            model, sep, provider = entry.strip().partition(":")
+            if sep and model and provider in {"codex", "gemini", "claude"}:
+                result[model] = provider
+            elif entry.strip():
+                raise ValueError("Invalid model_providers entry")
+        return result
 
     def model_alias_map(self) -> dict[str, str]:
         aliases: dict[str, str] = {}

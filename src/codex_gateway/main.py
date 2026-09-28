@@ -24,6 +24,8 @@ from .admin import probe_worker_record, router as admin_router
 from .admin import user_router as admin_user_router
 from .auth import ApiPrincipal, require_api_key
 from .app_server import open_app_server
+from .providers import provider_for, validate_capabilities, validate_chat_capabilities, reject
+from .gemini_backend import ProviderBackend
 from .backend import AppServerBackend, BackendTarget, CompletionBackend, MockBackend, WorkerFailure, classify_worker_failure, run_healthcheck_turn
 from .billing import priced_amount
 from .config import get_settings
@@ -93,7 +95,7 @@ async def lifespan(app: FastAPI):
         for username in (await session.scalars(select(User.username).order_by(User.username))).all():
             await enforce_quota(session, username)
         await session.commit()
-    app.state.backend = MockBackend() if settings.backend == "mock" else AppServerBackend(settings)
+    app.state.backend = MockBackend() if settings.backend == "mock" else ProviderBackend(settings)
     recovery_task = asyncio.create_task(worker_recovery_loop(), name="worker-recovery")
     contribution_task = asyncio.create_task(account_monitor_loop(), name="worker-contributions") if settings.backend != "mock" else None
     from .monitoring import monitoring_loop
@@ -170,6 +172,15 @@ async def quarantine_worker(worker_id, reason: str, kind: str = "connection") ->
         worker = await session.scalar(select(Worker).where(Worker.id == worker_id).execution_options(populate_existing=True))
         if not worker:
             return False
+        if (getattr(worker, "provider", None) or "codex") == "gemini":
+            worker.status = WorkerStatus.error
+            worker.failure_kind = kind
+            worker.failure_reason = reason[:500]
+            worker.quarantined_at = utcnow()
+            worker.retry_after = utcnow() + timedelta(seconds=settings.worker_limit_cooldown_seconds if kind == "limit" else settings.worker_failure_cooldown_seconds)
+            await reconcile_worker(session, worker)
+            await session.commit()
+            return True
         result = await probe_worker_record(worker, session, settings)
         if result["ok"]:
             logger.warning(
@@ -185,6 +196,13 @@ async def quarantine_worker(worker_id, reason: str, kind: str = "connection") ->
 
 
 async def recover_worker(worker: Worker) -> bool:
+    if (getattr(worker, "provider", None) or "codex") == "gemini":
+        from .gemini_backend import probe_gemini
+        from sqlalchemy.ext.asyncio import async_object_session
+        result = await probe_gemini(worker, async_object_session(worker), get_settings())
+        if result["ok"]:
+            worker.recovered_at = utcnow()
+        return result["ok"]
     settings = get_settings()
     try:
         async with open_app_server(worker.endpoint, settings.app_server_token.get_secret_value(), min(settings.app_server_timeout_seconds, 20)) as server:
@@ -226,7 +244,7 @@ async def worker_recovery_loop() -> None:
             await asyncio.sleep(settings.worker_recovery_interval_seconds)
             async with SessionLocal() as session:
                 await expire_response_bindings(session)
-                workers = (await session.scalars(select(Worker).where(Worker.enabled.is_(True), Worker.status == WorkerStatus.error).with_for_update(skip_locked=True))).all()
+                workers = (await session.scalars(select(Worker).where(Worker.enabled.is_(True), ((Worker.status == WorkerStatus.error) | ((Worker.provider == "gemini") & (Worker.status == WorkerStatus.offline) & Worker.auth_mode.is_not(None)))).with_for_update(skip_locked=True))).all()
                 now = utcnow()
                 for worker in workers:
                     if not worker.retry_after or worker.retry_after <= now:
@@ -404,9 +422,12 @@ async def choose_target(
     binding: ResponseBinding | None = None,
     exclude_worker_ids: set | None = None,
     cache_affinity: str | None = None,
+    provider: str = "codex",
 ) -> BackendTarget:
     settings = get_settings()
     excluded = exclude_worker_ids or set()
+    if binding and (getattr(binding, "provider", None) or "codex") != provider:
+        reject("model", "Continuation cannot change provider", "provider_mismatch")
     candidates: list[Worker] = []
     if binding:
         worker = await session.get(Worker, binding.worker_id)
@@ -415,11 +436,11 @@ async def choose_target(
         worker = await session.get(Worker, principal.pinned_worker_id)
         candidates = [worker] if worker else []
     else:
-        candidates = list((await session.scalars(select(Worker).where(Worker.enabled.is_(True), Worker.status.in_([WorkerStatus.ready, WorkerStatus.busy])).order_by(func.random()))).all())
+        candidates = list((await session.scalars(select(Worker).where(Worker.provider == provider, Worker.enabled.is_(True), Worker.status.in_([WorkerStatus.ready, WorkerStatus.busy])).order_by(func.random()))).all())
         active, usage = await pool_routing_signals(session)
         scope = f"{principal.key_id or 'development'}:{cache_affinity}" if cache_affinity else None
         candidates = rank_pool_workers(candidates, active, usage, scope)
-    candidates = [worker for worker in candidates if worker.id not in excluded and worker.enabled and worker.status in {WorkerStatus.ready, WorkerStatus.busy}]
+    candidates = [worker for worker in candidates if (getattr(worker, "provider", None) or "codex") == provider and worker.id not in excluded and worker.enabled and worker.status in {WorkerStatus.ready, WorkerStatus.busy}]
     if not candidates:
         raise worker_unavailable(bound=binding is not None)
     key_slug = str(principal.key_id or "development")
@@ -429,7 +450,7 @@ async def choose_target(
                 response = await client.put(f"{settings.manager_url}/workers/{worker.container_name}/workspaces/{key_slug}", headers={"Authorization": f"Bearer {settings.manager_token.get_secret_value()}"})
             if response.status_code >= 400:
                 raise RuntimeError(f"Worker manager returned HTTP {response.status_code}")
-            return BackendTarget(connection_key=f"{key_slug}:{worker.id}", endpoint=worker.endpoint, workspace=f"{settings.workspace_worker_root}/{key_slug}", worker_id=worker.id, worker_generation=worker.execution_generation)
+            return BackendTarget(connection_key=f"{key_slug}:{worker.id}", endpoint=worker.endpoint, workspace=f"{settings.workspace_worker_root}/{key_slug}", worker_id=worker.id, worker_generation=worker.execution_generation, provider=getattr(worker, "provider", None) or "codex")
         except Exception as exc:
             await quarantine_worker(worker.id, f"Workspace preparation failed: {exc}", "connection")
             if binding or principal.pinned_worker_id:
@@ -462,17 +483,17 @@ def reset_auto_resume(body, reason):
 
 async def choose_execution_target(principal, session, binding, body):
     try:
-        return await choose_target(principal, session, binding, cache_affinity=body.prompt_cache_key)
+        return await choose_target(principal, session, binding, cache_affinity=body.prompt_cache_key, provider=provider_for(body.model))
     except HTTPException:
-        if not body._execution_auto_resume or principal.pinned_worker_id:
+        if not body._execution_auto_resume or principal.pinned_worker_id or provider_for(body.model) != "codex":
             raise
         reset_auto_resume(body, "bound_worker_unavailable")
-        return await choose_target(principal, session, cache_affinity=body.prompt_cache_key)
+        return await choose_target(principal, session, cache_affinity=body.prompt_cache_key, provider=provider_for(body.model))
 
 
 async def retry_target(principal: ApiPrincipal, failed: BackendTarget) -> BackendTarget:
     async with SessionLocal() as session:
-        return await choose_target(principal, session, exclude_worker_ids={failed.worker_id})
+        return await choose_target(principal, session, exclude_worker_ids={failed.worker_id}, provider=failed.provider)
 
 
 async def release_request_session(session: AsyncSession) -> None:
@@ -494,6 +515,8 @@ async def complete_with_failover(body: ResponseRequest, backend: CompletionBacke
             raise HTTPException(503, detail={"error": {"message": "Timed out waiting for an available Codex worker connection", "type": "server_error", "code": "worker_capacity_exceeded", "param": None}}, headers={"Retry-After": "5"}) from exc
         if target.worker_id and exc.kind != "account_changed":
             await quarantine_worker(target.worker_id, str(exc), exc.kind)
+        if target.provider == "gemini" and exc.kind == "limit":
+            raise HTTPException(429, detail={"error": {"message": "Gemini subscription quota is exhausted; retry later", "type": "rate_limit_error", "code": "provider_quota_exhausted", "param": None}}, headers={"Retry-After": "60"}) from exc
         if not (allow_retry and exc.safe_to_retry):
             raise
         reset_auto_resume(body, "worker_pre_turn_failure")
@@ -540,7 +563,7 @@ async def save_usage(
         if audit is None and request_params is not None and endpoint == "responses":
             request_params = {**request_params, "previous_response_id": previous_response_id}
         cost = priced_amount(result.input_tokens, result.output_tokens, result.cache_read_tokens, result.cache_write_tokens, price) if price and result else (Decimal(0) if price else None)
-        record = UsageRecord(owner_username=principal.owner_username, request_params=request_params, request_observation=request_observation(audit), input_price=price.input_price if price else None, output_price=price.output_price if price else None, cache_read_price=price.cache_read_price if price else None, cache_write_price=price.cache_write_price if price else None, cost_usd=cost, request_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, model=model, status_code=status_code, input_tokens=result.input_tokens if result else 0, output_tokens=result.output_tokens if result else 0, cache_read_tokens=result.cache_read_tokens if result else 0, cache_write_tokens=result.cache_write_tokens if result else 0, duration_ms=int((time.monotonic() - started) * 1000), error_code=error_code, endpoint=endpoint, previous_response_id=previous_response_id, thread_id=thread_id or (result.thread_id if result else None))
+        record = UsageRecord(provider=target.provider, owner_username=principal.owner_username, request_params=request_params, request_observation=request_observation(audit), input_price=price.input_price if price else None, output_price=price.output_price if price else None, cache_read_price=price.cache_read_price if price else None, cache_write_price=price.cache_write_price if price else None, cost_usd=cost, request_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, model=model, status_code=status_code, input_tokens=result.input_tokens if result else 0, output_tokens=result.output_tokens if result else 0, cache_read_tokens=result.cache_read_tokens if result else 0, cache_write_tokens=result.cache_write_tokens if result else 0, duration_ms=int((time.monotonic() - started) * 1000), error_code=error_code, endpoint=endpoint, previous_response_id=previous_response_id, thread_id=thread_id or (result.thread_id if result else None))
         await correlate(session, record, result.text if result else None)
         if audit and audit.get("execution_decision"):
             record.conversation_evidence["execution"] = audit["execution_decision"]
@@ -563,7 +586,7 @@ async def save_usage(
             ResponseBinding.status != "active").limit(1)) if result and principal.key_id else None
         if (persist_binding or (audit and audit.get("execution"))) and result and principal.key_id and result.thread_id and target.worker_id and generation_ok and checkpoint_ok and not retired:
             now = utcnow()
-            session.add(ResponseBinding(response_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, thread_id=result.thread_id, last_used_at=now, expires_at=None, status="active", worker_generation=worker.execution_generation))
+            session.add(ResponseBinding(response_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, thread_id=result.thread_id, last_used_at=now, expires_at=None, status="active", worker_generation=worker.execution_generation, provider=getattr(worker, "provider", None) or "codex"))
         await session.commit()
         if audit is not None:
             audit["saved"] = True
@@ -626,6 +649,8 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
             "code": exc.__cause__.code if tool_failure else "previous_response_not_found" if session_failure else "worker_capacity_exceeded" if capacity_failure else "backend_error",
             "message": str(exc) if tool_failure else "The previous response session is no longer available" if session_failure else "Timed out waiting for an available Codex worker connection" if capacity_failure else "The Codex backend could not complete the request",
         }
+        if target.provider == "gemini":
+            error = {"code": "provider_quota_exhausted" if isinstance(exc, WorkerFailure) and exc.kind == "limit" else error["code"], "message": "Gemini subscription quota is exhausted" if isinstance(exc, WorkerFailure) and exc.kind == "limit" else "Gemini could not complete the request"}
         if audit := current_audit.get(): audit["rejection"] = error
         await save_usage(response_id, principal, target, body.model, 400 if tool_failure else 404 if session_failure else 503 if capacity_failure else 502, started, error_code=error["code"], previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))
         yield sse({"type": "error", "sequence_number": sequence, **error, "param": None}); sequence += 1
@@ -705,6 +730,9 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
         capacity_failure = isinstance(exc, WorkerFailure) and exc.kind == "capacity"
         error_code = exc.__cause__.code if tool_failure else "worker_capacity_exceeded" if capacity_failure else "backend_error"
         error_message = str(exc) if tool_failure else "Timed out waiting for an available Codex worker connection" if capacity_failure else "The Codex backend could not complete the request"
+        if target.provider == "gemini":
+            error_code = "provider_quota_exhausted" if isinstance(exc, WorkerFailure) and exc.kind == "limit" else error_code
+            error_message = "Gemini subscription quota is exhausted" if error_code == "provider_quota_exhausted" else "Gemini could not complete the request"
         if audit := current_audit.get(): audit["rejection"] = {"code": error_code, "message": error_message}
         await save_usage(completion_id, principal, target, body.model, 400 if tool_failure else 503 if capacity_failure else 502, started, error_code=error_code, request_params=body.model_dump(mode="json"))
         yield chat_sse({"error": {"message": error_message, "type": "invalid_request_error" if tool_failure else "server_error", "code": error_code}})
@@ -760,16 +788,19 @@ async def health() -> dict[str, str]:
 
 
 @app.get("/v1/models")
-async def models(_: ApiPrincipal = Depends(require_api_key)) -> dict:
-    settings = get_settings()
-    return {"object": "list", "data": [{"id": model, "object": "model", "created": 0, "owned_by": "codex-gateway"} for model in settings.public_models()]}
+async def models(principal: ApiPrincipal = Depends(require_api_key), session: AsyncSession = Depends(get_session)) -> dict:
+    from .providers import visible_models
+    public_models = await visible_models(session, principal)
+    return {"object": "list", "data": [{"id": model, "object": "model", "created": 0, "owned_by": "codex-gateway" if provider_for(model) == "codex" else provider_for(model)} for model in public_models]}
 
 
 @app.get("/v1/models/{model_id}")
-async def retrieve_model(model_id: str, _: ApiPrincipal = Depends(require_api_key)):
+async def retrieve_model(model_id: str, principal: ApiPrincipal = Depends(require_api_key), session: AsyncSession = Depends(get_session)):
     if model_id not in get_settings().public_models():
         return openai_error(404, f"The model '{model_id}' does not exist", "model_not_found", param="model")
-    return {"id": model_id, "object": "model", "created": 0, "owned_by": "codex-gateway"}
+    from .providers import authorize_model
+    await authorize_model(session, principal, model_id)
+    return {"id": model_id, "object": "model", "created": 0, "owned_by": "codex-gateway" if provider_for(model_id) == "codex" else provider_for(model_id)}
 
 
 @app.post("/v1/chat/completions")
@@ -777,16 +808,20 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
     settings = get_settings()
     if body.model not in settings.public_models():
         return openai_error(400, f"Model '{body.model}' is not available", "model_not_found", param="model")
+    from .providers import authorize_model
+    await authorize_model(session, principal, body.model)
     if unsupported := body.unsupported():
         return openai_error(400, unsupported[1], "unsupported_parameter", param=unsupported[0])
+    validate_chat_capabilities(body)
     request = body.to_response_request()
+    validate_capabilities(request)
     await validate_grammars(request)
     pending_target = backend.continuation_target(request, principal.key_id) if hasattr(backend, "continuation_target") else None
     await validate_pending_worker(backend, pending_target, session)
     pending_thread = backend.continuation_thread(request, principal.key_id) if pending_target and hasattr(backend, "continuation_thread") else None
     request, execution_binding = await prepare_execution(request, principal, "chat.completions", current_audit.get(), pending_thread=pending_thread, tool_sessions=getattr(backend,"tool_sessions",None))
     target = pending_target or await choose_execution_target(principal, session, execution_binding, request)
-    allow_retry = not pending_target and (execution_binding is None or request._execution_auto_resume) and principal.pinned_worker_id is None
+    allow_retry = not pending_target and (execution_binding is None or (request._execution_auto_resume and target.provider == "codex")) and principal.pinned_worker_id is None
     await release_request_session(session)
     if body.stream:
         return StreamingResponse(chat_completion_stream(body, request, backend, principal, target, allow_retry), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
@@ -810,8 +845,11 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
     settings = get_settings()
     if body.model not in settings.public_models():
         return openai_error(400, f"Model '{body.model}' is not available", "model_not_found", param="model")
+    from .providers import authorize_model
+    await authorize_model(session, principal, body.model)
     if unsupported := body.unsupported():
         return openai_error(400, unsupported[1], "unsupported_parameter", param=unsupported[0])
+    validate_capabilities(body)
     await validate_grammars(body)
     public_previous_id = body.previous_response_id
     binding = None
@@ -821,7 +859,11 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
         binding = await session.scalar(select(ResponseBinding).where(ResponseBinding.response_id == public_previous_id, ResponseBinding.api_key_id == principal.key_id))
         if not binding:
             return openai_error(404, "previous_response_id was not found", "previous_response_not_found")
+        if (getattr(binding, "provider", None) or "codex") != provider_for(body.model):
+            reject("model", "Continuation cannot change provider", "provider_mismatch")
         worker = await session.get(Worker, binding.worker_id)
+        if worker and (getattr(worker, "provider", None) or "codex") != (getattr(binding, "provider", None) or "codex"):
+            reject("previous_response_id", "Worker provider changed", "provider_mismatch")
         if binding.status != "active" or not worker or binding.worker_generation != worker.execution_generation:
             return openai_error(404, "previous_response_id is no longer available", "previous_response_not_found", param="previous_response_id")
         await touch_response_thread(session, binding)
@@ -835,10 +877,10 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
     target = pending_target or await choose_execution_target(principal, session, binding, body)
     await release_request_session(session)
     if body.stream:
-        return StreamingResponse(response_stream(body, backend, principal, target, public_previous_id, not pending_target and (binding is None or body._execution_auto_resume) and principal.pinned_worker_id is None), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        return StreamingResponse(response_stream(body, backend, principal, target, public_previous_id, not pending_target and (binding is None or (body._execution_auto_resume and target.provider == "codex")) and principal.pinned_worker_id is None), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
     started = time.monotonic()
     try:
-        result, target = await complete_with_failover(body, backend, principal, target, allow_retry=not pending_target and (binding is None or body._execution_auto_resume) and principal.pinned_worker_id is None)
+        result, target = await complete_with_failover(body, backend, principal, target, allow_retry=not pending_target and (binding is None or (body._execution_auto_resume and target.provider == "codex")) and principal.pinned_worker_id is None)
     except HTTPException as exc:
         if audit := current_audit.get(): audit["rejection"] = exc.detail.get("error", {}) if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
         response_id = f"resp_{uuid4().hex}"

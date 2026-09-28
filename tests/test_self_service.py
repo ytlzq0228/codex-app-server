@@ -56,10 +56,23 @@ def test_forced_password_and_role_boundaries():
         assert client.post("/admin/users",data={"csrf_token":token,"username":"hacker"},headers=AJAX).status_code == 403
 
 
+async def own_codex_worker(username):
+    # Admin capacity alone no longer grants model access. These tests exercise
+    # billing/key rotation with an owner who has a Codex Worker.
+    from codex_gateway.database import SessionLocal
+    from codex_gateway.models import Worker, WorkerStatus
+    async with SessionLocal() as db:
+        name = "permission-" + uuid4().hex
+        db.add(Worker(name=name, container_name=name, owner_username=username,
+                      provider="codex", endpoint="ws://test", enabled=False, status=WorkerStatus.offline))
+        await db.commit()
+
+
 def test_one_key_concurrency_rotation_and_request_details():
     with TestClient(app) as client:
         admin_token = admin_login(client)
         username,password = new_user(client,admin_token)
+        client.portal.call(own_codex_worker,username)
         token = user_login(client,username,password)
         with ThreadPoolExecutor(max_workers=2) as executor:
             responses = list(executor.map(lambda _: client.post("/user/account/key",data={"csrf_token":token},headers=AJAX),range(2)))
@@ -97,6 +110,7 @@ def test_finance_snapshot_and_transfer_keeps_history():
     with TestClient(app) as client:
         token = admin_login(client)
         first,pw = new_user(client,token)
+        client.portal.call(own_codex_worker,first)
         second,_ = new_user(client,token)
         assert client.post('/admin/prices',data={'csrf_token':token,'model':'gpt-6-sol','input_price':'2','output_price':'8'},headers=AJAX).status_code == 200
         user_token = user_login(client,first,pw)

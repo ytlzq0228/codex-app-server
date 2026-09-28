@@ -5,6 +5,10 @@ from .security import hash_password
 
 
 async def upgrade(connection):
+    for table in ("workers", "response_bindings", "execution_sessions", "usage_records", "model_prices"):
+        await connection.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS provider VARCHAR(16) NOT NULL DEFAULT 'codex'"))
+        await connection.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_provider ON {table} (provider)"))
+    await connection.execute(text("ALTER TABLE workers ADD COLUMN IF NOT EXISTS provider_project VARCHAR(180)"))
     for statement in (
         "ALTER TABLE workers ADD COLUMN IF NOT EXISTS execution_generation INTEGER NOT NULL DEFAULT 0",
         "ALTER TABLE response_bindings ADD COLUMN IF NOT EXISTS worker_generation INTEGER NOT NULL DEFAULT 0",
@@ -33,7 +37,7 @@ async def upgrade(connection):
         "ALTER TABLE workers ADD COLUMN IF NOT EXISTS account_email VARCHAR(320)",
         "ALTER TABLE workers ADD COLUMN IF NOT EXISTS account_checked_at TIMESTAMPTZ",
         "CREATE INDEX IF NOT EXISTS ix_workers_owner_username ON workers(owner_username)",
-        "INSERT INTO subscription_plans (name) SELECT DISTINCT lower(trim(plan_type)) FROM workers WHERE plan_type IS NOT NULL AND trim(plan_type) <> '' ON CONFLICT (name) DO NOTHING",
+        "INSERT INTO subscription_plans (name) SELECT DISTINCT CASE WHEN provider='codex' THEN '' ELSE provider || ':' END || lower(trim(plan_type)) FROM workers WHERE plan_type IS NOT NULL AND trim(plan_type) <> '' ON CONFLICT (name) DO NOTHING",
         "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS owner_username VARCHAR(120) REFERENCES users(username)",
         "CREATE INDEX IF NOT EXISTS ix_api_keys_owner_username ON api_keys(owner_username)",
         "ALTER TABLE usage_records ADD COLUMN IF NOT EXISTS owner_username VARCHAR(120)",
@@ -55,6 +59,19 @@ async def upgrade(connection):
     ):
         await connection.execute(text(statement))
 
+    await connection.execute(text("""
+        UPDATE subscription_plans target SET monthly_price=old.monthly_price, weight=old.weight, color=old.color
+        FROM subscription_plans old
+        WHERE target.name='gemini:' || old.name AND target.monthly_price IS NULL AND old.name LIKE 'gcp-%'
+        AND EXISTS (SELECT 1 FROM workers WHERE provider='gemini' AND lower(trim(plan_type))=old.name)
+        AND NOT EXISTS (SELECT 1 FROM workers WHERE provider='codex' AND lower(trim(plan_type))=old.name)
+    """))
+    await connection.execute(text("""
+        DELETE FROM subscription_plans old WHERE old.name LIKE 'gcp-%' AND
+        EXISTS (SELECT 1 FROM workers WHERE provider='gemini' AND lower(trim(plan_type))=old.name)
+        AND EXISTS (SELECT 1 FROM subscription_plans target WHERE target.name='gemini:' || old.name)
+        AND NOT EXISTS (SELECT 1 FROM workers WHERE provider='codex' AND lower(trim(plan_type))=old.name)
+    """))
     await migrate_email_usernames(connection)
 
 

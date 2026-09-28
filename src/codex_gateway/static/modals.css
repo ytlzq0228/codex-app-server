@@ -12,6 +12,7 @@ dialog.app-modal{width:min(92vw,600px);max-width:92vw;max-height:88vh;overflow:a
 .request-json summary { cursor: pointer; color: var(--green, #16734a); font-size: 13px; }
 .request-json summary:focus-visible { outline: 2px solid #16734a; outline-offset: 4px; }
 .request-json pre { font-size: 12px; line-height: 1.6; }
+dialog pre:empty { display: none; }
 .request-conversation { display: flex; flex-direction: column; gap: 16px; padding: 16px; background: var(--paper, #f8faf8); border-radius: 12px; }
 .request-bubble { max-width: 90%; min-width: 0; padding: 14px 18px; border: 1px solid var(--line); border-radius: 14px; }
 .request-bubble > span { font-size: 12px; color: var(--muted); }

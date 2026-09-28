@@ -111,6 +111,7 @@
   width: 230px;
   min-width: 180px;
   max-width: 230px;
+  font-size: 12px;
 }
 
 .worker-health > strong,

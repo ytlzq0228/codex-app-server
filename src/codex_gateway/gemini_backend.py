@@ -241,6 +241,8 @@ async def probe_gemini(worker, db, settings, *, inference=True, login_session=No
         if not account:
             raise WorkerFailure("Gemini account or inference unavailable", kind=payload.get("kind", "logged_out"))
         await update_account(worker, account)
+        if payload.get("available") is False:
+            raise WorkerFailure("Gemini inference unavailable", kind=payload.get("kind", "connection"))
         worker.status = WorkerStatus.ready
         worker.failure_kind = worker.failure_reason = worker.retry_after = worker.quarantined_at = None
         worker.last_seen_at = datetime.now(timezone.utc)
@@ -258,9 +260,10 @@ async def probe_gemini(worker, db, settings, *, inference=True, login_session=No
         worker.failure_kind = kind
         if kind == "logged_out":
             await update_account(worker, None)
-        worker.failure_reason = "Gemini account check failed"
+        worker.failure_reason = ("账号已登录，但未通过 Antigravity 资格检查，请更换账号或联系管理员。"
+                                 if kind == "ineligible" else "Gemini account check failed")
         worker.retry_after = datetime.now(timezone.utc) + timedelta(seconds=settings.worker_limit_cooldown_seconds if kind == "limit" else settings.worker_failure_cooldown_seconds)
-        ok, message = False, "Gemini 检查失败，请检查登录状态或稍后重试"
+        ok, message = False, (worker.failure_reason if kind == "ineligible" else "Gemini 检查失败，请检查登录状态或稍后重试")
     await reconcile_worker(db, worker)
     await db.commit()
-    return {"ok": ok, "logged_in": ok, "message": message}
+    return {"ok": ok, "logged_in": bool(worker.auth_mode), "message": message}

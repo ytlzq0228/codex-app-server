@@ -82,3 +82,25 @@ Thread 为 fc8a9064-8672-4ef9-a2a0-ed991f65c80c。原记录没有 logical_conver
 Google OAuth 与 Google Cloud 登录可能有不同完成画面；在拿到发生问题的 Worker/时间前，
 尚不能认定这是本次卡住的原因，因此未降低账号确认条件。
 本轮新增修改仅在本地，尚未部署测试或正式环境。
+
+### admin-worker-01 现场补充
+
+测试容器 contrib-11fd478500f141f28e240833879c74f0 仍使用 gemini-tools-20260928。活动登录接口返回 waiting、logged_in=false、error=null；账号查询返回 409。
+在同容器启动独立观察 CLI，选择默认主题后复现条款页，含交互数据收集勾选框和 [Previous] [Done]。向下焦点移动到 Previous，再向右到 Done。观察期间未提交 Done，未替用户同意条款或改变勾选。活动登录原始屏幕未通过接口暴露，因此 waiting 不能证明 token 交换成败，agy models 成功也不作为登录成功证明。
+本地修复支持明确选择允许或不允许交互数据收集并确认条款，检查勾选状态和 Done 焦点后提交；20 项 Worker 测试通过。未部署或重启该 Worker，保留当前登录现场。
+
+## 测试环境发布：gemini-login-fix-20260928
+
+网关及 manager 使用 codex-gateway:gemini-login-fix-20260928，现有 Gemini Worker 及新建默认镜像使用 codex-antigravity-worker:gemini-login-fix-20260928。保留原有账号和工作区卷。
+本轮包含条款勾选页面、授权码分开发送、资格不足识别及已认证账号保留。资格不足不会标记 ready。61 项相关测试通过；发布后 healthz、所有在用 Gemini Worker 能力检查、现有企业账号真实推理探测通过。admin-worker-01 已被用户删除，未恢复，因此真实资格不足账号重新登录尚未验收。
+回滚资料位于测试服务器 /home/<deploy-user>/deploy-stage/gemini-login-fix，compose-before.json 保存原网关和 manager 镜像配置。旧 Worker 容器 gemini-integration-worker-before-login-fix-20260928 已停止并断开网络，保留以便回滚；恢复时先停止新版、恢复原容器名和网络，避免同名网络别名冲突。正式环境未修改。
+
+### 测试环境 r2：Tab 导航与工作区信任
+
+新建 admin-worker-01（contrib-804906e4fb35417ca782406ac2467e4c）实际阻塞在工作区信任页。修复后实时 /login/start 已返回 workspace-trust 两项选择，不再显示无操作的 waiting。条款页改为 Tab 切换焦点并等待屏幕更新，确认 Done 后才回车；23 项 Worker 测试通过。隔离 CLI 检查未到达条款页，不计为真实条款流程验收。
+两个在用 Gemini Worker 和 manager 新建默认镜像均已升级到 codex-antigravity-worker:gemini-login-fix-r2，能力检查通过。旧容器以 -before-login-r2 后缀停止保留，compose-before-r2.json 保存原默认镜像配置。网页登录会话因升级已重新启动；当前等待用户确认工作区信任，完整 OAuth/资格检查结果尚待继续验证。
+
+### 测试环境 r3：个人账号退出
+
+admin-worker-01 现场 CLI 主界面仅显示邮箱，没有套餐括号。cli_panel 原条件要求邮箱后有套餐，导致未发送 /logout 即超时。修复为识别带版本号的 CLI 账号头部，保留企业格式兼容。25 项 Worker 测试通过。
+两个在用 Gemini Worker 及 manager 默认镜像已更新到 gemini-login-fix-r3。通过真实 /login/logout 完成 admin-worker-01 退出，返回 logged_in=false、account=null；网关账号绑定同步清除，状态 offline / logged_out。旧容器以 -before-login-r3 后缀保留，compose-before-r3.json 保存配置。正式环境未修改。

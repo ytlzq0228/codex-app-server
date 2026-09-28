@@ -462,3 +462,8 @@ gemini异常状态叫做offline/灰色
 
 前端优化，请求历史展开某个会话后Worker Thread：列表限制最大宽度，多的换行展示，现在给屏幕宽度撑爆了
 前端优化，所有金额按照小数点后4位显示，所有token数量超过1M的按照million显示，精确到小数点后4位
+
+
+⚠ Eligibility Check
+  ⎿  Eligibility check failed: Your current account is not eligible for Antigravity. Try signing in with another personal Google account. If you believe
+     this is an error, please contact your administrator.

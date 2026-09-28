@@ -38,6 +38,8 @@ def authorize(authorization: str | None = Header(default=None)):
 
 def error_kind(text):
     text = text.lower()
+    if "eligibility check failed" in text or "not eligible for antigravity" in text:
+        return "ineligible"
     if any(x in text for x in ("quota", "429", "resource_exhausted", "rate limit", "usage limit")):
         return "limit"
     if any(x in text for x in ("unauthenticated", "not logged", "unauthorized", "sign in", "login required")):
@@ -61,6 +63,15 @@ def account_file():
         return json.loads(ACCOUNT.read_text())
     except (OSError, ValueError):
         return None
+
+
+def signed_in_header(display):
+    """Recognize the CLI account header without requiring a subscription label."""
+    lines = display.splitlines()
+    for index, line in enumerate(lines):
+        if re.search(r"Antigravity CLI \d+\.", line):
+            return bool(re.search(r"[\w.+-]+@[\w.-]+", "\n".join(lines[index:index + 4])))
+    return bool(re.search(r"[\w.+-]+@[\w.-]+\s+\([^)]+\)", display))
 
 
 def signed_out_screen(display):
@@ -89,6 +100,25 @@ def authorization_code_error(display):
 
 def login_view(display, url=None):
     """Expose structured login controls, never terminal output or entered secrets."""
+    if "Do you trust the contents of this project?" in display:
+        selected = 0 if re.search(r">\s*Yes, I trust this folder", display) else (
+            1 if re.search(r">\s*No, exit", display) else None)
+        if selected is not None:
+            return {"stage": "choose", "title": "确认 Worker 工作区权限",
+                    "message": "Antigravity 请求读取、编辑和执行 Worker 工作区中的文件。"
+                               "选择信任后继续登录；不信任则退出。",
+                    "options": [{"id": 0, "label": "信任 Worker 工作区并继续"},
+                                {"id": 1, "label": "不信任，退出"}],
+                    "selected": selected, "menu_id": "workspace-trust"}
+    if "Terms of Service & Data Use" in display and re.search(r"\[[xX ]\] Yes, I agree", display):
+        checked = bool(re.search(r"\[[xX]\] Yes, I agree", display))
+        return {"stage": "choose", "title": "服务条款与交互数据使用",
+                "message": "CLI 请求确认服务条款，并选择是否允许 Google 收集和使用交互数据。"
+                           "请先阅读条款和隐私政策，再选择继续方式。相关链接："
+                           + " ".join(re.findall(r"https://[^\s]+", display)),
+                "options": [{"id": 0, "label": "不允许收集交互数据，确认条款并继续"},
+                            {"id": 1, "label": "允许收集交互数据，确认条款并继续"}],
+                "selected": int(checked), "menu_id": "onboarding-terms-data-" + str(int(checked))}
     if "Terms of Service & Data Use" in display and re.search(r">\s*Done", display):
         return {"stage": "choose", "title": "服务条款与数据使用",
                 "message": "请阅读 Antigravity CLI 显示的服务条款与数据使用说明后确认。"
@@ -138,6 +168,33 @@ async def wait_for_login_view(session, timeout=8):
         state = session.state()
     return state
 
+async def wait_login_screen(session, predicate, timeout=3):
+    deadline = time.monotonic() + timeout
+    while session.fd is not None and time.monotonic() < deadline:
+        display = "\n".join(session.screen.display)
+        if predicate(display):
+            return display
+        await asyncio.sleep(.05)
+    raise HTTPException(409, "登录页面尚未就绪，请重试")
+
+
+async def focus_terms(session, focus):
+    patterns = {"checkbox": r">\s*\[[xX ]\]",
+                "previous": r">\s*Previous", "done": r">\s*Done"}
+    for _ in range(3):
+        display = "\n".join(session.screen.display)
+        if re.search(patterns[focus], display):
+            return display
+        current = next((key for key, pattern in patterns.items() if re.search(pattern, display)), None)
+        if current is None:
+            raise HTTPException(409, "无法定位条款控件，请重试")
+        os.write(session.fd, b"\t")
+        await wait_login_screen(session, lambda text: "Terms of Service & Data Use" in text
+                                and not re.search(patterns[current], text)
+                                and any(re.search(pattern, text) for pattern in patterns.values()))
+    raise HTTPException(409, "无法定位条款确认按钮，请重试")
+
+
 class Login:
     def __init__(self):
         self.id = uuid4().hex
@@ -149,6 +206,7 @@ class Login:
         self.process = None
         self.url = None
         self.account = None
+        self.unavailable_kind = None
         self.verification_task = None
         self.error = None
         self.task = None
@@ -194,6 +252,17 @@ class Login:
                     theme_confirmed = True
                     os.write(self.fd, b"\r")
                     continue
+                if error_kind(display) == "ineligible":
+                    self.unavailable_kind = "ineligible"
+                    header = display.split("Eligibility Check", 1)[0]
+                    identity = re.search(r"([\w.+-]+@[\w.-]+)", header)
+                    if identity and "Antigravity CLI" in header:
+                        self.account = {"type": "google-subscription", "email": identity[1],
+                                        "planType": None, "project": None}
+                        ACCOUNT.write_text(json.dumps(self.account))
+                        ACCOUNT.chmod(0o600)
+                    self.error = "账号已认证，但未通过 Antigravity 资格检查，请更换账号或联系管理员。"
+                    break
                 email = re.search(r"([\w.+-]+@[\w.-]+)\s+\(([^)]+)\)", display)
                 project = re.search(r"GCP Project:\s*([\w.-]+)", display)
                 if email and project:
@@ -202,7 +271,7 @@ class Login:
                     ACCOUNT.write_text(json.dumps(self.account))
                     ACCOUNT.chmod(0o600)
                     break
-            if not self.account:
+            if not self.account and not self.error:
                 self.error = "登录已结束或超时，请重新开始"
         finally:
             await stop(self.process)
@@ -217,7 +286,7 @@ class Login:
         display = "\n".join(line.rstrip() for line in self.screen.display).strip()
         for secret in self.redacted:
             display = display.replace(secret, "[已提交]")
-        prompt_error = authorization_code_error(display) if self.code_submitted else None
+        prompt_error = authorization_code_error(display) if self.code_submitted and not self.unavailable_kind else None
         view = login_view(display, self.url)
         if self.code_submitted and view["stage"] == "authorize" and not prompt_error:
             view = {"stage": "waiting", "title": "正在完成 Google 授权",
@@ -284,6 +353,18 @@ async def login_input(body: LoginInput):
                 raise HTTPException(400, "Invalid login choice")
             if view.get("stage") != "choose" or body.menu_id != view.get("menu_id") or not 0 <= choice < len(view["options"]):
                 raise HTTPException(409, "登录选项已更新，请重新选择")
+            if view["menu_id"].startswith("onboarding-terms-data-"):
+                # Tab cycles checkbox -> Previous -> Done; wait for each redraw.
+                display = await focus_terms(login, "checkbox")
+                checked = bool(re.search(r"\[[xX]\] Yes, I agree", display))
+                if checked != bool(choice):
+                    os.write(login.fd, b"\r")
+                    await wait_login_screen(login, lambda text:
+                        bool(re.search(r"\[[xX]\] Yes, I agree", text)) == bool(choice)
+                        and "Terms of Service & Data Use" in text)
+                await focus_terms(login, "done")
+                os.write(login.fd, b"\r")
+                return {"message": "已确认"}
             delta = choice - view["selected"]
             if delta:
                 os.write(login.fd, (b"\x1b[B" if delta > 0 else b"\x1b[A") * abs(delta))
@@ -342,7 +423,7 @@ async def account():
         identity.expires = time.monotonic() + 8
         await identity.start()
         await identity.task
-    return {"account": identity.account, "models": [line.split()[0] for line in stdout.decode().splitlines() if line.startswith("gemini-")]}
+    return {"account": identity.account, "kind": identity.unavailable_kind, "available": not bool(identity.unavailable_kind), "models": [line.split()[0] for line in stdout.decode().splitlines() if line.startswith("gemini-")]}
 
 
 
@@ -384,7 +465,7 @@ async def cli_panel(command):
                 display = "\n".join(line.rstrip() for line in screen.display)
                 if command == "/logout" and signed_out_screen(display):
                     return display
-                if sent is None and re.search(r"[\w.+-]+@[\w.-]+\s+\([^)]+\)", display):
+                if sent is None and signed_in_header(display):
                     os.write(master, command.encode())
                     await asyncio.sleep(.15)
                     os.write(master, b"\r")
@@ -589,7 +670,7 @@ async def turn(body: Turn):
 @app.post("/probe", dependencies=[Depends(authorize)])
 async def probe():
     state = await account()
-    if not state.get("account"):
+    if not state.get("account") or state.get("available") is False:
         return state
     if lock.locked():
         raise HTTPException(409, "Worker busy")
@@ -603,7 +684,7 @@ async def probe():
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), 40)
             if proc.returncode or '"SUCCESS"' not in stdout.decode(errors="replace"):
-                return {"account": None, "kind": error_kind((stdout + stderr).decode(errors="replace"))}
+                return {**state, "available": False, "kind": error_kind((stdout + stderr).decode(errors="replace"))}
         finally:
             await stop(proc)
     return state

@@ -35,6 +35,10 @@
   }
   function render(run, data) {
     if (!visible(run)) return;
+    // The CLI can keep its terms screen visible briefly after accepting Enter.
+    // Keep the pending state until it actually advances, so the choice cannot be submitted twice.
+    if (run.confirmingTerms && data.stage === 'choose' && data.menu_id === 'onboarding-terms'
+        && !data.logged_in && !data.error) return;
     const view = JSON.stringify([data.stage, data.menu_id, data.login_url, data.logged_in, data.error, data.title, data.message]);
     if (view === run.view) return;
     run.view = view; hideControls();

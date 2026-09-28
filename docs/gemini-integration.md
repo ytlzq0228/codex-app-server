@@ -22,7 +22,8 @@ Client tools support function declarations, namespaces and custom text/grammar
 tools through a per-execution MCP relay. Calls and text results use the same
 public protocol and bounded continuation registry as Codex. The CLI stays alive
 while awaiting a result; no client code executes in the worker.
-Images (including tool results), structured output, reasoning overrides and
+JSON structured output is prompted and validated by the gateway before delivery; it cannot be combined with tool declarations.
+Images (including tool results), reasoning overrides and
 unsupported sampling options return a parameter error. Parallel tool calls are
 not enabled; omit parallel_tool_calls or set it to false.
 Every gateway turn installs explicit deny rules for native file reads/writes,

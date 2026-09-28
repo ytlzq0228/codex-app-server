@@ -642,6 +642,8 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
             try:
                 async for event in backend.stream(body, target):
                     thread_id = event.thread_id or thread_id
+                    from .audit import track_backend
+                    track_backend(target, thread_id)
                     input_tokens = event.input_tokens or input_tokens
                     output_tokens = event.output_tokens or output_tokens
                     cache_read_tokens = event.cache_read_tokens or cache_read_tokens
@@ -738,6 +740,8 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
             try:
                 async for event in backend.stream(request, target):
                     thread_id = event.thread_id or thread_id
+                    from .audit import track_backend
+                    track_backend(target, thread_id)
                     input_tokens = event.input_tokens or input_tokens
                     output_tokens = event.output_tokens or output_tokens
                     cache_read_tokens = event.cache_read_tokens or cache_read_tokens
@@ -851,6 +855,9 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
     pending_target = backend.continuation_target(request, principal.key_id) if hasattr(backend, "continuation_target") else None
     await validate_pending_worker(backend, pending_target, session)
     pending_thread = backend.continuation_thread(request, principal.key_id) if pending_target and hasattr(backend, "continuation_thread") else None
+    if pending_target:
+        from .audit import track_backend
+        track_backend(pending_target, pending_thread, source="authenticated_tool_call")
     request, execution_binding = await prepare_execution(request, principal, "chat.completions", current_audit.get(), pending_thread=pending_thread, tool_sessions=getattr(backend,"tool_sessions",None))
     target = pending_target or await choose_execution_target(principal, session, execution_binding, request)
     allow_retry = not pending_target and (execution_binding is None or (request._execution_auto_resume and target.provider == "codex")) and principal.pinned_worker_id is None
@@ -905,6 +912,9 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
         return openai_error(400, "Tool output and previous_response_id refer to different Workers", "invalid_client_tool")
     await validate_pending_worker(backend, pending_target, session)
     pending_thread = backend.continuation_thread(body, principal.key_id) if pending_target and hasattr(backend, "continuation_thread") else None
+    if pending_target:
+        from .audit import track_backend
+        track_backend(pending_target, pending_thread, source="authenticated_tool_call")
     body, binding = await prepare_execution(body, principal, "responses", current_audit.get(), pending_thread=pending_thread, binding=binding, tool_sessions=getattr(backend,"tool_sessions",None))
     target = pending_target or await choose_execution_target(principal, session, binding, body)
     await release_request_session(session)

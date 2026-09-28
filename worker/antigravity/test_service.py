@@ -210,3 +210,25 @@ class LoginVerificationTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(session.state()["logged_in"])
         await session.task
         self.assertTrue(session.state()["logged_in"])
+
+class OAuthSubmissionTests(unittest.IsolatedAsyncioTestCase):
+    async def test_code_and_enter_are_separate_and_duplicate_is_rejected(self):
+        session = service.Login()
+        session.fd = 123
+        session.url = "https://accounts.google.com/o/oauth2/auth?test=1"
+        session.stream.feed("Paste the authorization code below:")
+        service.login = session
+        writes = []
+        async def settle(delay):
+            self.assertEqual(writes, [b"test-code"])
+        try:
+            with patch.object(service.os, "write", side_effect=lambda fd, data: writes.append(data)), \
+                 patch.object(service.asyncio, "sleep", side_effect=settle):
+                body = service.LoginInput(session_id=session.id, action="code", code="test-code")
+                await service.login_input(body)
+                self.assertEqual(writes, [b"test-code", b"\r"])
+                with self.assertRaises(service.HTTPException):
+                    await service.login_input(body)
+                self.assertNotIn("test-code", json.dumps(session.state()))
+        finally:
+            service.login = None

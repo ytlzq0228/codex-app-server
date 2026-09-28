@@ -218,7 +218,11 @@ class Login:
         for secret in self.redacted:
             display = display.replace(secret, "[已提交]")
         prompt_error = authorization_code_error(display) if self.code_submitted else None
-        return {"session_id": self.id, **login_view(display, self.url),
+        view = login_view(display, self.url)
+        if self.code_submitted and view["stage"] == "authorize" and not prompt_error:
+            view = {"stage": "waiting", "title": "正在完成 Google 授权",
+                    "message": "授权码已提交，正在等待登录服务响应，请勿重复提交。"}
+        return {"session_id": self.id, **view,
                 "logged_in": bool(self.account) and bool(self.task and self.task.done()), "account": self.account,
                 "error": prompt_error or self.error, "expires_in": max(0, int(self.expires - time.monotonic()))}
 
@@ -294,9 +298,19 @@ async def login_input(body: LoginInput):
         display = "\n".join(login.screen.display).lower()
         if login_view(display, login.url)["stage"] != "authorize":
             raise HTTPException(409, "CLI is not waiting for an authorization code")
-        login.code_submitted = True
-        login.redacted.append(body.code)
-        data = body.code.encode() + b"\r"
+        async with login.input_lock:
+            if login.code_submitted:
+                raise HTTPException(409, "授权码已提交，请等待登录结果或重新开始")
+            login.code_submitted = True
+            login.redacted.append(body.code)
+            # Bubble Tea distinguishes pasted text from a separate Enter key.
+            # Sending both in one read can insert the code without submitting it.
+            os.write(login.fd, body.code.encode())
+            await asyncio.sleep(.15)
+            if login.fd is None:
+                raise HTTPException(409, "Login is no longer active")
+            os.write(login.fd, b"\r")
+        return {"message": "已提交"}
     elif body.action in keys:
         data = keys[body.action]
     else:

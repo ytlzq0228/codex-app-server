@@ -3,6 +3,7 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 import httpx
+from jsonschema.exceptions import ValidationError
 from .backend import AppServerBackend, WorkerFailure, classify_worker_failure
 from .schemas import BackendResult, BackendStreamEvent
 from .client_tools import definitions, dynamic_specs, public_call, tool_outputs, ToolProtocolError
@@ -82,6 +83,12 @@ class GeminiAdapter:
                 + "\n".join(json.dumps({"client_tool": spec["name"], "mcp_tool": spec["alias"],
                                         "parameters": spec["schema"]}, ensure_ascii=False) for spec in specs)
             )
+        output_schema = request.output_schema()
+        output_chunks = []
+        if output_schema is not None:
+            payload["prompt"] += ("\n\nReturn only a JSON value matching this JSON Schema. "
+                                  "Do not include Markdown fences or commentary.\n"
+                                  + json.dumps(output_schema, ensure_ascii=False))
         thread = ""
         grammar_failures = 0
         grammar_needs_correction = False
@@ -146,7 +153,23 @@ class GeminiAdapter:
                             continue
                         if data.get("done") and grammar_needs_correction:
                             raise ToolProtocolError("Model ended without correcting the invalid client tool input")
-                        yield BackendStreamEvent(thread_id=thread, delta=data.get("delta", ""), done=data.get("done", False),
+                        delta = data.get("delta", "")
+                        if output_schema is not None:
+                            output_chunks.append(delta)
+                            if not data.get("done"):
+                                continue
+                            from jsonschema.validators import validator_for
+                            try:
+                                output = "".join(output_chunks).strip()
+                                if output.startswith("```") and output.endswith("```"):
+                                    output = output.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+                                parsed = json.loads(output)
+                                validator_for(output_schema)(output_schema).validate(parsed)
+                            except (ValueError, IndexError, ValidationError) as exc:
+                                raise ToolProtocolError("Gemini output did not match the requested JSON Schema",
+                                                        "structured_output_invalid") from exc
+                            delta = json.dumps(parsed, ensure_ascii=False)
+                        yield BackendStreamEvent(thread_id=thread, delta=delta, done=data.get("done", False),
                             input_tokens=data.get("input_tokens", 0), output_tokens=data.get("output_tokens", 0),
                             cache_read_tokens=data.get("cache_read_tokens", 0))
                         if data.get("done"):

@@ -27,7 +27,7 @@ def test_schema_preserves_property_names_and_converts_types():
 
 @pytest.mark.parametrize("body", [
     {"contents": [{"parts": [{"inlineData": {"data": "x"}}]}]},
-    {**prompt(), "generationConfig": {"responseMimeType": "application/json"}},
+    {**prompt(), "generationConfig": {"responseMimeType": "image/png"}},
     {**prompt(), "tools": [{"googleSearch": {}}]},
     {**prompt(), "generationConfig": {"stopSequences": ["STOP"]}},
     {**prompt(), "toolConfig": {"functionCallingConfig": {"mode": "ANY"}}},
@@ -87,3 +87,28 @@ async def test_request_size_limit(monkeypatch):
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=GeminiNativeMiddleware(inner)),base_url="http://test") as client:
         response = await client.post("/v1beta/models/flash:generateContent",json=prompt())
     assert response.status_code == 413
+
+def test_native_structured_schema_translation():
+    body = {**prompt(), "generationConfig": {"responseMimeType": "application/json",
+            "responseSchema": {"type": "OBJECT", "properties": {"loop": {"type": "BOOLEAN"}},
+                               "required": ["loop"]}}}
+    result = translate_request(body, "gemini", False)
+    assert result["response_format"]["json_schema"]["schema"]["properties"]["loop"]["type"] == "boolean"
+
+@pytest.mark.parametrize("conflicting", [False, True])
+def test_resume_duplicate_function_results(conflicting):
+    part = function_part({"id": "call_a", "function": {"name": "read_file", "arguments": "{}"}})
+    result = {"functionResponse": {"id": "call_a", "name": "read_file", "response": {"output": "hello"}}}
+    duplicate = json.loads(json.dumps(result))
+    if conflicting:
+        duplicate["functionResponse"]["response"]["output"] = "different"
+    body = prompt()
+    body["contents"] += [{"role": "model", "parts": [part]},
+                         {"role": "user", "parts": [result, duplicate]},
+                         {"role": "user", "parts": [{"text": "continue"}]}]
+    if conflicting:
+        with pytest.raises(ValueError, match="Conflicting"):
+            translate_request(body, "gemini", False)
+    else:
+        translated = translate_request(body, "gemini", False)
+        assert len([m for m in translated["messages"] if m["role"] == "tool"]) == 1

@@ -59,8 +59,14 @@ def translate_request(body, model, stream):
     }
     if unsupported_config:
         raise ValueError("Unsupported generationConfig fields: " + ", ".join(sorted(unsupported_config)))
-    if any(config.get(k) for k in ("responseSchema", "responseJsonSchema")) or config.get("responseMimeType", "text/plain") != "text/plain":
-        raise ValueError("Structured output is not supported by the Gemini subscription worker")
+    mime = config.get("responseMimeType", "text/plain")
+    output_schema = config.get("responseJsonSchema", config.get("responseSchema"))
+    if mime not in {"text/plain", "application/json"}:
+        raise ValueError("Only text/plain and application/json output are supported")
+    if output_schema is not None and mime != "application/json":
+        raise ValueError("Response schema requires application/json")
+    if "responseSchema" in config and "responseJsonSchema" in config:
+        raise ValueError("Specify only one response schema")
     if config.get("candidateCount", 1) != 1:
         raise ValueError("Only one candidate is supported")
     if config.get("responseModalities", ["TEXT"]) != ["TEXT"]:
@@ -82,6 +88,7 @@ def translate_request(body, model, stream):
         if role not in {"user", "model"}:
             raise ValueError("Content role must be user or model")
         text, calls, results = [], [], []
+        seen_results = {}
         for part in content.get("parts", []):
             if set(part) - {"text", "thought", "thoughtSignature", "functionCall", "functionResponse"}:
                 raise ValueError("Unsupported content part fields")
@@ -101,8 +108,14 @@ def translate_request(body, model, stream):
                     raise ValueError("Only complete text function responses are supported")
                 ids = pending.get(r["name"], [])
                 cid = r.get("id") or (ids[0] if ids else None)
+                identity = (r["name"], cid)
+                if cid and identity in seen_results:
+                    if seen_results[identity] == r.get("response", {}):
+                        continue
+                    raise ValueError("Conflicting duplicate function response")
                 if not cid or cid not in ids:
                     raise ValueError("Function response has no matching call in history")
+                seen_results[identity] = r.get("response", {})
                 ids.remove(cid)
                 results.append({"role": "tool", "tool_call_id": cid,
                                 "content": json.dumps(r.get("response", {}), ensure_ascii=False)})
@@ -133,6 +146,10 @@ def translate_request(body, model, stream):
     result = {"model": model, "messages": messages, "tools": tools,
               "tool_choice": "none" if mode == "NONE" else "auto",
               "parallel_tool_calls": False, "stream": stream}
+    if mime == "application/json":
+        result["response_format"] = ({"type": "json_schema", "json_schema": {
+            "name": "native_response", "schema": schema(output_schema)}}
+            if output_schema is not None else {"type": "json_object"})
     if stream:
         result["stream_options"] = {"include_usage": True}
     return result

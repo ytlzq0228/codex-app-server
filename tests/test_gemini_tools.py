@@ -233,3 +233,37 @@ async def test_gemini_rejects_missing_required_arguments_before_client_delivery(
         assert "required" in replies[0]["content"][0]["text"]
     finally:
         await gemini_backend.tool_sessions.close()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("output,valid", [
+    ('{"loop":false}', True), ('```json\n{"loop":true}\n```', True),
+    ('{"loop":"false"}', False), ('not JSON', False), ('{}', False),
+])
+async def test_structured_output_validated_before_delivery(gemini_backend, monkeypatch, output, valid):
+    async def handle(request):
+        payload = json.loads(request.content)
+        assert "JSON Schema" in payload["prompt"]
+        rows = [{"thread_id": "thread-json", "delta": part} for part in [output[:3], output[3:]]]
+        rows.append({"thread_id": "thread-json", "done": True, "input_tokens": 10, "output_tokens": 5})
+        return httpx.Response(200, content="\n".join(json.dumps(row) for row in rows))
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: original(transport=httpx.MockTransport(handle), **kw))
+    request = ResponseRequest(model="gemini-test", input="check loop", text={"format": {
+        "type": "json_schema", "schema": {"type": "object", "properties": {"loop": {"type": "boolean"}},
+        "required": ["loop"]}}})
+    events = []
+    try:
+        try:
+            async for event in gemini_backend.stream(request, BackendTarget("key:worker", "http://worker", "/workspace", provider="gemini")):
+                events.append(event)
+        except WorkerFailure:
+            assert not valid
+        else:
+            assert valid
+        if valid:
+            assert isinstance(json.loads(events[-1].delta)["loop"], bool)
+            assert events[-1].done and events[-1].input_tokens == 10
+        else:
+            assert not events
+    finally:
+        await gemini_backend.close()

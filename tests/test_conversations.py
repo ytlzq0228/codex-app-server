@@ -78,3 +78,46 @@ async def test_terminal_event_is_never_sent_before_persistence(monkeypatch,kind)
             break
     else:
         pytest.fail('No terminal event')
+
+@pytest.mark.asyncio
+async def test_disconnect_keeps_authenticated_thread_and_survives_cancellation(monkeypatch):
+    from codex_gateway import audit as module
+    from codex_gateway import execution
+    records = []
+    class DB:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            pass
+        def add(self, record):
+            records.append(record)
+        async def commit(self):
+            await anyio.sleep(0)
+            records.append("committed")
+    async def cleanup(audit):
+        pass
+    monkeypatch.setattr(module, "SessionLocal", DB)
+    monkeypatch.setattr(execution, "cleanup", cleanup)
+    async def app(scope, receive, send):
+        await receive()
+        audit = module.current_audit.get()
+        audit["principal"] = SimpleNamespace(key_id="key", owner_username="owner")
+        module.track_backend(SimpleNamespace(worker_id="worker"), "verified-thread",
+                             source="authenticated_tool_call")
+        await send({"type": "http.response.start", "status": 200})
+        cancel.cancel()
+    async def receive():
+        return {"type": "http.request", "body": b'{"model":"gemini-test"}', "more_body": False}
+    async def send(message):
+        pass
+    scope = {"type":"http", "method":"POST", "path":"/v1/chat/completions",
+             "headers":[], "query_string":b"", "state":{}}
+    with anyio.CancelScope() as cancel:
+        await module.RequestAuditMiddleware(app)(scope, receive, send)
+    assert records[-1] == "committed"
+    record = records[0]
+    assert record.status_code == 499
+    assert record.thread_id == "verified-thread"
+    assert record.worker_id == "worker"
+    assert record.conversation_evidence["execution_outcome"] == "unknown"
+    assert module.current_audit.get() is None

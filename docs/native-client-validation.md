@@ -73,7 +73,9 @@ CODEX_GATEWAY_GEMINI_NATIVE_MODEL_ALIASES=gemini-3.8-flash:gemini-3.8-flash-high
 订阅 Worker 控制采样和思考策略。原生 CLI 默认的 temperature、topP、topK、
 maxOutputTokens、thinkingConfig 作为兼容选项接收，但不保证这些设置生效；
 `X-Gateway-Generation-Policy: worker-defaults` 明确这一点。
-结构化输出、非文本内容、多候选、强制工具调用、安全策略覆盖及未知生成参数明确拒绝。
+JSON 结构化输出现已支持，网关先校验完整输出再返回；不与工具声明组合。
+非文本内容、多候选、强制工具调用、安全策略覆盖及未知生成参数仍明确拒绝。
+后续本机诊断与修复见 [Gemini 客户端问题调查](gemini-client-investigation-20260928.md)。
 未实现原生 countTokens / 模型发现等其他 Google API。
 
 工具等待期间不能更换工具集合；例如客户端自动切换 plan mode 改变工具列表时，

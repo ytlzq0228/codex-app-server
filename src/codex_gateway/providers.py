@@ -13,7 +13,7 @@ class Capabilities:
     reasoning: bool = False
 
 CAPABILITIES = {"codex": Capabilities(images=True, tools=True, structured_output=True, reasoning=True),
-                "gemini": Capabilities(tools=True)}
+                "gemini": Capabilities(tools=True, structured_output=True)}
 
 def provider_for(model):
     from .config import get_settings
@@ -45,7 +45,17 @@ def validate_capabilities(request):
         if getattr(request, field, None) is not None:
             reject(field, f"Gemini does not support the {field} parameter")
     if request.text and request.text != {"format": {"type": "text"}}:
-        reject("text", "Gemini structured output and text options are not enabled")
+        output_schema = request.output_schema()
+        if output_schema is None or set(request.text) != {"format"}:
+            reject("text", "Unsupported Gemini text options")
+        from jsonschema.validators import validator_for
+        from jsonschema.exceptions import SchemaError
+        try:
+            validator_for(output_schema).check_schema(output_schema)
+        except SchemaError:
+            reject("text", "Invalid output JSON Schema")
+        if request.tools:
+            reject("text", "Combining Gemini structured output with tools is not supported")
     if request.model_extra:
         reject(next(iter(request.model_extra)), "Unrecognized Gemini parameter")
 

@@ -20,7 +20,7 @@ def test_registry_preserves_legacy(gemini):
 
 @pytest.mark.parametrize("extra,param", [
     ({"reasoning": {"effort": "high"}}, "reasoning"),
-    ({"text": {"format": {"type": "json_object"}}}, "text"),
+    ({"text": {"format": {"type": "unsupported"}}}, "text"),
     ({"temperature": 0}, "temperature"),
     ({"unknown_option": True}, "unknown_option"),
     ({"input": [{"role": "user", "content": [{"type": "input_image", "image_url": "https://example.org/a.png"}]}]}, "input"),

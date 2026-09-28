@@ -91,7 +91,7 @@ def test_report_recalculates_live_subscription_cost(monkeypatch):
             live['total'] = Decimal(price)
             response = client.get('/admin/reports?month='+current)
             assert response.status_code == 200
-            assert f'<strong>{price}.00 / ' in response.text
+            assert f'<strong>{price}.0000 / ' in response.text
             assert '本月按当前已登录 Worker' in response.text
             assert 'action="/admin/subscription-cost"' not in response.text
         response = client.get('/admin/reports?month=all')
@@ -100,5 +100,5 @@ def test_report_recalculates_live_subscription_cost(monkeypatch):
         for month in [current, 'all']:
             assert '<strong>套餐未定价 / —</strong>' in client.get('/admin/reports?month='+month).text
         live.update(total=Decimal(0), unpriced=0, count=0)
-        assert '<strong>0.00 / ' in client.get('/admin/reports?month='+current).text
+        assert '<strong>0.0000 / ' in client.get('/admin/reports?month='+current).text
         assert 'action="/admin/subscription-cost"' in client.get('/admin/reports?month=2000-01').text

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
+from codex_gateway.display import money, tokens
 from codex_gateway.request_detail import last_texts, observation_fields, readable_fields
 
 
@@ -35,6 +36,7 @@ def test_readable_observation_and_nested_evidence():
 
 def test_detail_template_escapes_text_and_collapses_raw_data_without_worker_ids():
     env = Environment(loader=FileSystemLoader('src/codex_gateway/templates'), autoescape=select_autoescape())
+    env.filters.update(money=money, tokens=tokens)
     record = SimpleNamespace(request_id='r1', model='test', status_code=200, endpoint='responses',
         duration_ms=1, created_at=datetime.now(timezone.utc), owner_username='alice',
         input_tokens=1, output_tokens=2, cache_read_tokens=0, cache_write_tokens=0,

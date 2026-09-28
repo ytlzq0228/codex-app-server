@@ -112,15 +112,15 @@ def test_finance_snapshot_and_transfer_keeps_history():
         first,pw = new_user(client,token)
         client.portal.call(own_codex_worker,first)
         second,_ = new_user(client,token)
-        assert client.post('/admin/prices',data={'csrf_token':token,'model':'gpt-6-sol','input_price':'2','output_price':'8'},headers=AJAX).status_code == 200
+        assert client.post('/admin/prices',data={'csrf_token':token,'model':'gpt-6-sol','input_price':'200','output_price':'800'},headers=AJAX).status_code == 200
         user_token = user_login(client,first,pw)
         key = client.post('/user/account/key',data={'csrf_token':user_token},headers=AJAX).json()
         response = client.post('/v1/responses',headers={'Authorization':'Bearer '+key['secret']},json={'model':'gpt-6-sol','input':'hello world'}).json()
         request_id = response['id']
-        assert '0.000028000000' in client.get('/user/usage/'+request_id).text
+        assert '0.0028' in client.get('/user/usage/'+request_id).text
         token = admin_login(client)
-        assert client.post('/admin/prices',data={'csrf_token':token,'model':'gpt-6-sol','input_price':'200','output_price':'800'},headers=AJAX).status_code == 200
-        assert '0.000028000000' in client.get('/user/usage/'+request_id).text
+        assert client.post('/admin/prices',data={'csrf_token':token,'model':'gpt-6-sol','input_price':'20000','output_price':'80000'},headers=AJAX).status_code == 200
+        assert '0.0028' in client.get('/user/usage/'+request_id).text
         assert client.post('/admin/keys/'+key['key_id']+'/owner',data={'csrf_token':token,'username':second},headers=AJAX).status_code == 200
         assert client.get('/admin/finance').status_code == 200
         assert client.get('/admin/users').status_code == 200

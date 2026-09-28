@@ -42,7 +42,9 @@ The app-server connection pool allows up to 10 WebSockets per API Key/Worker pai
   on a successful login must show `Secure`. Sessions live in PostgreSQL, so
   `CODEX_GATEWAY_ADMIN_SESSION_SECRET` is no longer read.
 - State-changing forms require a CSRF token. Login cannot carry one, so every
-  non-`/v1` POST additionally rejects a cross-origin `Origin` header.
+  cookie-authenticated POST additionally rejects a cross-origin `Origin` header.
+  Bearer API paths `/v1/` and `/v1beta/models/` are exempt from this form-only
+  check and still require a valid API key.
 - Password login is rate limited: five failures per account and twenty per
   client address trigger an escalating lock, from 15 seconds up to 15 minutes.
   A successful login clears both counters, and counters idle for an hour expire.

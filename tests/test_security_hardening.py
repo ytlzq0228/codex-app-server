@@ -146,3 +146,22 @@ def test_cookie_secure_flag_is_tri_state() -> None:
     # A blank or "auto" environment value is the same as leaving it unset.
     for value in ("", "  ", "auto", "AUTO"):
         assert Settings(admin_cookie_secure=value).admin_cookie_secure is None
+
+
+def test_native_gemini_bearer_endpoint_accepts_origin_but_still_requires_key():
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1beta/models/gpt-6-sol:generateContent",
+            headers={"Origin": "https://app.example"},
+            json={"contents": [{"role": "user", "parts": [{"text": "hello"}]}]},
+        )
+        assert response.status_code == 401
+        assert response.json()["error"]["status"] == "UNAUTHENTICATED"
+
+        response = client.post(
+            "/v1beta/models/gpt-6-sol:generateContent",
+            headers={"Origin": "https://app.example", "x-goog-api-key": "cag_dev_local"},
+            json={"contents": [{"role": "user", "parts": [{"text": "hello"}]}]},
+        )
+        assert response.status_code == 200
+        assert response.json()["candidates"][0]["content"]["parts"]

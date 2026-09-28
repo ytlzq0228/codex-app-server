@@ -266,7 +266,7 @@ async def worker_recovery_loop() -> None:
             continue
 
 
-BEARER_PATHS = ("/v1/", "/healthz")
+BEARER_PATHS = ("/v1/", "/v1beta/models/", "/healthz")
 
 
 def cross_site_post(request: Request) -> bool:

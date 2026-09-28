@@ -79,7 +79,7 @@ def test_conversation_pagination_latest_status_filters_and_owner_scope():
             assert 'badge-ok' in top and '>200</span>' in top and '502' not in top
             assert prefix+'-old' in response.text and prefix+'-new' in response.text
             assert '总价格（USD）' in response.text and '价格（USD）' in response.text
-            assert '0.200000000000' in response.text and response.text.count('0.100000000000') >= 2
+            assert '0.2000' in response.text and response.text.count('0.1000') >= 2
             assert prefix+'-other-owner' not in response.text
             assert client.get('/user/usage/'+prefix+'-other-owner').status_code==404
             assert '共 0 个会话' in client.get('/user/usage',params={'q':prefix+'-old','status':'error'}).text

@@ -312,6 +312,46 @@ def test_admin_worker_page_is_separate_from_contribution_page(worker_services):
         assert '进入 Worker 管理' not in admin_page
 
 
+def test_admin_can_rename_worker_without_changing_runtime_identity(worker_services):
+    with TestClient(app) as client:
+        token = admin_login(client)
+        original_name = f"rename-source-{uuid4().hex[:8]}"
+        renamed = f"展示 Worker {uuid4().hex[:8]}"
+        created = client.post('/admin/workers', data={'csrf_token': token, 'name': original_name}, headers=AJAX)
+        assert created.status_code == 200, created.text
+
+        async def worker_id_for(name):
+            async with SessionLocal() as db:
+                return str(await db.scalar(select(Worker.id).where(Worker.name == name)))
+
+        worker_id = client.portal.call(worker_id_for, original_name)
+
+        async def runtime_identity():
+            async with SessionLocal() as db:
+                worker = await db.get(Worker, UUID(worker_id))
+                return worker.name, worker.container_name, worker.endpoint
+
+        before = client.portal.call(runtime_identity)
+        response = client.post('/admin/workers/' + worker_id + '/name',
+            data={'csrf_token': token, 'name': '  ' + renamed + '  '}, headers=AJAX)
+        assert response.status_code == 200, response.text
+        after = client.portal.call(runtime_identity)
+        assert after == (renamed, before[1], before[2])
+        page = client.get('/admin/workers').text
+        assert renamed in page and original_name not in page
+
+        other_name = f"rename-other-{uuid4().hex[:8]}"
+        other = client.post('/admin/workers', data={'csrf_token': token, 'name': other_name}, headers=AJAX)
+        assert other.status_code == 200, other.text
+        other_id = client.portal.call(worker_id_for, other_name)
+        duplicate = client.post('/admin/workers/' + other_id + '/name',
+            data={'csrf_token': token, 'name': renamed}, headers=AJAX)
+        assert duplicate.status_code == 409
+        blank = client.post('/admin/workers/' + worker_id + '/name',
+            data={'csrf_token': token, 'name': '   '}, headers=AJAX)
+        assert blank.status_code == 400
+
+
 def test_duplicate_account_quota_lifecycle_and_transfer(worker_services):
     with TestClient(app) as client:
         alice,pw=create_person(client)

@@ -87,6 +87,15 @@ document.querySelectorAll('[data-edit-key]').forEach(button => button.addEventLi
   form.elements.pinned_worker_id.value = button.dataset.pinnedWorkerId;
   dialog.showModal();
 }));
+document.querySelectorAll('[data-edit-worker-name]').forEach(button => button.addEventListener('click', () => {
+  const dialog = document.querySelector('#worker-name-dialog');
+  const form = dialog.querySelector('form');
+  form.action = `/admin/workers/${button.dataset.workerId}/name`;
+  form.elements.name.value = button.dataset.workerName;
+  dialog.showModal();
+  form.elements.name.focus();
+  form.elements.name.select();
+}));
 document.querySelectorAll('[data-edit-worker-owner]').forEach(button => button.addEventListener('click', () => {
   const dialog = document.querySelector('#worker-owner-dialog');
   const form = dialog.querySelector('form');

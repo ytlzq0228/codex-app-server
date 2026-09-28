@@ -156,7 +156,8 @@ td.row-actions form {
   vertical-align: middle;
 }
 
-.worker-owner-display {
+.worker-owner-display,
+.worker-name {
   display: flex;
   align-items: center;
   gap: 7px;

@@ -187,6 +187,25 @@ async def transfer_worker(request: Request, worker_id: UUID, username: str = For
     return {"message": "Worker 归属已更新"}
 
 
+@router.post("/admin/workers/{worker_id}/name")
+async def rename_worker(request: Request, worker_id: UUID, name: str = Form(..., min_length=1, max_length=80), csrf_token: str = Form(...), identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
+    verify_csrf(request, identity, csrf_token)
+    worker = await owned_worker(request, db, worker_id, allow_admin_all=True)
+    name = name.strip()
+    if not name:
+        raise HTTPException(400, "Worker 名称不能为空")
+    duplicate = await db.scalar(select(Worker.id).where(Worker.name == name, Worker.id != worker.id))
+    if duplicate:
+        raise HTTPException(409, "该 Worker 名称已经使用")
+    worker.name = name
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(409, "该 Worker 名称已经使用")
+    return {"message": "Worker 名称已更新"}
+
+
 async def refresh_worker_account(worker_id):
     from datetime import timedelta
     from .database import SessionLocal

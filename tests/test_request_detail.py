@@ -49,3 +49,8 @@ def test_detail_template_escapes_text_and_collapses_raw_data_without_worker_ids(
     assert '<script>' not in html and '&lt;script&gt;' in html
     assert 'private-worker-id' not in html
     assert all(value in html for value in ('worker-a', 'a@example.com', 'Previous Response', 'prior'))
+    assert 'class="request-fields request-metadata-fields"' in html
+    ordered_labels = ('输入 Token', '缓存读 Token', '缓存写 Token', '输出 Token',
+                      '输入单价', '缓存读单价', '缓存写单价', '输出单价')
+    positions = [html.index(label) for label in ordered_labels]
+    assert positions == sorted(positions)

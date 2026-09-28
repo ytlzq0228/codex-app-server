@@ -71,6 +71,14 @@ def signed_out_screen(display):
 
 def login_view(display, url=None):
     """Expose structured login controls, never terminal output or entered secrets."""
+    if "Terms of Service & Data Use" in display and re.search(r">\s*Done", display):
+        return {"stage": "choose", "title": "服务条款与数据使用",
+                "message": "请阅读 Antigravity CLI 显示的服务条款与数据使用说明后确认。"
+                           "CLI 提示：AI 编程代理可执行代码，需检查其操作；"
+                           "CLI 不收集提示词、内容或模型回复，但会收集功能使用等产品分析数据。"
+                           "相关链接：" + " ".join(re.findall(r"https://[^\s]+", display)),
+                "options": [{"id": 0, "label": "确认条款与数据说明并继续"}],
+                "selected": 0, "menu_id": "onboarding-terms"}
     options = []
     selected = None
     for line in display.splitlines():
@@ -131,6 +139,7 @@ class Login:
 
     async def read(self):
         raw = ""
+        theme_confirmed = False
         try:
             while self.process.returncode is None and time.monotonic() < self.expires:
                 try:
@@ -150,6 +159,10 @@ class Login:
                     self.url = match.group(0)
                 self.stream.feed(text)
                 display = "\n".join(self.screen.display)
+                if not theme_confirmed and "Choose your color scheme:" in display and "enter Confirm" in display:
+                    theme_confirmed = True
+                    os.write(self.fd, b"\r")
+                    continue
                 email = re.search(r"([\w.+-]+@[\w.-]+)\s+\(([^)]+)\)", display)
                 project = re.search(r"GCP Project:\s*([\w.-]+)", display)
                 if email and project:

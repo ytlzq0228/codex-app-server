@@ -1,0 +1,6 @@
+{
+  "toolPermission": "request-review",
+  "allowNonWorkspaceAccess": false,
+  "useG1Credits": false,
+  "enableTelemetry": false
+}

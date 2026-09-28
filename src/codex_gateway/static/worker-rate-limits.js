@@ -42,7 +42,8 @@
         const response = await fetch(box.dataset.rateLimits, {method: 'POST', body,
           headers: {'X-Requested-With': 'XMLHttpRequest'}});
         const data = await response.json();
-        if (!response.ok) throw new Error('读取失败');
+        if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '读取失败');
+        if (data.message) { content.textContent = data.message; return; }
         const bucket = data.buckets.find(item => item.five_hour || item.week);
         const windows = [];
         if (bucket?.five_hour) windows.push(renderWindow('5 小时', bucket.five_hour));

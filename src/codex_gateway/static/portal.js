@@ -29,11 +29,12 @@ document.querySelectorAll('form[data-portal]').forEach(form => form.addEventList
     if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data));
     document.getElementById('portal-message').textContent = data.message || '已保存';
     document.getElementById('portal-secret').textContent = data.secret || '';
+    document.getElementById('portal-secret').hidden = !data.secret;
     form.closest('dialog')?.close();
     dialog.showModal();
   } catch(error) {
     if (errorBox) { errorBox.textContent = error.message; errorBox.hidden = false; }
-    else { document.getElementById('portal-message').textContent = error.message; document.getElementById('portal-secret').textContent = ''; dialog.showModal(); }
+    else { document.getElementById('portal-message').textContent = error.message; document.getElementById('portal-secret').textContent = ''; document.getElementById('portal-secret').hidden = true; dialog.showModal(); }
   }
   finally { button.disabled = false; }
 }));

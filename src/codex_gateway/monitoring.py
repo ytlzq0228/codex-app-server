@@ -49,7 +49,8 @@ def pool_usage(workers, weights, readings):
     total_weight = 0.0
     unknown_plans = 0
     for worker in eligible:
-        plan = normalize_plan(worker.plan_type)
+        from .subscriptions import plan_key
+        plan = plan_key(worker.plan_type, getattr(worker, "provider", None) or "codex")
         weight = float(weights.get(plan, 1))
         unknown_plans += int(plan not in weights)
         total_weight += weight
@@ -84,6 +85,8 @@ def pool_usage(workers, weights, readings):
 
 
 async def read_usage(worker, semaphore):
+    if getattr(worker, "provider", "codex") != "codex":
+        return str(worker.id), {}
     settings = get_settings()
     async with semaphore:
         try:

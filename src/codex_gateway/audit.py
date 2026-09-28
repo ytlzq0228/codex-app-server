@@ -68,8 +68,9 @@ class RequestAuditMiddleware:
                         evidence["execution"] = audit["execution_decision"]
                     if audit.get("rejection"):
                         evidence["rejection"] = audit["rejection"]
+                    from .providers import provider_for
                     async with SessionLocal() as db:
-                        db.add(UsageRecord(request_id=scope.get("state", {}).get("request_id") or "req_"+uuid4().hex,
+                        db.add(UsageRecord(provider=provider_for(str(params.get("model", ""))), request_id=scope.get("state", {}).get("request_id") or "req_"+uuid4().hex,
                                            api_key_id=principal.key_id, owner_username=principal.owner_username,
                                            model=str(params.get("model", "unknown"))[:120], request_params=params,
                                            logical_conversation_id=logical, conversation_evidence=evidence,

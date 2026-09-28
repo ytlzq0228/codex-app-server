@@ -1,0 +1,12 @@
+{
+  "tools": {"core": ["__gateway_no_builtin_tools__"]},
+  "mcpServers": {
+    "gateway-probe": {
+      "command": "python3",
+      "args": ["/opt/gemini-probe/mcp_probe.py"],
+      "trust": true
+    }
+  },
+  "security": {"auth": {"selectedType": "oauth-personal"}},
+  "telemetry": {"enabled": false}
+}

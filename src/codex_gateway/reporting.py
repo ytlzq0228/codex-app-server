@@ -12,7 +12,7 @@ from .admin_auth import require_admin, verify_csrf
 from .database import get_session
 from .config import get_settings
 from .models import ApiKey, Worker, ModelPrice, SubscriptionCost, SubscriptionPlan, UsageRecord
-from .subscriptions import normalize_plan, normalize_plan_color, subscription_summary
+from .subscriptions import plan_key, normalize_plan, normalize_plan_color, subscription_summary
 from sqlalchemy.dialects.postgresql import insert
 from .self_service import render
 from .user_auth import require_user
@@ -155,7 +155,8 @@ async def price(request: Request, model: str = Form(..., min_length=1, max_lengt
         raise HTTPException(400, "模型名称不能为空")
     record = await db.get(ModelPrice, model)
     if not record:
-        record = ModelPrice(model=model)
+        from .providers import provider_for
+        record = ModelPrice(model=model, provider=provider_for(model))
         db.add(record)
     record.input_price, record.output_price = valid_amount(input_price), valid_amount(output_price)
     record.cache_read_price = valid_amount(cache_read_price if cache_read_price is not None else input_price)
@@ -165,9 +166,13 @@ async def price(request: Request, model: str = Form(..., min_length=1, max_lengt
 
 
 @router.post("/admin/subscription-plans")
-async def subscription_plan(request: Request, name: str = Form(..., min_length=1, max_length=120), monthly_price: Decimal = Form(...), weight: Decimal = Form(Decimal("1")), color: str | None = Form(None, max_length=7), csrf_token: str = Form(...), identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
+async def subscription_plan(request: Request, provider: str = Form("codex"), name: str = Form(..., min_length=1, max_length=120), monthly_price: Decimal = Form(...), weight: Decimal = Form(Decimal("1")), color: str | None = Form(None, max_length=7), csrf_token: str = Form(...), identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
     verify_csrf(request, identity, csrf_token)
+    if provider not in {"codex", "gemini", "claude"}:
+        raise HTTPException(400, "不支持的套餐厂商")
     name = normalize_plan(name)
+    if ":" not in name:
+        name = plan_key(name, provider)
     if not name:
         raise HTTPException(400, "套餐名称不能为空")
     amount = valid_amount(monthly_price)

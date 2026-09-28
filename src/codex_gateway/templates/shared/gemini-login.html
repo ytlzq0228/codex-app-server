@@ -1,0 +1,13 @@
+<link rel="stylesheet" href="/static/gemini-login.css">
+<dialog id="gemini-login-dialog" class="app-modal gemini-login-dialog" aria-labelledby="gemini-login-title">
+<div class="dialog-head"><div><p class="eyebrow">GEMINI</p><h2 id="gemini-login-title">登录 Gemini 订阅账号</h2></div><button class="icon-button" type="button" data-modal-close aria-label="关闭">×</button></div>
+<p id="gemini-login-status" class="result-message" role="status" aria-live="polite"></p>
+<div id="gemini-login-options" class="gemini-login-options" hidden></div>
+<div id="gemini-authorization" hidden>
+<a id="gemini-login-link" class="button button-primary button-wide" target="_blank" rel="noopener noreferrer">打开 Google 授权页面</a>
+<form id="gemini-code-form" class="stack-form"><label for="gemini-auth-code">授权码<input id="gemini-auth-code" type="password" autocomplete="off" maxlength="4096" placeholder="粘贴授权页面返回的授权码" required></label><p class="form-help">使用拥有订阅权益的账号完成授权。项目与许可证将在登录过程中选择。</p><button class="button button-primary" type="submit">确认授权</button></form>
+</div>
+<dl id="gemini-login-account" class="gemini-login-account" hidden></dl>
+<div class="dialog-actions"><button class="button" type="button" data-modal-close>关闭</button></div>
+</dialog>
+<script src="/static/gemini-login.js" defer></script>

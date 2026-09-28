@@ -1,5 +1,5 @@
 """Enabled-key capacity. All quota mutations serialize before reading capacity."""
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, or_, func, select, text
 from fastapi import HTTPException
 from .models import ApiKey, User, Worker, WorkerStatus
 
@@ -14,8 +14,13 @@ async def quota_lock(db):
 def contribution_filters(username=None):
     plan = func.nullif(func.lower(func.trim(Worker.plan_type)), "")
     filters = [Worker.enabled.is_(True), Worker.endpoint != "removed://worker",
-               Worker.status.in_([WorkerStatus.ready, WorkerStatus.busy]),
-               Worker.auth_mode == "chatgpt", plan.is_not(None), plan != "free",
+               # Usage exhaustion pauses routing, but retains paid-account credit.
+               or_(Worker.status.in_([WorkerStatus.ready, WorkerStatus.busy]),
+                   and_(Worker.status == WorkerStatus.error, Worker.failure_kind == "limit")),
+               or_(and_(Worker.provider == "codex", Worker.auth_mode == "chatgpt"),
+                   and_(Worker.provider == "gemini", Worker.auth_mode == "google-subscription")),
+               plan.is_not(None), plan != "free",
+               or_(Worker.provider != "gemini", ~plan.like("%free%")),
                Worker.account_checked_at.is_not(None),
                func.nullif(func.lower(func.trim(Worker.account_email)), "").is_not(None)]
     if username is not None:
@@ -24,12 +29,12 @@ def contribution_filters(username=None):
 
 
 async def credited_workers(db, username=None):
-    rows = (await db.execute(select(Worker.id, Worker.owner_username,
+    rows = (await db.execute(select(Worker.id, Worker.owner_username, Worker.provider,
         func.lower(func.trim(Worker.account_email))).where(*contribution_filters(username))
         .order_by(Worker.created_at, Worker.id))).all()
     seen, credited, duplicates = set(), set(), set()
-    for worker_id, owner, account in rows:
-        identity = (owner, account)
+    for worker_id, owner, provider, account in rows:
+        identity = (owner, provider or "codex", account)
         if identity in seen:
             duplicates.add(worker_id)
         else:
@@ -40,7 +45,8 @@ async def credited_workers(db, username=None):
 
 async def quota_summary(db, username):
     base = await db.scalar(select(User.quota_granted).where(User.username == username)) or 0
-    credits = await db.scalar(select(func.count(func.distinct(func.lower(func.trim(Worker.account_email))))).select_from(Worker).where(*contribution_filters(username))) or 0
+    credited, _ = await credited_workers(db, username)
+    credits = len(credited)
     used = await db.scalar(select(func.count()).select_from(ApiKey).where(ApiKey.owner_username == username, ApiKey.enabled.is_(True), ApiKey.deleted_at.is_(None))) or 0
     return dict(granted=base, contributed=credits, total=base+credits, used=used, available=max(0,base+credits-used))
 
@@ -82,6 +88,6 @@ async def reconcile_worker(db, worker, previous_owner=None):
     await quota_lock(db)
     await db.flush()
     from .subscriptions import remember_plan
-    await remember_plan(db, worker.plan_type)
+    await remember_plan(db, worker.plan_type, worker.provider or "codex")
     for owner in sorted({name for name in (worker.owner_username, previous_owner) if name}):
         await enforce_quota(db, owner)

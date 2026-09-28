@@ -23,6 +23,7 @@ class BackendTarget:
     workspace: str
     worker_id: UUID | None = None
     worker_generation: int | None = None
+    provider: str = "codex"
 
 
 class WorkerFailure(RuntimeError):

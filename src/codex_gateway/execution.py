@@ -145,15 +145,20 @@ async def prepare(request, principal, endpoint, audit, *, pending_thread=None, b
         if pending_thread and row.thread_id and row.thread_id != pending_thread:
             raise conflict("Tool output belongs to a superseded execution", "tool_conversation_mismatch")
         orphaned = False
+        superseded = False
         if row.state == "waiting_tool" and not pending_thread:
             live = tool_sessions.has_pending(principal.key_id, row.thread_id) if tool_sessions else False
-            if live and row.expires_at and row.expires_at > instant:
-                raise conflict("This conversation is waiting for a client tool result; return its call_id first", "conversation_waiting_tool")
             # Only a full history followed by a new user turn can rebuild. Never
             # reinterpret an orphaned tool result as permission to rerun tools.
             items = history_items(request)
             full_prefix = (hashes(items) or [])[:len(row.history_hashes or [])]
             full_history = full_prefix == row.history_hashes if row.history_hashes else bool(items and len(items)>1)
+            can_supersede = getattr(tool_sessions, "can_supersede_with_user_turn", None) if tool_sessions else None
+            superseded = bool(live and full_history and items and items[-1].get("role") == "user"
+                              and can_supersede and can_supersede(
+                                  request, principal.key_id, row.thread_id, len(row.history_hashes or [])))
+            if live and row.expires_at and row.expires_at > instant and not superseded:
+                raise conflict("This conversation is waiting for a client tool result; return its call_id first", "conversation_waiting_tool")
             if not items or items[-1].get("role") != "user" or not full_history:
                 raise conflict("The pending tool call was lost; send full history with a new user message", "conversation_history_required")
             if live:
@@ -179,7 +184,7 @@ async def prepare(request, principal, endpoint, audit, *, pending_thread=None, b
             checkpoint = None
         elif row.state != "new":
             if orphaned:
-                reason = "pending_tool_lost"
+                reason = "pending_tool_superseded" if superseded else "pending_tool_lost"
             elif row.lease_token or row.state != "ready":
                 reason = row.invalid_reason or "previous_execution_incomplete"
             elif row.config_hash != configuration(request):

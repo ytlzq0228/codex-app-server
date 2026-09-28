@@ -71,6 +71,40 @@ async def test_dynamic_continuation_is_scoped_and_not_reexecuted():
 
 
 @pytest.mark.asyncio
+async def test_pending_output_followed_by_user_can_supersede_suspended_run():
+    sessions = None
+    async def events(req, target, run):
+        call = {'call_id': 'call_superseded'}
+        await sessions.await_result(run, call)
+        yield BackendStreamEvent(tool_call=call, thread_id='thread-a')
+        await sessions.receive_result(run)
+
+    sessions = ToolSessions(events)
+    target = BackendTarget('key:worker', 'ws://worker', '/workspace')
+    assert [event async for event in sessions.stream(request(), target)][0].tool_call['call_id'] == 'call_superseded'
+    for between in ([], [{'role':'assistant','content':'cached'}], [
+            {'role':'assistant','content':'cached'}, {'role':'system','content':'policy'},
+            {'role':'developer','content':'context'}]):
+        combined = ResponseRequest(model='test', tools=[TOOL], input=[
+            {'type':'additional_tools','tools':[TOOL]},
+            {'role':'user','content':'checkpoint'},
+            {'type':'custom_tool_call_output','call_id':'call_superseded','output':'done'},
+            *between,
+            {'role':'user','content':'next'},
+        ])
+        assert sessions.can_supersede_with_user_turn(combined, 'key', 'thread-a', 1)
+    combined.input[2]['call_id'] = 'wrong'
+    assert not sessions.can_supersede_with_user_turn(combined, 'key', 'thread-a', 1)
+    combined.input[2]['call_id'] = 'call_superseded'
+    assert not sessions.can_supersede_with_user_turn(combined, 'other-key', 'thread-a', 1)
+    assert not sessions.can_supersede_with_user_turn(combined, 'key', 'other-thread', 1)
+    # A matching output before the verified checkpoint is historical and cannot
+    # authorize cancellation of the current suspended run.
+    assert not sessions.can_supersede_with_user_turn(combined, 'key', 'thread-a', len(combined.input) - 1)
+    await sessions.close()
+
+
+@pytest.mark.asyncio
 async def test_failed_continuation_reports_lost_call_instead_of_duplicate():
     sessions = None
     async def events(req, target, run):

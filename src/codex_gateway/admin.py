@@ -325,7 +325,7 @@ async def delete_active_session(request: Request, response_id: str, csrf_token: 
 
 
 async def default_worker(session: AsyncSession, settings: Settings) -> Worker:
-    worker = await session.scalar(select(Worker).where(Worker.name == "worker-1").with_for_update())
+    worker = await session.scalar(select(Worker).where(Worker.container_name == "codex-worker-1").with_for_update())
     if not worker:
         worker = Worker(owner_username=settings.admin_username, name="worker-1", container_name="codex-worker-1", endpoint=settings.app_server_url)
         session.add(worker)

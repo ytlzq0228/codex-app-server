@@ -92,6 +92,25 @@ def test_orphan_wait_rebuilds_but_live_wait_blocks_and_partial_history_rejects()
     with TestClient(main.app) as client:client.portal.call(run)
 
 
+def test_live_wait_with_completed_tool_output_and_new_user_rebuilds():
+    async def run():
+        key,w,p,t=await seed();a,b,follow,rid,tid=await checkpoint(key,w,p,t,tool=True)
+        cancelled=[]
+        async def cancel(*args):cancelled.append(args)
+        tools=SimpleNamespace(
+            has_pending=lambda *args: True,
+            can_supersede_with_user_turn=lambda *args: True,
+            cancel_thread=cancel,
+        )
+        prepared,binding=await ex.prepare(follow,p,'responses',b,tool_sessions=tools)
+        assert binding is None and prepared.previous_response_id is None
+        assert prepared.input==follow.input
+        assert b['execution_decision']['reason']=='pending_tool_superseded'
+        assert cancelled==[(p.key_id,tid)]
+        await ex.cleanup(b)
+    with TestClient(main.app) as client:client.portal.call(run)
+
+
 def test_two_hour_display_does_not_delete_old_bindings_or_history():
     prefix=uuid4().hex
     async def setup():

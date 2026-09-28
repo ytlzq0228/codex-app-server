@@ -11,6 +11,7 @@ RUN echo 'd5f0fe7433cb7c43ea878c07627a4fdb82d218f3bef5e6436266f5d9fdd2df14552345
 COPY --chown=agy:agy settings.json /home/agy/.gemini/antigravity-cli/settings.json
 RUN python3 -m venv /opt/runtime && /opt/runtime/bin/pip install --no-cache-dir fastapi==0.115.14 uvicorn==0.34.3 pyte==0.8.2
 COPY service.py /opt/service.py
+COPY client_bridge.py /opt/client_bridge.py
 USER agy
 ENV HOME=/home/agy
 WORKDIR /workspace

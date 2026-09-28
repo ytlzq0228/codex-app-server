@@ -1,9 +1,13 @@
 """Antigravity transport, kept separate from the existing Codex backend."""
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 import httpx
 from .backend import AppServerBackend, WorkerFailure, classify_worker_failure
 from .schemas import BackendResult, BackendStreamEvent
+from .client_tools import definitions, dynamic_specs, public_call, tool_outputs, ToolProtocolError
+from .grammar_tools import call_matches_grammar
+from .tool_sessions import ToolSessions
 
 async def worker_rpc(endpoint, settings, path, payload=None):
     async with httpx.AsyncClient(timeout=90 if path == "/login/verify" else 45) as client:
@@ -15,8 +19,18 @@ async def worker_rpc(endpoint, settings, path, payload=None):
 class GeminiAdapter:
     def __init__(self, settings):
         self.settings = settings
+        self.tool_sessions = ToolSessions(self._turn_events)
 
     async def stream(self, request, target):
+        try:
+            events = (self.tool_sessions.stream(request, target) if definitions(request) or tool_outputs(request)
+                      else self._turn_events(request, target))
+            async for event in events:
+                yield event
+        except ToolProtocolError as exc:
+            raise WorkerFailure(str(exc), kind="request") from exc
+
+    async def _turn_events(self, request, target, tool_run=None):
         from .providers import validate_capabilities, provider_for
         validate_capabilities(request)
         if target.provider != provider_for(request.model):
@@ -30,7 +44,47 @@ class GeminiAdapter:
                     raise WorkerFailure("Worker identity changed", kind="account_changed")
         payload = {"prompt": request.input_text(), "model": self.settings.model_alias_map().get(request.model, request.model),
                    "conversation": request.previous_response_id, "workspace": target.workspace}
+        specs = definitions(request) if request.tool_choice != "none" else []
+        if definitions(request) or tool_run is not None:
+            try:
+                capabilities = await worker_rpc(target.endpoint, self.settings, "/capabilities")
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 404:
+                    raise ToolProtocolError("Gemini worker must be upgraded to support client tools", "client_tools_unavailable") from exc
+                raise WorkerFailure("Gemini worker capability check failed") from exc
+            except httpx.HTTPError as exc:
+                raise WorkerFailure("Gemini worker capability check failed") from exc
+            if capabilities.get("client_tools") != 1:
+                raise ToolProtocolError("Gemini worker does not support this client tool protocol", "client_tools_unavailable")
+        if specs:
+            from jsonschema.validators import validator_for
+            from jsonschema.exceptions import SchemaError
+            validators = {}
+            payload["tools"] = [{k: v for k, v in tool.items() if k != "type"} for tool in dynamic_specs(specs)]
+            for spec, tool in zip(specs, payload["tools"]):
+                cls = validator_for(spec["schema"])
+                try:
+                    cls.check_schema(spec["schema"])
+                except SchemaError as exc:
+                    raise ToolProtocolError("Invalid client function JSON Schema") from exc
+                validators[spec["alias"]] = cls(spec["schema"])
+                tool["description"] += "\nArguments must match this JSON Schema: " + json.dumps(spec["schema"], ensure_ascii=False)
+            payload["prompt"] = (
+                "You are serving a remote client through MCP relay tools. "
+                "Use the registered gateway_client tools for the client's tool requests. "
+                "Their descriptions identify the original tool name and full argument schema. "
+                "Client paths refer to the remote client's filesystem, not this worker. "
+                "Do not probe tools with empty arguments; include all required parameters.\n\n"
+                + payload["prompt"]
+                + "\n\nREMOTE CLIENT TOOL DISPATCH: Native worker tools cannot access the client workspace. "
+                "To fulfill the latest user request, call only the matching MCP relay below with its required arguments. "
+                "Do not enumerate or probe tools. Tool names mentioned in the client instructions map to these aliases:\n"
+                + "\n".join(json.dumps({"client_tool": spec["name"], "mcp_tool": spec["alias"],
+                                        "parameters": spec["schema"]}, ensure_ascii=False) for spec in specs)
+            )
         thread = ""
+        grammar_failures = 0
+        grammar_needs_correction = False
         # A connection failure is deliberately not automatically retried: the
         # remote CLI may already have accepted the prompt.
         try:
@@ -43,9 +97,55 @@ class GeminiAdapter:
                         if not line:
                             continue
                         data = json.loads(line)
+                        if data.get("heartbeat"):
+                            continue
                         if data.get("error"):
                             raise WorkerFailure(data["error"], kind=data.get("kind", "connection"))
                         thread = data.get("thread_id") or thread
+                        if data.get("event") == "client_tool":
+                            if tool_run is None or not thread:
+                                raise ToolProtocolError("Unexpected Gemini client tool request")
+                            reply = {"run_id": data["run_id"], "worker_call_id": data["worker_call_id"]}
+                            try:
+                                call = public_call(specs, data)
+                            except ToolProtocolError:
+                                if data.get("namespace") or not any(spec["alias"] == data.get("tool") for spec in specs):
+                                    raise
+                                call = None
+                            schema_error = next(validators[data["tool"]].iter_errors(data.get("arguments")), None)
+                            if call is None or schema_error is not None or not await call_matches_grammar(specs, data, call):
+                                grammar_failures += 1
+                                logging.getLogger(__name__).warning(
+                                    "Gemini client tool correction: alias=%s attempt=%s validator=%s path=%s",
+                                    data["tool"], grammar_failures,
+                                    schema_error.validator if schema_error else "custom_grammar",
+                                    list(schema_error.absolute_path) if schema_error else [],
+                                )
+                                grammar_needs_correction = True
+                                if grammar_failures > 2:
+                                    raise ToolProtocolError("Model tool input did not match the declared schema or grammar after two corrections")
+                                await worker_rpc(target.endpoint, self.settings, "/tool-result", {
+                                    **reply, "is_error": True, "content": [{"type": "text", "text":
+                                    "Tool was NOT executed. Match the tool's declared JSON parameters and grammar. "
+                                    + ("Schema validation failed at " + "/".join(map(str, schema_error.absolute_path))
+                                       + " (" + str(schema_error.validator) + "). " if schema_error else "")
+                                    + "Declared schema: " + json.dumps(next(s["schema"] for s in specs if s["alias"] == data["tool"])) + ". "
+                                    +
+                                    "For a custom tool, send exactly one field: input, containing the raw input string. "
+                                    "Do not add Markdown fences or extra fields. Call the tool again with corrected arguments."}]})
+                                continue
+                            grammar_needs_correction = False
+                            await self.tool_sessions.await_result(tool_run, call)
+                            yield BackendStreamEvent(thread_id=thread, tool_call=call,
+                                input_tokens=data.get("input_tokens", 0), output_tokens=data.get("output_tokens", 0),
+                                cache_read_tokens=data.get("cache_read_tokens", 0))
+                            output = await self.tool_sessions.receive_result(tool_run)
+                            content = ([{"type": "text", "text": output}] if isinstance(output, str)
+                                       else [{"type": "text", "text": part["text"]} for part in output])
+                            await worker_rpc(target.endpoint, self.settings, "/tool-result", {**reply, "content": content})
+                            continue
+                        if data.get("done") and grammar_needs_correction:
+                            raise ToolProtocolError("Model ended without correcting the invalid client tool input")
                         yield BackendStreamEvent(thread_id=thread, delta=data.get("delta", ""), done=data.get("done", False),
                             input_tokens=data.get("input_tokens", 0), output_tokens=data.get("output_tokens", 0),
                             cache_read_tokens=data.get("cache_read_tokens", 0))
@@ -57,12 +157,18 @@ class GeminiAdapter:
 
     async def complete(self, request, target):
         text = ""
+        calls = []
+        terminal = BackendStreamEvent()
         async for event in self.stream(request, target):
+            terminal = event
             text += event.delta or ""
-            if event.done:
-                return BackendResult(text=text, thread_id=event.thread_id, input_tokens=event.input_tokens,
-                                     output_tokens=event.output_tokens, cache_read_tokens=event.cache_read_tokens)
-        raise WorkerFailure("Gemini returned no final result")
+            if event.tool_call:
+                calls.append(event.tool_call)
+        if not terminal.done and not calls:
+            raise WorkerFailure("Gemini returned no final result")
+        return BackendResult(text=text, tool_calls=calls, thread_id=terminal.thread_id,
+                             input_tokens=terminal.input_tokens, output_tokens=terminal.output_tokens,
+                             cache_read_tokens=terminal.cache_read_tokens)
 
 class ProviderBackend:
     def __init__(self, settings):
@@ -71,6 +177,12 @@ class ProviderBackend:
         # Preserve existing Codex pool monitoring and client-tool continuations.
         self.pool = self.codex.pool
         self.tool_sessions = self.codex.tool_sessions
+        self.gemini.tool_sessions = self.tool_sessions
+        self.tool_sessions.run_events = self._turn_events
+
+    async def _turn_events(self, request, target, run):
+        async for event in self.adapter(target)._turn_events(request, target, run):
+            yield event
 
     def continuation_target(self, request, key):
         return self.codex.continuation_target(request, key)
@@ -112,7 +224,7 @@ async def probe_gemini(worker, db, settings, *, inference=True, login_session=No
         ok, message = True, "Gemini 账号和模型访问检查通过"
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 409:
-            return {"ok": False, "logged_in": bool(worker.auth_mode), "message": "Gemini 正在执行或登录，请稍后探测"}
+            return {"ok": False, "busy": True, "logged_in": bool(worker.auth_mode), "message": "Gemini 正在执行或登录，请稍后探测"}
         worker.status = WorkerStatus.error
         worker.failure_kind = "connection"
         worker.retry_after = datetime.now(timezone.utc) + timedelta(seconds=settings.worker_failure_cooldown_seconds)

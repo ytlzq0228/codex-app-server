@@ -1,6 +1,7 @@
 import asyncio
 import json
 import tempfile
+from contextlib import nullcontext
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
@@ -25,8 +26,11 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         service.ROOT = self.root
         service.lock = asyncio.Lock()
         service.login = None
+        self.configuration = patch.object(service.ToolBridge, "configuration", return_value=nullcontext())
+        self.configuration.start()
 
     async def asyncTearDown(self):
+        self.configuration.stop()
         self.directory.cleanup()
 
     async def execute(self, events):

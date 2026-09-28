@@ -51,9 +51,9 @@ async def main():
             assert "response.completed" in response.text and "response.failed" not in response.text, response.text
             print("PASS Responses stream", flush=True)
             response = await client.post("/v1/responses", json={"model": body["model"], "input": "hello",
-                "tools": [{"type": "function", "name": "lookup", "parameters": {"type": "object"}}]})
-            assert response.status_code == 400 and response.json()["error"]["param"] == "tools"
-            print("PASS unsupported tools rejected", flush=True)
+                "parallel_tool_calls": True})
+            assert response.status_code == 400 and response.json()["error"]["param"] == "parallel_tool_calls"
+            print("PASS unsupported parallel tools rejected", flush=True)
             async with SessionLocal() as db:
                 available = await db.scalar(select(Worker.id).where(Worker.provider == "codex", Worker.enabled.is_(True), Worker.status.in_(["ready", "busy"])).limit(1))
             if available:

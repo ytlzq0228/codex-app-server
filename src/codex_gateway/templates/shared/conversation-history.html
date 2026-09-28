@@ -10,19 +10,19 @@
         <td><span class="badge">{{ group.endpoint }}</span></td>
         <td>{{ group.requests|length }}</td>
         <td><span class="badge {{ 'badge-error' if group.latest_status >= 400 and group.latest_status != 499 else 'badge-ok' }}">{{ group.latest_status }}</span></td>
-        <td>{{ group.input_tokens + group.output_tokens }}</td>
-        {% if show_cost %}<td>{{ group.cost_usd }}{% if group.unpriced_count %}<small>另有 {{ group.unpriced_count }} 条未定价</small>{% endif %}</td>{% endif %}
+        <td>{{ (group.input_tokens + group.output_tokens)|tokens }}</td>
+        {% if show_cost %}<td>{{ group.cost_usd|money }}{% if group.unpriced_count %}<small>另有 {{ group.unpriced_count }} 条未定价</small>{% endif %}</td>{% endif %}
         <td><button type="button" class="button button-small" data-toggle-history="history-group-{{ loop.index }}">展开</button></td>
       </tr>
       <tr id="history-group-{{ loop.index }}" class="history-detail history-conversation-detail" hidden>
         <td colspan="{{ 9 if show_cost else 8 }}">
           <div class="conversation-records">
           <div class="conversation-summary">
-            <span>Worker Thread：{% for thread_id in group.thread_ids %}<code>{{ thread_id }}</code>{{ " / " if not loop.last else "" }}{% else %}未记录{% endfor %}</span>
-            <span>输入 {{ group.input_tokens }} Token</span>
-            <span>输出 {{ group.output_tokens }} Token</span>
+            <span class="conversation-threads">Worker Thread：{% for thread_id in group.thread_ids %}<code>{{ thread_id }}</code>{{ " / " if not loop.last else "" }}{% else %}未记录{% endfor %}</span>
+            <span>输入 {{ group.input_tokens|tokens }} Token</span>
+            <span>输出 {{ group.output_tokens|tokens }} Token</span>
             <span>累计耗时 {{ group.duration_ms }} ms</span>
-            {% if show_cost %}<span>总价格 USD：{{ group.cost_usd }}{% if group.unpriced_count %}（另有 {{ group.unpriced_count }} 条未定价）{% endif %}</span>{% endif %}
+            {% if show_cost %}<span>总价格 USD：{{ group.cost_usd|money }}{% if group.unpriced_count %}（另有 {{ group.unpriced_count }} 条未定价）{% endif %}</span>{% endif %}
           </div>
           <div class="table-wrap">
             <table>
@@ -35,9 +35,9 @@
                   <td>{{ item.worker_name }}<small>Thread：{{ item.thread_id or "未记录" }}</small><small>关联：{{ (usage.conversation_evidence or {}).get("method", "legacy_thread") }}</small></td>
                   <td>{{ usage.model }}</td>
                   <td><span class="badge {{ 'badge-ok' if usage.status_code < 400 or usage.status_code == 499 else 'badge-error' }}">{{ usage.status_code }}</span>{% if usage.error_code %}<small>{{ usage.error_code }}</small>{% endif %}</td>
-                  <td>{{ usage.input_tokens + usage.output_tokens }}</td>
+                  <td>{{ (usage.input_tokens + usage.output_tokens)|tokens }}</td>
                   <td>{{ usage.duration_ms }} ms</td>
-                  {% if show_cost %}<td>{{ usage.cost_usd if usage.cost_usd is not none else "未定价" }}</td>{% endif %}
+                  {% if show_cost %}<td>{{ usage.cost_usd|money if usage.cost_usd is not none else "未定价" }}</td>{% endif %}
                 </tr>
                 {% endfor %}
               </tbody>

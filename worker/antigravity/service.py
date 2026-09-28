@@ -14,13 +14,16 @@ import struct
 import termios
 import time
 from pathlib import Path
+from contextlib import aclosing
 from uuid import uuid4
 import pyte
 from fastapi import FastAPI, Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from client_bridge import ToolBridge, ACTIVE, install_mcp
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+install_mcp(app)
 ROOT = Path("/workspace")
 ACCOUNT = Path.home() / ".gemini/antigravity-cli/gateway-account.json"
 lock = asyncio.Lock()
@@ -432,6 +435,30 @@ class Turn(BaseModel):
     model: str
     conversation: str | None = None
     workspace: str
+    tools: list[dict] = Field(default_factory=list, max_length=64)
+
+
+class ToolResult(BaseModel):
+    run_id: str
+    worker_call_id: str
+    content: list[dict]
+    is_error: bool = False
+
+
+@app.post("/capabilities", dependencies=[Depends(authorize)])
+async def capabilities():
+    return {"client_tools": 1, "tool_result_types": ["text"]}
+
+
+@app.post("/tool-result", dependencies=[Depends(authorize)])
+async def tool_result(body: ToolResult):
+    bridge = ACTIVE.get(body.run_id)
+    if bridge is None:
+        raise HTTPException(409, "Tool execution unavailable")
+    if any(item.get("type") != "text" or not isinstance(item.get("text"), str) for item in body.content):
+        raise HTTPException(400, "Only text tool results are supported")
+    bridge.resolve(body.worker_call_id, {"content": body.content, "isError": body.is_error})
+    return {"ok": True}
 
 @app.post("/turn", dependencies=[Depends(authorize)])
 async def turn(body: Turn):
@@ -450,9 +477,21 @@ async def turn(body: Turn):
     async def events():
         process = None
         stderr_task = None
+        bridge = None
+        configuration = None
+        configured = False
+        source = None
         try:
+            if any(not re.fullmatch(r"gateway_client_\d+", tool.get("name", "")) or
+                   not isinstance(tool.get("inputSchema"), dict) for tool in body.tools):
+                raise ValueError("Invalid client tool declaration")
+            bridge = ToolBridge(body.tools)
+            configuration = bridge.configuration(workspace)
+            configuration.__enter__()
+            configured = True
             # The prompt is sent through stdin; never place customer content in process arguments.
-            args = ["agy", "--input-format", "stream-json", "--output-format", "stream-json", "--model", body.model]
+            args = ["agy", "--input-format", "stream-json", "--output-format", "stream-json",
+                    "--model", body.model, "--disable-slash-commands"]
             if body.conversation:
                 args += ["--conversation", body.conversation]
             process = await asyncio.create_subprocess_exec(*args, cwd=str(workspace),
@@ -468,9 +507,18 @@ async def turn(body: Turn):
             await process.stdin.drain()
             thread = body.conversation or ""
             counts = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0}
-            async with asyncio.timeout(300):
-                while line := await process.stdout.readline():
-                    item = json.loads(line)
+            source = bridge.messages(process.stdout)
+            async with aclosing(source):
+                async for item in source:
+                    if item.get("event") == "heartbeat":
+                        yield json.dumps({"heartbeat": True}) + "\n"
+                        continue
+                    if item.get("event") == "client_tool":
+                        if not thread:
+                            raise ValueError("Tool call before conversation initialization")
+                        yield json.dumps({**item, "thread_id": thread, **counts,
+                                          "input_tokens": counts["input_tokens"] + counts["cache_read_tokens"]}) + "\n"
+                        continue
                     if item.get("event") == "init":
                         thread = item.get("conversation_id") or thread
                         if body.conversation and thread != body.conversation:
@@ -514,7 +562,13 @@ async def turn(body: Turn):
                     if stderr_task:
                         await asyncio.gather(stderr_task, return_exceptions=True)
             finally:
-                lock.release()
+                try:
+                    if bridge:
+                        bridge.close()
+                    if configured:
+                        configuration.__exit__(None, None, None)
+                finally:
+                    lock.release()
     return StreamingResponse(events(), media_type="application/x-ndjson")
 
 

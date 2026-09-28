@@ -17,8 +17,8 @@
     {% if page == 'overview' %}
     <section id="overview" class="stats-grid">
       <article class="stat"><span>累计请求</span><strong>{{ stats.requests }}</strong><small>全部 API Keys</small></article>
-      <article class="stat"><span>输入 Token</span><strong>{{ "{:,}".format(stats.input_tokens) }}</strong><small>历史累计</small></article>
-      <article class="stat"><span>输出 Token</span><strong>{{ "{:,}".format(stats.output_tokens) }}</strong><small>历史累计</small></article>
+      <article class="stat"><span>输入 Token</span><strong>{{ stats.input_tokens|tokens }}</strong><small>历史累计</small></article>
+      <article class="stat"><span>输出 Token</span><strong>{{ stats.output_tokens|tokens }}</strong><small>历史累计</small></article>
       <article class="stat"><span>Worker 总数</span><strong id="monitor-worker-total">—</strong><small>所有已创建记录</small></article>
     </section>
 

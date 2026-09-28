@@ -168,9 +168,10 @@ async def test_safe_failure_retries_once_on_another_worker(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("probe_ok", "expected"), [(True, False), (False, True)])
-async def test_worker_quarantine_uses_inference_probe_as_final_verdict(monkeypatch, probe_ok, expected) -> None:
+@pytest.mark.parametrize("provider", ["codex", "gemini"])
+async def test_worker_quarantine_uses_inference_probe_as_final_verdict(monkeypatch, probe_ok, expected, provider) -> None:
     worker_id = uuid4()
-    worker = type("WorkerRecord", (), {"failure_kind": None, "failure_reason": None})()
+    worker = type("WorkerRecord", (), {"failure_kind": None, "failure_reason": None, "provider": provider})()
     calls = []
 
     class FakeSession:

@@ -22,7 +22,6 @@ def test_registry_preserves_legacy(gemini):
     ({"reasoning": {"effort": "high"}}, "reasoning"),
     ({"text": {"format": {"type": "json_object"}}}, "text"),
     ({"temperature": 0}, "temperature"),
-    ({"tools": [{"type": "function", "name": "lookup", "parameters": {"type": "object"}}]}, "tools"),
     ({"unknown_option": True}, "unknown_option"),
     ({"input": [{"role": "user", "content": [{"type": "input_image", "image_url": "https://example.org/a.png"}]}]}, "input"),
 ])
@@ -55,7 +54,7 @@ async def test_pool_never_crosses_provider(gemini):
 
 @pytest.mark.parametrize("field,value", [("stop", "END"), ("seed", 1), ("frequency_penalty", 0.5),
                                         ("presence_penalty", 0.5), ("logit_bias", {"1": 1}), ("verbosity", "low"),
-                                        ("parallel_tool_calls", False), ("audio", {})])
+                                        ("parallel_tool_calls", True), ("audio", {})])
 def test_chat_options_are_not_lost_in_conversion(gemini, field, value):
     from codex_gateway.schemas import ChatCompletionRequest
     from codex_gateway.providers import validate_chat_capabilities

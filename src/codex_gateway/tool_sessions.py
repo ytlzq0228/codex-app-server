@@ -25,7 +25,7 @@ class ToolRun:
 
 
 class ToolSessions:
-    def __init__(self, run_events, ttl=300, limit=64):
+    def __init__(self, run_events, ttl=300, limit=512):
         self.run_events=run_events
         self.ttl=ttl
         self.limit=limit

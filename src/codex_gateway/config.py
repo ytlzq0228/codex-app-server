@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     model_name: str = ""  # Legacy environment setting; no longer exposes a model alias.
     upstream_model: str = "gpt-6-sol"
     allowed_models: str = "gpt-6-sol,gpt-6-astra,gpt-6-luna,gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna,gpt-5.6"
+    gemini_native_model_aliases: str = ""  # Explicit native CLI model aliases
     model_providers: str = ""  # Explicit public-model:provider entries
     model_aliases: str = "gpt-5.6:gpt-5.6-sol"
     app_server_url: str = "ws://worker-1:4500"

@@ -4,6 +4,8 @@
 .history-conversation-detail > td { padding: 14px 18px 20px; background: #f8faf8; }
 .history-conversation-detail table { background: white; border: 1px solid var(--line); border-radius: 12px; }
 .conversation-summary { display: flex; flex-wrap: wrap; gap: 18px; margin: 0 0 12px; color: var(--muted); font-size: 12px; }
+.conversation-threads { min-width: 0; max-width: min(100%, 640px); white-space: normal; overflow-wrap: anywhere; line-height: 2; }
+.conversation-threads code { display: inline-block; max-width: 100%; padding: 2px 7px; line-height: 1.5; vertical-align: middle; }
 .history-more { display: flex; justify-content: center; margin-top: 14px; }
 
 .history-filters { display: grid; grid-template-columns: minmax(200px,1.4fr) minmax(230px,1.6fr) minmax(160px,1fr); gap: 18px 16px; padding: 20px; margin: 0 0 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); align-items: end; }

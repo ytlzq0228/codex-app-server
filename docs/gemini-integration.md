@@ -18,10 +18,18 @@ continuations preserve provider, worker generation and native conversation ID.
 Explicit chat execution identities also carry provider; Gemini continuation
 failures do not silently create a new execution on a different worker.
 
-Images, client tools, structured output, reasoning overrides and unsupported
-sampling options return a parameter error. CLI built-in tools are not evidence
-of OpenAI client-tool roundtrip support. The worker retains request-review
-permissions and runs in its own workspace without host mounts or Docker access.
+Client tools support function declarations, namespaces and custom text/grammar
+tools through a per-execution MCP relay. Calls and text results use the same
+public protocol and bounded continuation registry as Codex. The CLI stays alive
+while awaiting a result; no client code executes in the worker.
+Images (including tool results), structured output, reasoning overrides and
+unsupported sampling options return a parameter error. Parallel tool calls are
+not enabled; omit parallel_tool_calls or set it to false.
+Every gateway turn installs explicit deny rules for native file reads/writes,
+commands and web access. Only the server-owned MCP relay is available, with a
+random per-execution capability URL. Original settings and MCP configuration
+are restored during cancellation-shielded cleanup. The worker runs in its own
+workspace without host mounts or Docker access.
 
 Per-turn usage is summed from step_update usage, not cumulative result usage.
 Cached input is added to uncached input to produce the total required by OpenAI
@@ -102,7 +110,9 @@ to a version which does not filter providers. Preserve Gemini home volumes.
 - Live Enterprise Plus: credential reuse, model list, streaming, native resume.
 - Clean login: navigation through Google Cloud menus, clean OAuth URL and code prompt.
 - Full new-account browser callback still requires user completion.
-- Client tool bridge and real quota exhaustion remain unverified and are not advertised as supported.
+- At the initial text-only deployment, client tools and real quota exhaustion
+  had not been verified. Client-tool validation is tracked below; real quota
+  exhaustion remains unverified.
 
 - Additional provider/Chat option validation: 17 passed.
 - Deployed gateway: Responses text and streaming, Chat streaming, native resume,
@@ -139,3 +149,42 @@ The validation script now uses a temporary key under the existing administrator,
 checks available capacity, and disables/deletes only that key on completion.
 
 Live post-deployment smoke: GPT and Gemini Chat Completions / Responses streams passed. Temporary keys were disabled and soft-deleted.
+
+## Client-tool bridge
+
+Upgrade both the gateway and the Antigravity worker image (including existing
+worker containers). Updating only the manager image setting affects future
+workers. The gateway checks the private /capabilities protocol before sending
+tools; an older worker fails explicitly rather than silently ignoring tools.
+
+The in-memory registry holds the HTTP execution stream and worker slot across
+client results. Each pending result expires after 300 seconds. Heartbeats keep
+the transport alive; the worker separately limits active inference to 300
+seconds. Native conversation ID, API Key, model, tools and worker generation
+remain bound. Only one outstanding result is returned at a time. Restarting
+either process expires pending calls.
+
+Run scripts/validate_gemini_tools.py with GATEWAY_URL and GATEWAY_API_KEY
+(an existing persisted key) to check JSON/SSE Responses and Chat tool
+roundtrips, previous_response_id, namespaced grammar input and replay rejection.
+The script returns synthetic text results and executes no generated code.
+
+Validated on an isolated test gateway and worker: JSON/SSE tool roundtrips for
+both public APIs, Responses previous_response_id, namespaced custom Lark input,
+replay rejection and multiple sequential Chat calls. Cancelling a pending tool
+call released the worker slot and a subsequent text request succeeded.
+A live adversarial prompt
+could not read a test secret, write a file or execute a command; the client MCP
+tool still completed. Unit tests also cover cross-Key access, invalid arguments,
+grammar correction, expired calls, protocol version checks and configuration
+restoration. This validation does not itself upgrade existing deployed workers.
+
+Each execution uses a distinct MCP server registration as well as a random
+capability URL, preventing tool schemas from one execution being reused by the
+CLI for another. Invalid custom arguments or grammar input receive at most two
+internal correction replies and are never returned as valid client calls.
+
+Official transport and permission references:
+https://antigravity.google/docs/mcp/
+https://antigravity.google/docs/permissions/
+https://antigravity.google/docs/cli/headless/

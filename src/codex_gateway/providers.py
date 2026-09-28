@@ -13,7 +13,7 @@ class Capabilities:
     reasoning: bool = False
 
 CAPABILITIES = {"codex": Capabilities(images=True, tools=True, structured_output=True, reasoning=True),
-                "gemini": Capabilities()}
+                "gemini": Capabilities(tools=True)}
 
 def provider_for(model):
     from .config import get_settings
@@ -28,13 +28,20 @@ def validate_capabilities(request):
         return
     if provider not in CAPABILITIES:
         reject("model", "This provider is not enabled", "provider_unavailable")
-    from .client_tools import definitions, tool_outputs
     items = request.input if isinstance(request.input, list) else [request.input]
-    if definitions(request) or tool_outputs(request) or any(isinstance(i, dict) and i.get("type") in {"function_call", "custom_tool_call"} for i in items):
-        reject("tools", "Gemini client tool round trips have not been validated and are not enabled")
+    # Gemini's relay currently accepts text results only, including in full history.
+    from .multimodal import content_parts
+    for item in items:
+        if isinstance(item, dict) and item.get("type") in {"function_call_output", "custom_tool_call_output"}:
+            if any(part.get("type") != "input_text" for part in content_parts(item.get("output"))):
+                reject("input", "Gemini client tools currently support text results only")
     if any(i.get("type") == "image" for i in request.worker_input()):
         reject("input", "Gemini image input is not enabled")
-    for field in ("reasoning", "temperature", "top_p", "max_output_tokens", "service_tier", "truncation", "max_tool_calls", "parallel_tool_calls", "prompt_cache_retention", "include"):
+    if request.parallel_tool_calls is True:
+        reject("parallel_tool_calls", "Gemini client tools currently return one pending call at a time")
+    if request.parallel_tool_calls is None:
+        request.parallel_tool_calls = False
+    for field in ("reasoning", "temperature", "top_p", "max_output_tokens", "service_tier", "truncation", "max_tool_calls", "prompt_cache_retention", "include"):
         if getattr(request, field, None) is not None:
             reject(field, f"Gemini does not support the {field} parameter")
     if request.text and request.text != {"format": {"type": "text"}}:
@@ -47,9 +54,11 @@ def validate_chat_capabilities(request):
     if provider_for(request.model) == "codex":
         return
     for field in ("stop", "seed", "frequency_penalty", "presence_penalty", "logit_bias",
-                  "verbosity", "parallel_tool_calls", "audio", "function_call"):
+                  "verbosity", "audio", "function_call"):
         if getattr(request, field, None) is not None:
             reject(field, f"Gemini does not support the {field} parameter")
+    if request.parallel_tool_calls is True:
+        reject("parallel_tool_calls", "Gemini client tools currently return one pending call at a time")
     if request.model_extra:
         reject(next(iter(request.model_extra)), "Unrecognized Gemini parameter")
 

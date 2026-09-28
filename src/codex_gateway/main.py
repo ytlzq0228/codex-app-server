@@ -16,6 +16,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+
+from .display import money, tokens
 from sqlalchemy import func, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -116,6 +118,7 @@ PACKAGE_ROOT = Path(__file__).resolve().parent
 
 app = FastAPI(title="Codex App Server Gateway", version="0.4.0", lifespan=lifespan)
 app.state.templates = Jinja2Templates(directory=PACKAGE_ROOT / "templates")
+app.state.templates.env.filters.update(money=money, tokens=tokens)
 app.mount("/static", StaticFiles(directory=PACKAGE_ROOT / "static"), name="static")
 app.include_router(admin_auth_router)
 app.include_router(admin_user_router)
@@ -127,6 +130,8 @@ app.include_router(reporting_router)
 from .contributions import router as contribution_router
 app.include_router(contribution_router)
 app.add_middleware(RequestAuditMiddleware)
+from .gemini_native import GeminiNativeMiddleware
+app.add_middleware(GeminiNativeMiddleware)
 
 
 def utcnow() -> datetime:
@@ -172,7 +177,7 @@ async def quarantine_worker(worker_id, reason: str, kind: str = "connection") ->
         worker = await session.scalar(select(Worker).where(Worker.id == worker_id).execution_options(populate_existing=True))
         if not worker:
             return False
-        if (getattr(worker, "provider", None) or "codex") == "gemini":
+        if (getattr(worker, "provider", None) or "codex") == "gemini" and kind != "connection":
             worker.status = WorkerStatus.error
             worker.failure_kind = kind
             worker.failure_reason = reason[:500]
@@ -182,6 +187,8 @@ async def quarantine_worker(worker_id, reason: str, kind: str = "connection") ->
             await session.commit()
             return True
         result = await probe_worker_record(worker, session, settings)
+        if result.get("busy"):
+            return False
         if result["ok"]:
             logger.warning(
                 "Worker failure rejected by inference probe: worker_id=%s reported_kind=%s reported_reason=%s",
@@ -381,7 +388,7 @@ def chat_completion_object(completion_id: str, created: int, body: ChatCompletio
 
 
 def worker_unavailable(*, bound: bool = False) -> HTTPException:
-    message = "The worker for this conversation is unavailable" if bound else "No healthy Codex worker is available"
+    message = "The worker for this conversation is unavailable" if bound else "No healthy worker is available"
     code = "session_worker_unavailable" if bound else "worker_unavailable"
     return HTTPException(503, detail={"error": {"message": message, "type": "server_error", "code": code}})
 
@@ -512,7 +519,7 @@ async def complete_with_failover(body: ResponseRequest, backend: CompletionBacke
         if exc.kind == "session":
             raise HTTPException(404, detail={"error": {"message": "The previous response session is no longer available", "type": "invalid_request_error", "code": "previous_response_not_found", "param": "previous_response_id"}}) from exc
         if exc.kind == "capacity":
-            raise HTTPException(503, detail={"error": {"message": "Timed out waiting for an available Codex worker connection", "type": "server_error", "code": "worker_capacity_exceeded", "param": None}}, headers={"Retry-After": "5"}) from exc
+            raise HTTPException(503, detail={"error": {"message": f"Timed out waiting for an available {target.provider} worker connection", "type": "server_error", "code": "worker_capacity_exceeded", "param": None}}, headers={"Retry-After": "5"}) from exc
         if target.worker_id and exc.kind != "account_changed":
             await quarantine_worker(target.worker_id, str(exc), exc.kind)
         if target.provider == "gemini" and exc.kind == "limit":
@@ -650,7 +657,7 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
             "message": str(exc) if tool_failure else "The previous response session is no longer available" if session_failure else "Timed out waiting for an available Codex worker connection" if capacity_failure else "The Codex backend could not complete the request",
         }
         if target.provider == "gemini":
-            error = {"code": "provider_quota_exhausted" if isinstance(exc, WorkerFailure) and exc.kind == "limit" else error["code"], "message": "Gemini subscription quota is exhausted" if isinstance(exc, WorkerFailure) and exc.kind == "limit" else "Gemini could not complete the request"}
+            error = {"code": "provider_quota_exhausted" if isinstance(exc, WorkerFailure) and exc.kind == "limit" else error["code"], "message": "Gemini subscription quota is exhausted" if isinstance(exc, WorkerFailure) and exc.kind == "limit" else str(exc.__cause__) if tool_failure else "Timed out waiting for an available Gemini worker connection" if capacity_failure else "Gemini could not complete the request"}
         if audit := current_audit.get(): audit["rejection"] = error
         await save_usage(response_id, principal, target, body.model, 400 if tool_failure else 404 if session_failure else 503 if capacity_failure else 502, started, error_code=error["code"], previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))
         yield sse({"type": "error", "sequence_number": sequence, **error, "param": None}); sequence += 1
@@ -732,7 +739,7 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
         error_message = str(exc) if tool_failure else "Timed out waiting for an available Codex worker connection" if capacity_failure else "The Codex backend could not complete the request"
         if target.provider == "gemini":
             error_code = "provider_quota_exhausted" if isinstance(exc, WorkerFailure) and exc.kind == "limit" else error_code
-            error_message = "Gemini subscription quota is exhausted" if error_code == "provider_quota_exhausted" else "Gemini could not complete the request"
+            error_message = "Gemini subscription quota is exhausted" if error_code == "provider_quota_exhausted" else str(exc.__cause__) if tool_failure else "Timed out waiting for an available Gemini worker connection" if capacity_failure else "Gemini could not complete the request"
         if audit := current_audit.get(): audit["rejection"] = {"code": error_code, "message": error_message}
         await save_usage(completion_id, principal, target, body.model, 400 if tool_failure else 503 if capacity_failure else 502, started, error_code=error_code, request_params=body.model_dump(mode="json"))
         yield chat_sse({"error": {"message": error_message, "type": "invalid_request_error" if tool_failure else "server_error", "code": error_code}})

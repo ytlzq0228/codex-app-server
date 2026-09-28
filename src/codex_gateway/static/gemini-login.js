@@ -35,9 +35,9 @@
   }
   function render(run, data) {
     if (!visible(run)) return;
-    // The CLI can keep its terms screen visible briefly after accepting Enter.
-    // Keep the pending state until it actually advances, so the choice cannot be submitted twice.
-    if (run.confirmingTerms && data.stage === 'choose' && data.menu_id === 'onboarding-terms'
+    // The CLI can keep the previous menu visible briefly after accepting a choice.
+    // Keep the progress state until it advances, so the choice cannot be submitted twice.
+    if (run.pendingMenu && data.stage === 'choose' && data.menu_id === run.pendingMenu
         && !data.logged_in && !data.error) return;
     const view = JSON.stringify([data.stage, data.menu_id, data.login_url, data.logged_in, data.error, data.title, data.message]);
     if (view === run.view) return;
@@ -54,9 +54,9 @@
       account.hidden = false; return;
     }
     if (data.error) { status.textContent = data.error; run.done = true; return; }
-    if (data.stage !== 'waiting') run.confirmingTerms = false;
+    if (data.stage !== 'waiting') run.pendingMenu = null;
     if (data.stage === 'waiting') {
-      showProgress(run.confirmingTerms ? '正在完成登录设置，请稍候…' : (data.message || '正在等待登录服务响应…'));
+      showProgress(run.pendingMenu ? run.pendingMessage : (data.message || '正在等待登录服务响应…'));
     } else if (data.stage === 'choose') {
       options.hidden = false;
       for (const option of data.options || []) {
@@ -82,17 +82,19 @@
   async function submit(run, input) {
     if (!visible(run) || run.busy || run.done) return;
     run.busy = true; clearTimeout(run.timer);
-    const confirmingTerms = input.menu_id === 'onboarding-terms';
-    if (confirmingTerms) {
-      run.confirmingTerms = true;
+    const confirmingTerms = input.menu_id?.startsWith('onboarding-terms');
+    const trustingWorkspace = input.menu_id === 'workspace-trust' && input.key === 'select:0';
+    if (confirmingTerms || trustingWorkspace) {
+      run.pendingMenu = input.menu_id;
+      run.pendingMessage = trustingWorkspace ? '正在确认 Worker 工作区，请稍候…' : '正在完成登录设置，请稍候…';
       run.view = null; hideControls();
-      title.textContent = '正在完成登录设置';
-      status.textContent = '条款已确认，登录服务正在初始化账号环境。';
-      showProgress('正在完成登录设置，请稍候…');
+      title.textContent = trustingWorkspace ? '正在确认 Worker 工作区' : '正在完成登录设置';
+      status.textContent = trustingWorkspace ? '登录服务正在处理工作区信任确认。' : '登录服务正在处理条款确认。';
+      showProgress(run.pendingMessage);
     }
     dialog.querySelectorAll('#gemini-login-options button, #gemini-code-form button').forEach(button => button.disabled = true);
     try { await call(run, 'input', input); }
-    catch (error) { if (visible(run)) { run.confirmingTerms = false; progress.hidden = true; dialog.removeAttribute('aria-busy'); status.textContent = error.message; } }
+    catch (error) { if (visible(run)) { run.pendingMenu = null; progress.hidden = true; dialog.removeAttribute('aria-busy'); status.textContent = error.message; } }
     finally {
       run.busy = false;
       if (visible(run)) {

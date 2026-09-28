@@ -8,11 +8,14 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://codex:codex@localhost:5432/codex_gateway"
     key_pepper: SecretStr = SecretStr("development-only-change-me")
     backend: Literal["mock", "app_server"] = "mock"
-    dev_api_key: SecretStr | None = SecretStr("cag_dev_local")
+    # No default credential: an unset value disables the development bypass entirely.
+    dev_api_key: SecretStr | None = None
     admin_password: SecretStr = SecretStr("development-admin-change-me")
     admin_username: str = "admin"
-    admin_session_secret: SecretStr | None = None
-    admin_cookie_secure: bool = False
+    admin_session_secret: SecretStr | None = None  # Legacy setting; sessions are stored in PostgreSQL.
+    # Cookie Secure flag: unset detects HTTPS from the request, true forces it on
+    # (use this when a TLS proxy is not in --forwarded-allow-ips), false forces it off.
+    admin_cookie_secure: bool | None = None
     auto_create_schema: bool = True
     model_name: str = ""  # Legacy environment setting; no longer exposes a model alias.
     upstream_model: str = "gpt-6-sol"
@@ -32,6 +35,7 @@ class Settings(BaseSettings):
     worker_limit_cooldown_seconds: int = 1800
     response_binding_ttl_hours: int = 24  # Legacy setting; ordinary bindings no longer expire.
     execution_resume_enabled: bool = True
+    max_workers_per_user: int = 10
     max_ws_per_key_worker: int = 10
     max_ws_per_worker: int = 40
     ws_idle_ttl_seconds: float = 600.0
@@ -40,6 +44,12 @@ class Settings(BaseSettings):
     database_pool_size: int = 20
     database_max_overflow: int = 30
     database_pool_timeout_seconds: float = 10.0
+
+    @field_validator("admin_cookie_secure", mode="before")
+    @classmethod
+    def optional_cookie_secure(cls, value):
+        # A blank or "auto" value means detect, matching an unset variable.
+        return None if isinstance(value, str) and value.strip().lower() in {"", "auto"} else value
 
     @field_validator("admin_username")
     @classmethod

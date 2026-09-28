@@ -3,7 +3,7 @@
 ## Install
 
 1. Copy the repository to `/opt/codex-app-server` and create `.env` from `.env.example`.
-2. Replace every value containing `development` or `change-this`; set `CODEX_GATEWAY_DEV_API_KEY=` outside development.
+2. Replace every value containing `development` or `change-this`. `CODEX_GATEWAY_DEV_API_KEY` has no default and must stay empty outside development: any value it holds is a full-access API credential that bypasses ownership, provider entitlement and quota.
 3. Install `deploy/codex-gateway.service` in `/etc/systemd/system/`, then run `systemctl daemon-reload && systemctl enable --now codex-gateway`.
 4. Put Caddy or another TLS reverse proxy in front of port 8000. The example preserves SSE flushing.
 
@@ -31,10 +31,25 @@ The app-server connection pool allows up to 10 WebSockets per API Key/Worker pai
 
 - Do not expose worker port 4500 or manager port 4600 on the host.
 - Rotate the admin password, Key HMAC pepper, worker capability token and manager token.
-- Set a unique `CODEX_GATEWAY_ADMIN_SESSION_SECRET`. Enable
-  `CODEX_GATEWAY_ADMIN_COOKIE_SECURE=true` when the admin console is served over
-  HTTPS. The admin session is an HttpOnly, SameSite=Lax signed cookie with a
-  12-hour lifetime; state-changing admin forms also require a CSRF token.
+- The session cookie is HttpOnly and SameSite=Lax with a 12-hour lifetime.
+  `CODEX_GATEWAY_ADMIN_COOKIE_SECURE` marks it Secure: leave it unset to detect
+  HTTPS from the request, `true` to force it on, `false` for plain HTTP. Detection
+  depends on uvicorn rewriting the scheme from `X-Forwarded-Proto`, which it only
+  does for a peer listed in `--forwarded-allow-ips` (see
+  `CODEX_GATEWAY_TRUSTED_PROXY_IPS` in `compose.yaml`); set the flag to `true`
+  when the TLS terminator is not in that list. Verify after deploying:
+  `curl -sk -X POST https://<host>/auth/login -d 'username=x&password=y' -D - -o /dev/null | grep -i set-cookie`
+  on a successful login must show `Secure`. Sessions live in PostgreSQL, so
+  `CODEX_GATEWAY_ADMIN_SESSION_SECRET` is no longer read.
+- State-changing forms require a CSRF token. Login cannot carry one, so every
+  non-`/v1` POST additionally rejects a cross-origin `Origin` header.
+- Password login is rate limited: five failures per account and twenty per
+  client address trigger an escalating lock, from 15 seconds up to 15 minutes.
+  A successful login clears both counters, and counters idle for an hour expire.
+- `/docs`, `/redoc` and `/openapi.json` are disabled; the schema described every
+  admin form to anonymous callers.
+- One account may contribute at most `CODEX_GATEWAY_MAX_WORKERS_PER_USER`
+  Workers (10 by default), because each one runs a container.
 - `CODEX_GATEWAY_ADMIN_PASSWORD` initializes the database credential only when the configured administrator does not yet exist. Later password changes are made from the admin console and persist in PostgreSQL. A password change increments the session version, invalidating every older admin cookie.
 - The test deployment listens on `0.0.0.0:8000`; production should firewall that port to the reverse proxy.
-- Inputs and outputs are intentionally absent from database records and normal application logs.
+- Model outputs are never stored; only a SHA-256 digest is retained. Request bodies, including prompts, ARE stored in `usage_records.request_params` so the console can show request details, and any administrator can read every user's prompts. Treat the database accordingly.

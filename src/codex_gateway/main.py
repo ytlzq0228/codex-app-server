@@ -114,7 +114,8 @@ async def lifespan(app: FastAPI):
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 
-app = FastAPI(title="Codex App Server Gateway", version="0.4.0", lifespan=lifespan)
+app = FastAPI(title="Codex App Server Gateway", version="0.4.0", lifespan=lifespan,
+              docs_url=None, redoc_url=None, openapi_url=None)
 app.state.templates = Jinja2Templates(directory=PACKAGE_ROOT / "templates")
 app.mount("/static", StaticFiles(directory=PACKAGE_ROOT / "static"), name="static")
 app.include_router(admin_auth_router)
@@ -258,6 +259,25 @@ async def worker_recovery_loop() -> None:
             continue
 
 
+BEARER_PATHS = ("/v1/", "/healthz")
+
+
+def cross_site_post(request: Request) -> bool:
+    """Reject browser form posts from another origin.
+
+    Cookie-authenticated forms also carry a CSRF token; login cannot, because no
+    session exists yet. An absent Origin means a non-browser client, which cannot
+    be made to replay someone else's cookies.
+    """
+    from urllib.parse import urlsplit
+    if request.method in {"GET", "HEAD", "OPTIONS"} or request.url.path.startswith(BEARER_PATHS):
+        return False
+    origin = request.headers.get("origin")
+    if not origin:
+        return False
+    return origin == "null" or urlsplit(origin).netloc != request.url.netloc
+
+
 @app.middleware("http")
 async def request_limits_and_headers(request: Request, call_next):
     request_id = f"req_{uuid4().hex}"
@@ -267,7 +287,12 @@ async def request_limits_and_headers(request: Request, call_next):
         too_large = bool(length and int(length) > get_settings().max_request_bytes)
     except ValueError:
         too_large = False
-    response = openai_error(413, "Request body is too large", "request_too_large") if too_large else await call_next(request)
+    if cross_site_post(request):
+        response = openai_error(403, "Cross-site request rejected", "cross_site_request")
+    elif too_large:
+        response = openai_error(413, "Request body is too large", "request_too_large")
+    else:
+        response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"

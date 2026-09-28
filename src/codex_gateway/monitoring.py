@@ -45,6 +45,7 @@ def state_counts(workers):
 def pool_usage(workers, weights, readings):
     eligible = [w for w in workers if w.endpoint != 'removed://worker' and w.auth_mode and w.failure_kind != 'logged_out']
     totals = {key: [0.0, 0.0, 0] for key in ('risk', 'five_hour', 'week')}
+    worker_windows = {}
     total_weight = 0.0
     unknown_plans = 0
     for worker in eligible:
@@ -64,12 +65,19 @@ def pool_usage(workers, weights, readings):
                 windows[key] = 0.0
         if windows:
             windows['risk'] = max(windows.values())
+        week_used = windows.get('week')
+        worker_windows[str(worker.id)] = {
+            'week_used': week_used,
+            'weight': weight,
+            'weighted_remaining': (100.0 - week_used) * weight if week_used is not None else None,
+        }
         for key, value in windows.items():
             totals[key][0] += value * weight
             totals[key][1] += weight
             totals[key][2] += 1
-    return {'version': 2, 'eligible': len(eligible), 'total_weight': total_weight,
+    return {'version': 3, 'eligible': len(eligible), 'total_weight': total_weight,
             'unknown_plans': unknown_plans, 'weights': {k: float(v) for k, v in weights.items()},
+            'workers': worker_windows,
             'windows': {key: {'used': numerator / denominator if denominator else None,
                               'covered_weight': denominator, 'covered': count}
                         for key, (numerator, denominator, count) in totals.items()}}

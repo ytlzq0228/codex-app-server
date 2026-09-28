@@ -48,6 +48,9 @@ def test_weighted_windows_missing_data_and_risk():
     assert data['windows']['risk'] == {'used': 72.5, 'covered_weight': 4, 'covered': 2}
     assert data['windows']['five_hour']['used'] == 55
     assert data['windows']['week']['used'] == 20
+    assert data['workers'][str(a.id)]['weighted_remaining'] == 20
+    assert data['workers'][str(b.id)]['weighted_remaining'] == 300
+    assert data['workers'][str(missing.id)]['weighted_remaining'] is None
     assert pool_usage([a], {}, {})['windows']['risk']['used'] is None
     assert pool_usage([], {}, {})['windows']['risk']['used'] is None
 
@@ -69,7 +72,7 @@ def test_snapshots_api_weights_and_history(monkeypatch):
             async with SessionLocal() as db:
                 rows = (await db.scalars(select(MetricSnapshot).where(MetricSnapshot.metric == metric, MetricSnapshot.bucket_at == bucket))).all()
                 assert len(rows) == 1
-                assert rows[0].payload['version'] == 2
+                assert rows[0].payload['version'] == (2 if metric == 'worker_states' else 3)
     with TestClient(app) as client:
         assert client.get('/admin/monitoring', headers=AJAX).status_code in (401, 303)
         token = admin_login(client)
@@ -122,7 +125,7 @@ def test_successful_missing_windows_are_unlimited_but_failure_is_unknown():
     a, b, failed = worker(), worker(plan_type='pro'), worker()
     readings = {str(a.id): {'buckets': []}, str(b.id): {'buckets': [{'five_hour': None, 'week': None}]}, str(failed.id): {}}
     result = pool_usage([a,b,failed], {'plus': 1, 'pro': 3}, readings)
-    assert result['version'] == 2
+    assert result['version'] == 3
     for window in result['windows'].values():
         assert window == {'used': 0, 'covered_weight': 4, 'covered': 2}
     assert result['total_weight'] == 5

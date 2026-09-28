@@ -28,7 +28,7 @@ from .backend import AppServerBackend, BackendTarget, CompletionBackend, MockBac
 from .billing import priced_amount
 from .config import get_settings
 from .database import SessionLocal, engine, get_session
-from .models import ModelPrice, Base, ResponseBinding, UsageRecord, Worker, WorkerStatus
+from .models import MetricSnapshot, ModelPrice, Base, ResponseBinding, UsageRecord, Worker, WorkerStatus
 from .audit import RequestAuditMiddleware, current_audit, request_params as captured_params
 from .request_observation import request_observation
 from .conversations import correlate, durable_write
@@ -368,6 +368,36 @@ def worker_unavailable(*, bound: bool = False) -> HTTPException:
     return HTTPException(503, detail={"error": {"message": message, "type": "server_error", "code": code}})
 
 
+def rank_pool_workers(candidates, active_connections, usage_payload, cache_scope=None):
+    """Prefer low live load, then the greatest weighted weekly remainder."""
+    ranked = list(candidates)
+    if cache_scope:
+        ranked.sort(key=lambda worker: hashlib.sha256(
+            f"{cache_scope}:{worker.id}".encode()).digest(), reverse=True)
+    usage_by_worker = usage_payload.get("workers", {}) if isinstance(usage_payload, dict) else {}
+
+    def preference(worker):
+        value = usage_by_worker.get(str(worker.id), {}).get("weighted_remaining")
+        known = isinstance(value, (int, float)) and not isinstance(value, bool)
+        return (active_connections.get(str(worker.id), 0), not known, -float(value) if known else 0.0)
+
+    # Python's stable sort retains cache affinity (or the randomized DB order)
+    # only after the load and weekly-capacity criteria tie.
+    ranked.sort(key=preference)
+    return ranked
+
+
+async def pool_routing_signals(session: AsyncSession):
+    backend = getattr(app.state, "backend", None)
+    pool = getattr(backend, "pool", None)
+    active = await pool.active_connections_by_worker() if pool and hasattr(pool, "active_connections_by_worker") else {}
+    latest = await session.scalar(select(MetricSnapshot).where(
+        MetricSnapshot.metric == "subscription_usage",
+        MetricSnapshot.observed_at >= datetime.now(timezone.utc) - timedelta(hours=2),
+    ).order_by(MetricSnapshot.bucket_at.desc()).limit(1))
+    return active, latest.payload if latest else {}
+
+
 async def choose_target(
     principal: ApiPrincipal,
     session: AsyncSession,
@@ -386,9 +416,9 @@ async def choose_target(
         candidates = [worker] if worker else []
     else:
         candidates = list((await session.scalars(select(Worker).where(Worker.enabled.is_(True), Worker.status.in_([WorkerStatus.ready, WorkerStatus.busy])).order_by(func.random()))).all())
-        if cache_affinity:
-            scope = f"{principal.key_id or 'development'}:{cache_affinity}"
-            candidates.sort(key=lambda worker: hashlib.sha256(f"{scope}:{worker.id}".encode()).digest(), reverse=True)
+        active, usage = await pool_routing_signals(session)
+        scope = f"{principal.key_id or 'development'}:{cache_affinity}" if cache_affinity else None
+        candidates = rank_pool_workers(candidates, active, usage, scope)
     candidates = [worker for worker in candidates if worker.id not in excluded and worker.enabled and worker.status in {WorkerStatus.ready, WorkerStatus.busy}]
     if not candidates:
         raise worker_unavailable(bound=binding is not None)

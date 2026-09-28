@@ -6,7 +6,7 @@ import pytest
 import codex_gateway.main as main_module
 import codex_gateway.app_server as app_server_module
 from codex_gateway.auth import ApiPrincipal
-from codex_gateway.app_server import AppServerCapacityError, AppServerError, AppServerPool, connect_app_server
+from codex_gateway.app_server import AppServerCapacityError, AppServerError, AppServerPool, AppServerSlot, connect_app_server
 from codex_gateway.backend import AppServerBackend, BackendTarget, TurnUsage, WorkerFailure, _token_counts, classify_worker_failure, run_healthcheck_turn
 from codex_gateway.config import get_settings
 from codex_gateway.main import complete_with_failover, release_request_session
@@ -363,6 +363,18 @@ async def test_app_server_pool_returns_capacity_error_after_timeout(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_pool_reports_only_leased_or_connecting_slots_as_active():
+    pool = AppServerPool("token", 10)
+    pool._slots = [
+        AppServerSlot("a:one", "one", 0, busy=True),
+        AppServerSlot("b:one", "one", 0, busy=False),
+        AppServerSlot("a:two", "two", 0, busy=True),
+        AppServerSlot("b:two", "two", 0, busy=True),
+    ]
+    assert await pool.active_connections_by_worker() == {"one": 1, "two": 2}
+
+
+@pytest.mark.asyncio
 async def test_logout_rpc_serializes_null_params():
     import json
     from codex_gateway.app_server import AppServerSession
@@ -381,6 +393,7 @@ async def test_cache_affinity_preserves_explicit_routing_and_exclusions():
     workers=[SimpleNamespace(id=uuid4(),enabled=True,status='ready',container_name=f'w{i}',endpoint=f'ws://w{i}',execution_generation=0) for i in range(3)]
     class Session:
         async def scalars(self,*args):return SimpleNamespace(all=lambda:list(workers))
+        async def scalar(self,*args):return None
         async def get(self,model,key):return next(w for w in workers if w.id==key)
     db=Session();principal=ApiPrincipal(uuid4(),'test')
     first=await main_module.choose_target(principal,db,cache_affinity='shared-prefix')
@@ -390,3 +403,19 @@ async def test_cache_affinity_preserves_explicit_routing_and_exclusions():
     assert (await main_module.choose_target(principal,db,SimpleNamespace(worker_id=other.id),cache_affinity='shared-prefix')).worker_id==other.id
     assert (await main_module.choose_target(ApiPrincipal(principal.key_id,'test',pinned_worker_id=other.id),db,cache_affinity='shared-prefix')).worker_id==other.id
     assert (await main_module.choose_target(principal,db,exclude_worker_ids={first.worker_id},cache_affinity='shared-prefix')).worker_id!=first.worker_id
+
+
+def test_pool_ranking_prefers_active_connections_then_weighted_weekly_remainder():
+    from types import SimpleNamespace
+    light = SimpleNamespace(id=uuid4())
+    weighted = SimpleNamespace(id=uuid4())
+    unknown = SimpleNamespace(id=uuid4())
+    busy = SimpleNamespace(id=uuid4())
+    usage = {'workers': {
+        str(light.id): {'weighted_remaining': (100 - 2) * 1},
+        str(weighted.id): {'weighted_remaining': (100 - 15) * 10},
+        str(busy.id): {'weighted_remaining': 10_000},
+    }}
+    active = {str(light.id): 0, str(weighted.id): 0, str(unknown.id): 0, str(busy.id): 1}
+    ranked = main_module.rank_pool_workers([light, unknown, busy, weighted], active, usage)
+    assert ranked == [weighted, light, unknown, busy]

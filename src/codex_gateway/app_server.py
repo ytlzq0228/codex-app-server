@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from collections import Counter
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -216,6 +217,11 @@ class AppServerPool:
             self._condition.notify_all()
         if slot and slot.session:
             await slot.session.close()
+
+    async def active_connections_by_worker(self) -> dict[str, int]:
+        """Return currently leased/connecting WS slots per Worker."""
+        async with self._condition:
+            return dict(Counter(slot.worker_key for slot in self._slots if slot.busy))
 
     async def close(self) -> None:
         self._closed = True

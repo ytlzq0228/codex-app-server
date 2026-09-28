@@ -42,7 +42,13 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         stopped = AsyncMock()
         with patch.object(service.asyncio, "create_subprocess_exec", AsyncMock(return_value=proc)), patch.object(service, "stop", stopped):
             response = await service.turn(service.Turn(prompt="hello", model="gemini-test", workspace=str(self.workspace)))
-            rows = [json.loads(chunk) async for chunk in response.body_iterator]
+            rows = []
+            async for chunk in response.body_iterator:
+                row = json.loads(chunk)
+                if row.get("done"):
+                    self.assertFalse(service.active_turns)
+                    self.assertTrue(stopped.await_count)
+                rows.append(row)
         self.assertTrue(stopped.await_count)
         self.assertFalse(service.lock.locked())
         return rows
@@ -326,3 +332,34 @@ class PersonalAccountLogoutTests(unittest.IsolatedAsyncioTestCase):
     def test_email_in_login_prompt_is_not_authenticated_header(self):
         self.assertFalse(service.signed_in_header("Sign in using user@example.test"))
         self.assertTrue(service.signed_in_header("Antigravity CLI 1.2.12\nuser@example.test\n/workspace"))
+
+class ConcurrentTurnTests(unittest.IsolatedAsyncioTestCase):
+    asyncSetUp = TransportTests.asyncSetUp
+    asyncTearDown = TransportTests.asyncTearDown
+
+    async def test_nested_turn_admitted_while_parent_stream_is_open(self):
+        def spawn(*args, **kwargs):
+            proc = type("Process", (), {})()
+            proc.wait = AsyncMock(return_value=0)
+            proc.stdin = FakeInput()
+            proc.stdout = FakeOutput([(json.dumps(e) + "\n").encode() for e in [
+                {"event": "init", "conversation_id": "thread"},
+                {"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "ready"}},
+                {"event": "result", "result": {"status": "SUCCESS"}},
+            ]])
+            proc.stderr = type("Stderr", (), {"read": AsyncMock(return_value=b"")})()
+            return proc
+        with patch.object(service.asyncio, "create_subprocess_exec", AsyncMock(side_effect=spawn)), patch.object(service, "stop", AsyncMock()):
+            parent = await service.turn(service.Turn(prompt="parent", model="gemini-test", workspace=str(self.workspace)))
+            await anext(parent.body_iterator)
+            service.active_turns[next(iter(service.active_turns))] = "11111111-1111-1111-1111-111111111111"
+            with self.assertRaises(service.HTTPException):
+                await service.turn(service.Turn(prompt="duplicate", model="gemini-test", workspace=str(self.workspace), conversation="11111111-1111-1111-1111-111111111111"))
+            child = await service.turn(service.Turn(prompt="child", model="gemini-test", workspace=str(self.workspace)))
+            self.assertEqual(len(service.active_turns), 2)
+            with self.assertRaises(service.HTTPException):
+                await service.login_start()
+            rows = [json.loads(chunk) async for chunk in child.body_iterator]
+            self.assertTrue(rows[-1]["done"])
+            await parent.body_iterator.aclose()
+            self.assertFalse(service.active_turns)

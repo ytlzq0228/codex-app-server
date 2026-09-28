@@ -74,7 +74,7 @@ def last_texts(params):
         if isinstance(content, str):
             if kind and content:
                 latest[kind] = content
-        elif isinstance(content, list) and role not in ('system', 'developer'):
+        elif isinstance(content, list) and role in (None, 'user', 'assistant') and item.get('type', 'message') in ('message', 'input_text', 'output_text'):
             parts = {}
             for part in content:
                 if not isinstance(part, dict):
@@ -86,3 +86,33 @@ def last_texts(params):
                     parts.setdefault(text_kind, []).append(part['text'])
             latest.update({key: '\n\n'.join(text) for key, text in parts.items()})
     return latest
+
+
+async def request_texts(db, record):
+    """Use this response, never an assistant message from request history."""
+    from sqlalchemy import select
+    from .models import UsageRecord
+
+    texts = last_texts(record.request_params)
+    texts.pop('output_text', None)
+    if record.response_text is not None:
+        texts['output_text'] = record.response_text or '本次响应未包含文本（可能为工具调用）。'
+    # Responses tool continuations may carry only function_call_output. Walk
+    # explicit parent links, scoped to the same owner and API key.
+    prior = record
+    seen = {record.request_id}
+    while 'input_text' not in texts and prior.previous_response_id:
+        if prior.previous_response_id in seen:
+            break
+        seen.add(prior.previous_response_id)
+        prior = await db.scalar(select(UsageRecord).where(
+            UsageRecord.request_id == prior.previous_response_id,
+            UsageRecord.api_key_id == record.api_key_id,
+            UsageRecord.owner_username == record.owner_username,
+            UsageRecord.endpoint == record.endpoint))
+        if prior is None:
+            break
+        value = last_texts(prior.request_params).get('input_text')
+        if value:
+            texts['input_text'] = value
+    return texts

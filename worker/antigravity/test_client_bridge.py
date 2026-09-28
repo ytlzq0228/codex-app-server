@@ -96,3 +96,26 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             async for _ in bridge.messages(stream):
                 pass
         bridge.close()
+
+class ConcurrentEnvironmentTests(unittest.TestCase):
+    def test_settings_and_mcp_are_isolated_and_originals_restored(self):
+        from client_bridge import execution_environment
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home, workspace = root / "home", root / "workspace"
+            workspace.mkdir()
+            settings = home / ".gemini/antigravity-cli/settings.json"
+            settings.parent.mkdir(parents=True)
+            settings.write_text('{"enableTelemetry": false}')
+            before = settings.read_bytes()
+            with execution_environment(workspace, home) as (h1, w1), execution_environment(workspace, home) as (h2, w2):
+                one, two = ToolBridge([]), ToolBridge([])
+                with one.configuration(w1, h1), two.configuration(w2, h2):
+                    self.assertNotEqual(h1, h2)
+                    self.assertNotEqual(w1, w2)
+                    self.assertIn(one.token, (w1 / ".agents/mcp_config.json").read_text())
+                    self.assertNotIn(two.token, (w1 / ".agents/mcp_config.json").read_text())
+                    self.assertIn(two.token, (w2 / ".agents/mcp_config.json").read_text())
+                    self.assertEqual(settings.read_bytes(), before)
+            self.assertFalse(h1.exists())
+            self.assertFalse(w1.exists())

@@ -20,7 +20,7 @@ import pyte
 from fastapi import FastAPI, Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
-from client_bridge import ToolBridge, ACTIVE, install_mcp
+from client_bridge import ToolBridge, ACTIVE, install_mcp, execution_environment
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 install_mcp(app)
@@ -28,6 +28,12 @@ ROOT = Path("/workspace")
 ACCOUNT = Path.home() / ".gemini/antigravity-cli/gateway-account.json"
 lock = asyncio.Lock()
 login = None
+active_turns = {}
+MAX_TURNS = 4
+
+def busy():
+    return lock.locked() or bool(active_turns)
+
 MODEL = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}$")
 UUID = re.compile(r"^[a-f0-9-]{36}$")
 
@@ -306,7 +312,7 @@ async def login_start():
     global login
     if login and login.task and not login.task.done():
         return await wait_for_login_view(login)
-    if lock.locked():
+    if busy():
         raise HTTPException(409, "Worker is executing")
     await lock.acquire()
     login = Login()
@@ -403,7 +409,7 @@ async def login_input(body: LoginInput):
 async def account():
     if login and login.task and not login.task.done():
         raise HTTPException(409, "Login in progress")
-    if lock.locked():
+    if busy():
         cached = account_file()
         if cached:
             return {"account": cached}
@@ -431,7 +437,7 @@ async def cli_panel(command):
     """Only fixed official slash commands; never accept arbitrary user input."""
     if command not in {"/usage", "/logout"}:
         raise ValueError("Unsupported CLI command")
-    if lock.locked():
+    if busy():
         raise HTTPException(409, "Worker is busy; retry after the current operation")
     async with lock:
         master, slave = pty.openpty()
@@ -564,10 +570,12 @@ async def turn(body: Turn):
         raise HTTPException(400, "Invalid workspace")
     if login and login.task and not login.task.done():
         raise HTTPException(409, "Login in progress")
-    try:
-        await asyncio.wait_for(lock.acquire(), timeout=30)
-    except asyncio.TimeoutError:
-        raise HTTPException(409, "Worker capacity timeout")
+    if lock.locked() or len(active_turns) >= MAX_TURNS:
+        raise HTTPException(409, "Worker capacity exhausted")
+    ticket = body.conversation or uuid4().hex
+    if body.conversation and body.conversation in active_turns.values():
+        raise HTTPException(409, "Conversation already executing")
+    active_turns[ticket] = body.conversation
 
     async def events():
         process = None
@@ -576,12 +584,16 @@ async def turn(body: Turn):
         configuration = None
         configured = False
         source = None
+        environment = None
+        terminal = None
         try:
             if any(not re.fullmatch(r"gateway_client_\d+", tool.get("name", "")) or
                    not isinstance(tool.get("inputSchema"), dict) for tool in body.tools):
                 raise ValueError("Invalid client tool declaration")
             bridge = ToolBridge(body.tools)
-            configuration = bridge.configuration(workspace)
+            environment = execution_environment(workspace)
+            isolated_home, isolated_workspace = environment.__enter__()
+            configuration = bridge.configuration(isolated_workspace, home=isolated_home)
             configuration.__enter__()
             configured = True
             # The prompt is sent through stdin; never place customer content in process arguments.
@@ -589,7 +601,8 @@ async def turn(body: Turn):
                     "--model", body.model, "--disable-slash-commands"]
             if body.conversation:
                 args += ["--conversation", body.conversation]
-            process = await asyncio.create_subprocess_exec(*args, cwd=str(workspace),
+            process = await asyncio.create_subprocess_exec(*args, cwd=str(isolated_workspace),
+                env={**os.environ, "HOME": str(isolated_home)},
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE, start_new_session=True, limit=2**21)
             async def drain():
@@ -616,6 +629,7 @@ async def turn(body: Turn):
                         continue
                     if item.get("event") == "init":
                         thread = item.get("conversation_id") or thread
+                        active_turns[ticket] = thread
                         if body.conversation and thread != body.conversation:
                             yield json.dumps({"error": "Gemini resumed a different conversation", "kind": "session"}) + "\n"
                             return
@@ -638,12 +652,13 @@ async def turn(body: Turn):
                         # Antigravity reports uncached input separately; OpenAI usage
                         # and gateway billing require cached input as a subset of total input.
                         counts["input_tokens"] += counts["cache_read_tokens"]
-                        yield json.dumps({"thread_id": thread, "done": True, **counts}) + "\n"
-                        return
-            await process.wait()
-            tail = await stderr_task
-            kind = error_kind(tail.decode(errors="replace"))
-            yield json.dumps({"error": "Gemini ended without a final result", "kind": kind}) + "\n"
+                        terminal = {"thread_id": thread, "done": True, **counts}
+                        break
+            if terminal is None:
+                await process.wait()
+                tail = await stderr_task
+                kind = error_kind(tail.decode(errors="replace"))
+                yield json.dumps({"error": "Gemini ended without a final result", "kind": kind}) + "\n"
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -663,7 +678,15 @@ async def turn(body: Turn):
                     if configured:
                         configuration.__exit__(None, None, None)
                 finally:
-                    lock.release()
+                    try:
+                        if environment:
+                            environment.__exit__(None, None, None)
+                    finally:
+                        active_turns.pop(ticket, None)
+        # A terminal response promises the conversation can be resumed immediately.
+        # Finish process/configuration cleanup before exposing that boundary.
+        if terminal is not None:
+            yield json.dumps(terminal) + "\n"
     return StreamingResponse(events(), media_type="application/x-ndjson")
 
 
@@ -672,7 +695,7 @@ async def probe():
     state = await account()
     if not state.get("account") or state.get("available") is False:
         return state
-    if lock.locked():
+    if busy():
         raise HTTPException(409, "Worker busy")
     async with lock:
         models = state.get("models") or []

@@ -24,11 +24,11 @@
   <p class="muted">认证字段已脱敏；代理相关请求头仅作为客户端提供的线索。</p>
   {% if observation_fields %}{{ fields(observation_fields) }}{% else %}<p class="muted">历史请求未记录观测信息。</p>{% endif %}
   <details class="request-json"><summary>查看请求观测信息原始 JSON</summary><pre>{{ observation }}</pre></details>
-  <h3>请求参数</h3>
-  <p class="muted">请求参数中最后出现的输入与输出文本，不代表本次请求的响应。</p>
+  <h3>本轮对话</h3>
+  <p class="muted">显示截至本次请求的最近一次用户输入，以及本次实际输出。</p>
   <div class="request-conversation">
     <div class="request-bubble request-input"><span>用户 · input_text</span><p>{{ last_texts.get('input_text', '请求参数中未记录输入文本。') }}</p></div>
-    <div class="request-bubble request-output"><span>助手 · output_text</span><p>{{ last_texts.get('output_text', '请求参数中未记录输出文本。') }}</p></div>
+    <div class="request-bubble request-output"><span>助手 · output_text</span><p>{{ last_texts.get('output_text', '未记录本次响应文本。') }}</p></div>
   </div>
   <details class="request-json"><summary>查看请求参数原始 JSON</summary><pre>{{ params }}</pre></details>
 </section>

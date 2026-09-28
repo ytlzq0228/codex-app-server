@@ -18,7 +18,7 @@ from .self_service import render
 from .user_auth import require_user
 from .history import conversation_history
 from .billing import priced_amount
-from .request_detail import readable_fields, observation_fields, last_texts
+from .request_detail import readable_fields, observation_fields, request_texts
 
 router = APIRouter()
 
@@ -67,7 +67,7 @@ async def detail(request: Request, request_id: str, identity=Depends(require_use
     return render(request, identity, page="detail", record=record, worker=worker,
                   evidence_fields=readable_fields(record.conversation_evidence),
                   observation_fields=observation_fields(record.request_observation),
-                  last_texts=last_texts(record.request_params), params=json.dumps(record.request_params, ensure_ascii=False, indent=2), observation=json.dumps(record.request_observation, ensure_ascii=False, indent=2), correlation=json.dumps(record.conversation_evidence, ensure_ascii=False, indent=2))
+                  last_texts=await request_texts(db, record), params=json.dumps(record.request_params, ensure_ascii=False, indent=2), observation=json.dumps(record.request_observation, ensure_ascii=False, indent=2), correlation=json.dumps(record.conversation_evidence, ensure_ascii=False, indent=2))
 
 
 @router.get("/admin/finance")

@@ -1,10 +1,42 @@
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
+import pytest
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from codex_gateway.display import money, tokens
-from codex_gateway.request_detail import last_texts, observation_fields, readable_fields
+from codex_gateway.request_detail import last_texts, observation_fields, readable_fields, request_texts
+
+
+@pytest.mark.asyncio
+async def test_actual_response_replaces_history_and_latest_input_is_used():
+    record = SimpleNamespace(request_id='current', response_text='latest answer',
+        previous_response_id=None, request_params={'messages': [
+            {'role': 'user', 'content': 'old question'},
+            {'role': 'assistant', 'content': 'old answer'},
+            {'role': 'user', 'content': 'latest question'},
+            {'role': 'assistant', 'content': 'intermediate answer'},
+            {'role': 'tool', 'content': 'tool result'}]})
+    assert await request_texts(AsyncMock(), record) == {
+        'input_text': 'latest question', 'output_text': 'latest answer'}
+    record.response_text = None
+    assert await request_texts(AsyncMock(), record) == {'input_text': 'latest question'}
+    record.response_text = ''
+    assert '工具调用' in (await request_texts(AsyncMock(), record))['output_text']
+
+
+@pytest.mark.asyncio
+async def test_tool_continuation_follows_explicit_parent_for_input():
+    record = SimpleNamespace(request_id='current', response_text='final',
+        previous_response_id='parent', api_key_id=None, owner_username='alice',
+        endpoint='responses', request_params={'input': [
+            {'type': 'function_call_output', 'output': 'not a user message'}]})
+    parent = SimpleNamespace(previous_response_id=None, request_params={'input': 'question'})
+    db = AsyncMock()
+    db.scalar.return_value = parent
+    assert await request_texts(db, record) == {'input_text': 'question', 'output_text': 'final'}
+    db.scalar.assert_awaited_once()
 
 
 def test_last_texts_supports_responses_and_chat_without_tool_or_system_text():
@@ -14,6 +46,7 @@ def test_last_texts_supports_responses_and_chat_without_tool_or_system_text():
         {'role': 'user', 'content': [{'type': 'input_text', 'text': 'new'}, {'type': 'input_text', 'text': 'part two'}]},
         {'role': 'system', 'content': [{'type': 'input_text', 'text': 'hidden'}]},
         {'type': 'function_call_output', 'output': 'tool result'},
+        {'role': 'tool', 'content': [{'type': 'input_text', 'text': 'not user input'}]},
     ]}) == {'input_text': 'new\n\npart two', 'output_text': 'answer'}
     assert last_texts({'messages': [{'role': 'user', 'content': 'question'},
                                     {'role': 'assistant', 'content': 'reply'}]}) == {

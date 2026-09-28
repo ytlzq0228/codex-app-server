@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 from uuid import UUID, uuid4
-from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Integer, String, JSON, Numeric, func
+from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, JSON, Numeric, func
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -166,6 +166,7 @@ class UsageRecord(Base):
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     owner_username: Mapped[str | None] = mapped_column(String(120), nullable=True, index=True)
     request_params: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    response_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     request_observation: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     logical_conversation_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     conversation_evidence: Mapped[dict | None] = mapped_column(JSON, nullable=True)

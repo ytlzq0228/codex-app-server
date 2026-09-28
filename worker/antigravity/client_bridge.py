@@ -2,6 +2,8 @@
 import asyncio
 import json
 import secrets
+import shutil
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
@@ -167,3 +169,29 @@ def install_mcp(app):
             return JSONResponse({"jsonrpc": "2.0", "id": ident, "result": result})
         except (ValueError, TimeoutError):
             return JSONResponse({"jsonrpc": "2.0", "id": ident, "error": {"code": -32602, "message": "Tool call invalid, expired or unavailable"}})
+
+
+@contextmanager
+def execution_environment(workspace, home=None):
+    """Keep each process's settings/MCP and working directory independent."""
+    home = Path.home() if home is None else Path(home)
+    source = home / ".gemini/antigravity-cli"
+    with tempfile.TemporaryDirectory(prefix="gateway-home-") as temporary, \
+         tempfile.TemporaryDirectory(prefix=".gateway-turn-", dir=workspace) as working:
+        isolated = Path(temporary)
+        target = isolated / ".gemini/antigravity-cli"
+        target.mkdir(parents=True)
+        for name in ("settings.json", "jetski_state.pbtxt", "installation_id", "antigravity-oauth-token"):
+            if (source / name).is_file():
+                shutil.copy2(source / name, target / name)
+        if (source / "cache").is_dir():
+            shutil.copytree(source / "cache", target / "cache")
+        projects = home / ".gemini/config/projects"
+        if projects.is_dir():
+            shutil.copytree(projects, isolated / ".gemini/config/projects")
+        # Conversations are keyed by UUID. Admission rejects concurrent use of
+        # the same conversation; new conversations can safely coexist.
+        for name in ("conversations", "log"):
+            (source / name).mkdir(parents=True, exist_ok=True)
+            (target / name).symlink_to(source / name, target_is_directory=True)
+        yield isolated, Path(working)

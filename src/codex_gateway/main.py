@@ -596,6 +596,7 @@ async def save_usage(
             request_params = {**request_params, "previous_response_id": previous_response_id}
         cost = priced_amount(result.input_tokens, result.output_tokens, result.cache_read_tokens, result.cache_write_tokens, price) if price and result else (Decimal(0) if price else None)
         record = UsageRecord(provider=target.provider, owner_username=principal.owner_username, request_params=request_params, request_observation=request_observation(audit), input_price=price.input_price if price else None, output_price=price.output_price if price else None, cache_read_price=price.cache_read_price if price else None, cache_write_price=price.cache_write_price if price else None, cost_usd=cost, request_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, model=model, status_code=status_code, input_tokens=result.input_tokens if result else 0, output_tokens=result.output_tokens if result else 0, cache_read_tokens=result.cache_read_tokens if result else 0, cache_write_tokens=result.cache_write_tokens if result else 0, duration_ms=int((time.monotonic() - started) * 1000), error_code=error_code, endpoint=endpoint, previous_response_id=previous_response_id, thread_id=thread_id or (result.thread_id if result else None))
+        record.response_text = result.text if result else None
         await correlate(session, record, result.text if result else None)
         if audit and audit.get("execution_decision"):
             record.conversation_evidence["execution"] = audit["execution_decision"]
@@ -818,7 +819,7 @@ async def legacy_user_routes(request: Request, call_next):
     return await call_next(request)
 
 
-@app.get("/healthz")
+@app.api_route("/healthz", methods=["GET", "HEAD", "OPTIONS"])
 async def health() -> dict[str, str]:
     return {"status": "ok"}
 
@@ -860,6 +861,9 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
         track_backend(pending_target, pending_thread, source="authenticated_tool_call")
     request, execution_binding = await prepare_execution(request, principal, "chat.completions", current_audit.get(), pending_thread=pending_thread, tool_sessions=getattr(backend,"tool_sessions",None))
     target = pending_target or await choose_execution_target(principal, session, execution_binding, request)
+    if not pending_target:
+        from .audit import track_backend
+        track_backend(target, None, source="selected_worker")
     allow_retry = not pending_target and (execution_binding is None or (request._execution_auto_resume and target.provider == "codex")) and principal.pinned_worker_id is None
     await release_request_session(session)
     if body.stream:
@@ -917,6 +921,9 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
         track_backend(pending_target, pending_thread, source="authenticated_tool_call")
     body, binding = await prepare_execution(body, principal, "responses", current_audit.get(), pending_thread=pending_thread, binding=binding, tool_sessions=getattr(backend,"tool_sessions",None))
     target = pending_target or await choose_execution_target(principal, session, binding, body)
+    if not pending_target:
+        from .audit import track_backend
+        track_backend(target, None, source="selected_worker")
     await release_request_session(session)
     if body.stream:
         return StreamingResponse(response_stream(body, backend, principal, target, public_previous_id, not pending_target and (binding is None or (body._execution_auto_resume and target.provider == "codex")) and principal.pinned_worker_id is None), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})

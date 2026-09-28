@@ -104,3 +104,17 @@ Google OAuth 与 Google Cloud 登录可能有不同完成画面；在拿到发�
 
 admin-worker-01 现场 CLI 主界面仅显示邮箱，没有套餐括号。cli_panel 原条件要求邮箱后有套餐，导致未发送 /logout 即超时。修复为识别带版本号的 CLI 账号头部，保留企业格式兼容。25 项 Worker 测试通过。
 两个在用 Gemini Worker 及 manager 默认镜像已更新到 gemini-login-fix-r3。通过真实 /login/logout 完成 admin-worker-01 退出，返回 logged_in=false、account=null；网关账号绑定同步清除，状态 offline / logged_out。旧容器以 -before-login-r3 后缀保留，compose-before-r3.json 保存配置。正式环境未修改。
+
+## 本机 CLI 复测与嵌套调用修复（2026-09-28）
+
+15:52–15:57 UTC 的现场记录包含 503 worker_capacity_exceeded、400 client_tool_call_unavailable 和 499。客户端 15:55:53 错误文件显示父工具为 invoke_agent，子代理为 cli_help；子请求使用独立的两项工具集合，与父请求落到同一 Worker。原 Worker 全局执行锁覆盖整个工具等待期，父请求等待客户端子代理、子代理等待父请求释放 Worker，形成互相等待。子请求 503 的耗时均约 30 秒。单纯调高全局 ToolSessions 数量不能解决此问题。
+
+修复：每个 Worker 最多接纳 4 个独立执行，每次执行使用独立 HOME、工作目录、settings 和 MCP 配置，避免并发时覆盖对方的 relay token。会话数据库按 UUID 保留，禁止同一 Thread 并发续接；登录、退出和账号探测继续与执行互斥。认证配置复制到执行期间的私有目录，结束后删除，原配置不被改写。实际嵌套请求验证：父工具等待期间子请求成功，再回传结果完成父请求。本机 Gemini CLI 的 invoke_agent -> cli_help -> complete_task 真实流程通过，3 次模型调用、2 次工具调用、0 错误。
+
+续接复测发现另一个完成边界竞态：done 先于旧进程清理发送，立即携 previous_response_id 续接会被同 Thread 互斥拒绝。改为完成清理后再发送 done；真实 Responses 连续调用已通过并保留 marker。
+
+网关提前记录已选定 Worker，使首个后端事件前的断开仍保留 Worker。主动断开测试 req_497f8e3049904abba478de1f1a937706 记录为 499，worker_id 正确，Thread 为空（尚未产生），不伪造会话关联。独立子代理与父会话的 UI 聚合仍需要可信会话标识，不能把同账号所有请求合并。负载均衡器 OPTIONS /healthz 的 405 是独立探测噪声，已添加 GET/HEAD/OPTIONS 支持，三者均验证为 200。
+
+发布：测试网关及 manager 为 codex-gateway:gemini-concurrency-r2；所有当时在用的三个 Gemini Worker 和新建默认镜像为 codex-antigravity-worker:gemini-concurrency-r3。备份和镜像构建资料位于 /home/<deploy-user>/deploy-stage/gemini-concurrency-fix，旧 Worker 保留为 -before-concurrency-r2/r3。正式环境未更新。
+
+验证包含：本机 CLI 两次完整读文件/写文件/读回/恢复会话、结构化 JSON 和 summary alias；父工具等待期间子模型请求；真实 invoke_agent 子代理；显式 previous_response_id 紧接续接；主动断开审计。相关回归 78 项通过。4 个执行槽仍有上限，达到上限会明确返回容量错误；网关重启或工具等待超过现有 TTL 仍会使挂起调用失效。

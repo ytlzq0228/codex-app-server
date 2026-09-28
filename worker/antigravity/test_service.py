@@ -70,6 +70,18 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("private-code", json.dumps(login.state()))
         self.assertNotIn("screen", login.state())
 
+    def test_invalid_authorization_code_ends_waiting_state(self):
+        login = service.Login()
+        login.code_submitted = True
+        login.stream.feed("OAuth error: failed to exchange authorization code for tokens")
+        state = login.state()
+        self.assertIn("授权失败", state["error"])
+        self.assertEqual(state["stage"], "waiting")
+
+    def test_authorization_prompt_is_not_treated_as_an_error(self):
+        self.assertIsNone(service.authorization_code_error(
+            "After authenticating, copy the authorization code and paste it below:"))
+
     def test_structured_login_steps(self):
         view = service.login_view("Select login method:\n > 1. Continue with Google Cloud\n   2. Other sign-in options")
         self.assertEqual(view["stage"], "choose")

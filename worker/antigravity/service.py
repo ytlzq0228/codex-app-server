@@ -69,6 +69,21 @@ def signed_out_screen(display):
         "successfully logged out", "signed out from server:", "you have been logged out"))
 
 
+def authorization_code_error(display):
+    """Map CLI OAuth failures to a safe message without exposing terminal output."""
+    text = re.sub(r"\s+", " ", display).lower()
+    explicit = (
+        "invalid_grant", "authorization code is invalid", "invalid authorization code",
+        "authorization code has expired", "authorization code was already",
+        "failed to exchange authorization code", "error exchanging authorization code",
+    )
+    failed = any(term in text for term in ("invalid", "expired", "already used", "already redeemed",
+                                            "failed", "failure", "error", "denied", "unable"))
+    if any(term in text for term in explicit) or failed:
+        return "Google 授权失败。授权码可能无效、已过期或已被使用；请关闭此窗口，重新点击登录账号并获取新的授权码。"
+    return None
+
+
 def login_view(display, url=None):
     """Expose structured login controls, never terminal output or entered secrets."""
     if "Terms of Service & Data Use" in display and re.search(r">\s*Done", display):
@@ -135,6 +150,7 @@ class Login:
         self.error = None
         self.task = None
         self.redacted = []
+        self.code_submitted = False
         self.owns_lock = False
         self.input_lock = asyncio.Lock()
 
@@ -198,9 +214,10 @@ class Login:
         display = "\n".join(line.rstrip() for line in self.screen.display).strip()
         for secret in self.redacted:
             display = display.replace(secret, "[已提交]")
+        prompt_error = authorization_code_error(display) if self.code_submitted else None
         return {"session_id": self.id, **login_view(display, self.url),
                 "logged_in": bool(self.account) and bool(self.task and self.task.done()), "account": self.account,
-                "error": self.error, "expires_in": max(0, int(self.expires - time.monotonic()))}
+                "error": prompt_error or self.error, "expires_in": max(0, int(self.expires - time.monotonic()))}
 
 class LoginInput(BaseModel):
     session_id: str
@@ -274,6 +291,7 @@ async def login_input(body: LoginInput):
         display = "\n".join(login.screen.display).lower()
         if login_view(display, login.url)["stage"] != "authorize":
             raise HTTPException(409, "CLI is not waiting for an authorization code")
+        login.code_submitted = True
         login.redacted.append(body.code)
         data = body.code.encode() + b"\r"
     elif body.action in keys:

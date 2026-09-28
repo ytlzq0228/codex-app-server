@@ -6,6 +6,16 @@ document.querySelectorAll('[data-quota-step]').forEach(button => button.addEvent
   input.value = String(Math.max(0, Math.min(10000, value + Number(button.dataset.quotaStep))));
   input.dispatchEvent(new Event('input', {bubbles: true}));
 }));
+document.querySelectorAll('.plan-color-field input[type="color"]').forEach(input => input.addEventListener('input', () => {
+  const color = input.value.toLowerCase();
+  input.parentElement.querySelector('code').textContent = color;
+  const pill = input.closest('tr').querySelector('.plan-pill');
+  const red = Number.parseInt(color.slice(1, 3), 16);
+  const green = Number.parseInt(color.slice(3, 5), 16);
+  const blue = Number.parseInt(color.slice(5, 7), 16);
+  pill.style.backgroundColor = color;
+  pill.style.color = (red * 299 + green * 587 + blue * 114) / 1000 >= 150 ? '#111827' : '#ffffff';
+}));
 document.querySelectorAll('form[data-portal]').forEach(form => form.addEventListener('submit', async event => {
   event.preventDefault();
   if (form.dataset.confirm && !confirm(form.dataset.confirm)) return;

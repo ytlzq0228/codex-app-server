@@ -20,8 +20,9 @@ from .backend import WorkerFailure, classify_worker_failure, run_healthcheck_tur
 from .config import Settings, get_settings
 from .database import get_session
 from .history import conversation_history, active_conversation_groups, history_time_filters
-from .models import GoogleAuthConfig, User, UserSession, ApiKey, ResponseBinding, UsageRecord, Worker, WorkerStatus
+from .models import GoogleAuthConfig, User, UserSession, ApiKey, ResponseBinding, SubscriptionPlan, UsageRecord, Worker, WorkerStatus
 from .quota import quota_lock, ensure_capacity, reconcile_worker
+from .subscriptions import DEFAULT_PLAN_COLOR, plan_pill_style
 from .user_auth import issue_session, require_user, digest
 from .security import generate_api_key, hash_api_key, hash_password, verify_password
 
@@ -134,6 +135,8 @@ async def render_admin_page(request: Request, page: str, history_page: int, admi
     history_page_size = 30
     keys = (await session.scalars(select(ApiKey).where(ApiKey.deleted_at.is_(None)).order_by(ApiKey.created_at.desc()))).all()
     workers = (await session.scalars(select(Worker).where(Worker.endpoint != "removed://worker").order_by(Worker.created_at.asc()))).all()
+    plans = (await session.scalars(select(SubscriptionPlan))).all() if page == "admin_workers" else []
+    plan_styles = {plan.name: plan_pill_style(plan.color) for plan in plans}
     history_keys = (await session.scalars(select(ApiKey).order_by(ApiKey.name, ApiKey.id))).all() if page == "history" else []
     history = await conversation_history(session, filters=date_filters, page=history_page, page_size=history_page_size, conversation_id=conversation, key_id=key_id, endpoint=endpoint)
     history_total = history["request_total"]
@@ -170,7 +173,7 @@ async def render_admin_page(request: Request, page: str, history_page: int, admi
     return templates(request).TemplateResponse(
         request,
         "admin/dashboard.html",
-        {"users": (await session.scalars(select(User).order_by(User.username))).all(), "page": page, "history_keys": history_keys, "keys": keys, "workers": workers, "history_groups": history_groups, "history_page": history_page, "history_pages": history_pages, "history_total": history_total, "history_session_total": history_session_total, "active_sessions": active_sessions, "sessions_by_key": sessions_by_key, "stats": stats, "csrf_token": admin.csrf_token, "show_cost": page == "history"},
+        {"users": (await session.scalars(select(User).order_by(User.username))).all(), "page": page, "history_keys": history_keys, "keys": keys, "workers": workers, "plan_styles": plan_styles, "default_plan_style": plan_pill_style(DEFAULT_PLAN_COLOR), "history_groups": history_groups, "history_page": history_page, "history_pages": history_pages, "history_total": history_total, "history_session_total": history_session_total, "active_sessions": active_sessions, "sessions_by_key": sessions_by_key, "stats": stats, "csrf_token": admin.csrf_token, "show_cost": page == "history"},
     )
 
 

@@ -1,12 +1,36 @@
 """Current monthly subscription estimates, separate from historical actual costs."""
 from decimal import Decimal
+import re
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from .models import SubscriptionPlan, Worker
 
+DEFAULT_PLAN_COLOR = '#16734a'
+PLAN_COLOR_RE = re.compile(r'^#[0-9a-fA-F]{6}$')
+
 
 def normalize_plan(name):
     return (name or '').strip().lower()
+
+
+def normalize_plan_color(color):
+    if not isinstance(color, str) or not PLAN_COLOR_RE.fullmatch(color.strip()):
+        raise ValueError('套餐颜色必须是六位十六进制色值')
+    return color.strip().lower()
+
+
+def safe_plan_color(color):
+    try:
+        return normalize_plan_color(color)
+    except ValueError:
+        return DEFAULT_PLAN_COLOR
+
+
+def plan_pill_style(color):
+    color = safe_plan_color(color)
+    red, green, blue = (int(color[index:index + 2], 16) for index in (1, 3, 5))
+    foreground = '#111827' if (red * 299 + green * 587 + blue * 114) / 1000 >= 150 else '#ffffff'
+    return f'background-color:{color};color:{foreground}'
 
 
 async def remember_plan(db, name):
@@ -21,7 +45,8 @@ async def subscription_summary(db):
     for name in sorted({normalize_plan(w.plan_type) for w in workers} - {''}):
         await remember_plan(db, name)
     plans = (await db.scalars(select(SubscriptionPlan).order_by(SubscriptionPlan.name))).all()
-    rows = {p.name: dict(name=p.name, price=p.monthly_price, weight=p.weight, count=0, subtotal=Decimal(0)) for p in plans}
+    rows = {p.name: dict(name=p.name, price=p.monthly_price, weight=p.weight,
+        color=safe_plan_color(p.color), style=plan_pill_style(p.color), count=0, subtotal=Decimal(0)) for p in plans}
     unknown = 0
     for worker in workers:
         if worker.endpoint == 'removed://worker' or not worker.auth_mode or worker.failure_kind == 'logged_out':

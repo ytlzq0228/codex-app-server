@@ -5,3 +5,4 @@
 .admin-page .content{max-width:none;padding-left:24px;padding-right:24px}
 @media(max-width:720px){.admin-page .content{padding-left:16px;padding-right:16px}}
 .login-card .stack-form{margin-bottom:14px}
+.plan-pill{display:inline-flex;align-items:center;min-height:22px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:800;line-height:1.2;white-space:nowrap}.plan-color-field{display:flex;flex-direction:row;align-items:center;gap:8px}.plan-color-field input[type=color]{width:42px;height:32px;padding:2px;border-radius:8px;cursor:pointer}.plan-color-field code{font-size:11px}.stack-form input[type=color]{width:72px;height:42px;padding:3px;cursor:pointer}

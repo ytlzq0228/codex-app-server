@@ -12,7 +12,7 @@ from .admin_auth import require_admin, verify_csrf
 from .database import get_session
 from .config import get_settings
 from .models import ApiKey, Worker, ModelPrice, SubscriptionCost, SubscriptionPlan, UsageRecord
-from .subscriptions import normalize_plan, subscription_summary
+from .subscriptions import normalize_plan, normalize_plan_color, subscription_summary
 from sqlalchemy.dialects.postgresql import insert
 from .self_service import render
 from .user_auth import require_user
@@ -165,7 +165,7 @@ async def price(request: Request, model: str = Form(..., min_length=1, max_lengt
 
 
 @router.post("/admin/subscription-plans")
-async def subscription_plan(request: Request, name: str = Form(..., min_length=1, max_length=120), monthly_price: Decimal = Form(...), weight: Decimal = Form(Decimal("1")), csrf_token: str = Form(...), identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
+async def subscription_plan(request: Request, name: str = Form(..., min_length=1, max_length=120), monthly_price: Decimal = Form(...), weight: Decimal = Form(Decimal("1")), color: str | None = Form(None, max_length=7), csrf_token: str = Form(...), identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
     verify_csrf(request, identity, csrf_token)
     name = normalize_plan(name)
     if not name:
@@ -174,10 +174,17 @@ async def subscription_plan(request: Request, name: str = Form(..., min_length=1
     weight = valid_amount(weight)
     if weight <= 0 or weight.as_tuple().exponent < -6:
         raise HTTPException(400, "套餐权重必须大于 0，最多六位小数")
-    await db.execute(insert(SubscriptionPlan).values(name=name, monthly_price=amount, weight=weight).on_conflict_do_update(
-        index_elements=['name'], set_={'monthly_price': amount, 'weight': weight}))
+    values = {'name': name, 'monthly_price': amount, 'weight': weight}
+    updates = {'monthly_price': amount, 'weight': weight}
+    if color is not None:
+        try:
+            values['color'] = updates['color'] = normalize_plan_color(color)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+    await db.execute(insert(SubscriptionPlan).values(**values).on_conflict_do_update(
+        index_elements=['name'], set_=updates))
     await db.commit()
-    return {"message": "套餐月费及权重已保存，权重从下一次用量采样生效"}
+    return {"message": "套餐月费、权重及胶囊颜色已保存，权重从下一次用量采样生效"}
 
 
 @router.post("/admin/subscription-cost")

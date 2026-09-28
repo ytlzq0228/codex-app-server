@@ -27,6 +27,7 @@ async def upgrade(connection):
             await connection.execute(text(f"UPDATE model_prices SET {name}=input_price"))
     for statement in (
         "ALTER TABLE subscription_plans ADD COLUMN IF NOT EXISTS weight NUMERIC(18,6) NOT NULL DEFAULT 1",
+        "ALTER TABLE subscription_plans ADD COLUMN IF NOT EXISTS color VARCHAR(7) NOT NULL DEFAULT '#16734a'",
         "ALTER TABLE workers ALTER COLUMN name TYPE VARCHAR(180)",
         "ALTER TABLE workers ADD COLUMN IF NOT EXISTS owner_username VARCHAR(120) REFERENCES users(username)",
         "ALTER TABLE workers ADD COLUMN IF NOT EXISTS account_email VARCHAR(320)",

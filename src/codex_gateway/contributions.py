@@ -173,9 +173,10 @@ async def contributor_delete(request: Request, worker_id: UUID, csrf_token: str 
 
 
 @router.post("/admin/workers/{worker_id}/owner")
-async def transfer_worker(request: Request, worker_id: UUID, username: str = Form(...), csrf_token: str = Form(...), identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
+async def transfer_worker(request: Request, worker_id: UUID, username: str = Form(..., min_length=1, max_length=120), csrf_token: str = Form(...), identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
     verify_csrf(request, identity, csrf_token)
     worker = await owned_worker(request, db, worker_id, allow_admin_all=True)
+    username = username.strip()
     user = await db.get(User, username)
     if not user or not user.enabled:
         raise HTTPException(400, "请选择已有且启用的用户")

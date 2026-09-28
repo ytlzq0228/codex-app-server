@@ -63,6 +63,7 @@ class SubscriptionPlan(Base):
     name: Mapped[str] = mapped_column(String(120), primary_key=True)
     monthly_price: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
     weight: Mapped[float] = mapped_column(Numeric(18, 6), default=1, server_default="1")
+    color: Mapped[str] = mapped_column(String(7), default="#16734a", server_default="#16734a")
 
 class MetricSnapshot(Base):
     """Versioned aggregate observations; source events remain in their own tables."""

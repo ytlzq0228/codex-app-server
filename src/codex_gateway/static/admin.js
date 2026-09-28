@@ -87,6 +87,14 @@ document.querySelectorAll('[data-edit-key]').forEach(button => button.addEventLi
   form.elements.pinned_worker_id.value = button.dataset.pinnedWorkerId;
   dialog.showModal();
 }));
+document.querySelectorAll('[data-edit-worker-owner]').forEach(button => button.addEventListener('click', () => {
+  const dialog = document.querySelector('#worker-owner-dialog');
+  const form = dialog.querySelector('form');
+  form.action = `/admin/workers/${button.dataset.workerId}/owner`;
+  form.elements.username.value = button.dataset.workerOwner;
+  document.querySelector('#worker-owner-title').textContent = `编辑归属 · ${button.dataset.workerName}`;
+  dialog.showModal();
+}));
 document.querySelectorAll('[data-close-result]').forEach(button => button.addEventListener('click', () => {
   stopLoginPoll();
   resultDialog.close();

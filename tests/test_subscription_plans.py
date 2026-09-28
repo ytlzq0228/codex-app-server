@@ -7,7 +7,7 @@ from sqlalchemy import select, delete
 from codex_gateway.main import app
 from codex_gateway.database import SessionLocal
 from codex_gateway.models import Worker, WorkerStatus, SubscriptionPlan
-from codex_gateway.subscriptions import subscription_summary
+from codex_gateway.subscriptions import normalize_plan_color, plan_pill_style, subscription_summary
 from codex_gateway.backend import WorkerFailure
 from test_self_service import admin_login, AJAX, user_login
 from test_quota_workers import create_person, contribute, probe, worker_services
@@ -56,6 +56,19 @@ def test_plan_prices_discovery_totals_and_permissions():
                 assert r.status_code==200,r.text
                 result=client.portal.call(row)
                 assert result['price']==Decimal(amount) and result['subtotal']==3*Decimal(amount)
+            r=client.post('/admin/subscription-plans',data={'csrf_token':token,'name':plan,
+                'monthly_price':'20','weight':'1','color':'#f2c94c'},headers=AJAX)
+            assert r.status_code==200,r.text
+            result=client.portal.call(row)
+            assert result['color']=='#f2c94c' and result['style']=='background-color:#f2c94c;color:#111827'
+            assert 'name="color" type="color" value="#f2c94c"' in client.get('/admin/finance').text
+            # Older clients that omit color keep the configured value.
+            assert client.post('/admin/subscription-plans',data={'csrf_token':token,'name':plan,
+                'monthly_price':'21'},headers=AJAX).status_code==200
+            assert client.portal.call(row)['color']=='#f2c94c'
+            for color in ['red','#fff','#12345g','#123456;']:
+                assert client.post('/admin/subscription-plans',data={'csrf_token':token,'name':plan,
+                    'monthly_price':'20','color':color},headers=AJAX).status_code in (400,422)
             assert client.post('/admin/subscription-plans',data={'csrf_token':token,'name':custom,'monthly_price':'12'},headers=AJAX).status_code==200
             for url in ['/admin/finance','/admin/reports?month=all']:
                 assert custom in client.get(url).text
@@ -64,6 +77,13 @@ def test_plan_prices_discovery_totals_and_permissions():
             assert client.post('/admin/subscription-plans',data={'csrf_token':user_token,'name':plan,'monthly_price':'1'},headers=AJAX).status_code==403
         finally:
             client.portal.call(cleanup)
+
+
+def test_plan_color_validation_and_contrast():
+    assert normalize_plan_color(' #A1B2C3 ') == '#a1b2c3'
+    assert plan_pill_style('#ffffff') == 'background-color:#ffffff;color:#111827'
+    assert plan_pill_style('#000000') == 'background-color:#000000;color:#ffffff'
+    assert plan_pill_style('invalid') == 'background-color:#16734a;color:#ffffff'
 
 
 def test_limit_preserves_subscription_and_logout_retains_plan(worker_services, monkeypatch):

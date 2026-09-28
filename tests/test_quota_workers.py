@@ -206,7 +206,14 @@ def test_owner_isolation_account_read_and_admin_transfer(worker_services):
         assert 'contributor@example.com' not in client.get('/user/workers').text
         assert client.post('/admin/workers/'+worker+'/owner',data={'csrf_token':token,'username':bob},headers=AJAX).status_code==403
         token=admin_login(client)
+        admin_workers=client.get('/admin/workers').text
+        assert f'data-worker-id="{worker}"' in admin_workers
+        assert f'data-worker-owner="{alice}"' in admin_workers
+        assert 'id="worker-owner-dialog"' in admin_workers
+        assert '<th>归属</th><th>登录账号 / 套餐</th>' in admin_workers
+        assert 'contributor@example.com' in admin_workers and '>plus</span>' in admin_workers
         assert client.post('/admin/workers/'+worker+'/owner',data={'csrf_token':token,'username':bob},headers=AJAX).status_code==200
+        assert f'data-worker-owner="{bob}"' in client.get('/admin/workers').text
         assert client.portal.call(summary,alice)['total']==0
         assert client.portal.call(summary,alice)['used']==0
         assert client.portal.call(summary,bob)['total']==1

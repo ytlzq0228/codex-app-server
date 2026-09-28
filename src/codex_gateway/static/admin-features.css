@@ -156,6 +156,56 @@ td.row-actions form {
   vertical-align: middle;
 }
 
+.worker-owner-display {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.worker-account-plan {
+  display: grid;
+  gap: 3px;
+}
+
+.worker-account-plan small {
+  margin: 0;
+}
+
+.edit-icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 5px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.edit-icon-button svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.edit-icon-button:hover,
+.edit-icon-button:focus-visible {
+  border-color: var(--green);
+  color: var(--green);
+  background: var(--green-soft);
+}
+
+.edit-icon-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(22, 115, 74, .1);
+}
+
 @media (max-width: 760px) {
   .history-detail dl {
     grid-template-columns: 1fr;

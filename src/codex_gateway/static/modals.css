@@ -1,1 +1,22 @@
 dialog.app-modal{width:min(92vw,600px);max-width:92vw;max-height:88vh;overflow:auto;padding:24px;border:1px solid var(--line);border-radius:18px;color:var(--ink)}dialog.request-modal{width:min(94vw,1000px);max-width:94vw}.app-modal .dialog-head{margin-bottom:20px;align-items:flex-start}.app-modal h2{overflow-wrap:anywhere}.app-modal .dialog-actions{margin-top:20px;justify-content:flex-end}.app-modal [data-form-error]{color:var(--red);background:#fbe9e8;padding:12px;border-radius:8px}.request-modal .panel{border:0;box-shadow:none;margin:0;padding:0}.request-modal pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f1f5f9;padding:16px;border-radius:8px;max-height:50vh;overflow:auto}.request-modal p{overflow-wrap:anywhere}.app-modal::backdrop{background:rgba(10,24,16,.55)}
+
+.app-modal { font: inherit; background: var(--card, white); }
+.request-detail { font-size: 14px; line-height: 1.6; }
+.request-detail h2 { font-size: 20px; margin: 0 0 16px; }
+.request-detail h3 { font-size: 16px; margin: 24px 0 12px; }
+.request-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1px; margin: 0; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--line); }
+.request-fields > div { min-width: 0; padding: 12px 14px; background: var(--paper, #f8faf8); }
+.request-fields dt { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+.request-fields dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.request-json { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.request-json summary { cursor: pointer; color: var(--green, #16734a); font-size: 13px; }
+.request-json summary:focus-visible { outline: 2px solid #16734a; outline-offset: 4px; }
+.request-json pre { font-size: 12px; line-height: 1.6; }
+.request-conversation { display: flex; flex-direction: column; gap: 16px; padding: 16px; background: var(--paper, #f8faf8); border-radius: 12px; }
+.request-bubble { max-width: 90%; min-width: 0; padding: 14px 18px; border: 1px solid var(--line); border-radius: 14px; }
+.request-bubble > span { font-size: 12px; color: var(--muted); }
+.request-bubble p { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; max-height: 360px; overflow: auto; }
+.request-input { align-self: flex-end; background: #e8f2eb; border-color: #b9d8c6; }
+.request-output { align-self: flex-start; background: var(--card, white); }
+@media (max-width: 760px) { .request-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 480px) { .request-fields { grid-template-columns: minmax(0, 1fr); } .request-bubble { max-width: 100%; } dialog.request-modal { padding: 16px; } }

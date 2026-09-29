@@ -2,6 +2,13 @@
 from datetime import datetime, timezone
 
 
+def provider_usage(payload):
+    """Product policy: a confirmed enterprise response without numeric quota is unlimited."""
+    if payload.get('available') is False and payload.get('buckets') == []:
+        return {**payload, 'unlimited': True, 'message': '无限制'}
+    return payload
+
+
 def summarize_windows(payload):
     buckets = payload.get('rateLimitsByLimitId')
     if not isinstance(buckets, dict) or not buckets:

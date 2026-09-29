@@ -104,3 +104,23 @@ The app-server connection pool allows up to 10 WebSockets per API Key/Worker pai
 - `CODEX_GATEWAY_ADMIN_PASSWORD` initializes the database credential only when the configured administrator does not yet exist. Later password changes are made from the admin console and persist in PostgreSQL. A password change increments the session version, invalidating every older admin cookie.
 - The test deployment listens on `0.0.0.0:8000`; production should firewall that port to the reverse proxy.
 - Model outputs are never stored; only a SHA-256 digest is retained. Request bodies, including prompts, ARE stored in `usage_records.request_params` so the console can show request details, and any administrator can read every user's prompts. Treat the database accordingly.
+
+## Provider permissions and monitoring update (test rollout)
+
+The test rollout adds `users.provider_grants` (JSON, default `[]`) through the
+idempotent startup migration. `/admin/users` provides independent Codex and Gemini
+manual-grant switches. Effective model access is the union of manual grants and
+providers from existing Workers; revoking a manual grant does not revoke automatic
+Worker access or change the user's Key quota. Only administrators may grant access;
+ordinary administrators cannot manage other administrators.
+
+Subscription snapshots version 4 contain independent `providers.codex` and
+`providers.gemini` aggregates. Old mixed-provider history is not reused as a
+provider-specific series. The current hourly bucket is refreshed once if it predates
+version 4. A confirmed Gemini enterprise response without numeric quota is displayed
+as unlimited and contributes 0% usage; transport/CLI errors remain unknown.
+
+A worktree release records its explicit `release` and `component_images` in the
+manifest, alongside the base commit and file hashes. Unchanged Worker images can
+remain pinned to the prior release while gateway and manager use the new full image.
+This update is deployed to test first; production promotion is a separate action.

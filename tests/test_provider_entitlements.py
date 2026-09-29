@@ -168,3 +168,47 @@ def test_gemini_web_logout_invalidates_credit_and_sessions(monkeypatch):
         token=admin_login(client)
         r=client.post("/admin/workers",data={"name":"gemini-"+uuid4().hex[:10],"provider":"gemini","csrf_token":token},headers=AJAX)
         assert r.status_code == 200 and calls[-1]["provider"] == "gemini"
+
+
+def test_admin_manual_provider_grants_and_revocation(monkeypatch):
+    from test_self_service import admin_login, user_login, AJAX
+    from test_quota_workers import create_person
+    from codex_gateway.providers import allowed_providers
+    settings = get_settings()
+    monkeypatch.setattr(settings, 'allowed_models', 'gpt-6-sol,gemini-manual')
+    monkeypatch.setattr(settings, 'model_providers', 'gemini-manual:gemini')
+    async def seed_key(owner):
+        raw, prefix = generate_api_key()
+        async with SessionLocal() as db:
+            db.add(ApiKey(name='manual', prefix=prefix, owner_username=owner, enabled=True,
+                          key_hash=hash_api_key(raw, settings.key_pepper.get_secret_value())))
+            ident = uuid4().hex
+            db.add(Worker(name=ident, container_name=ident, owner_username=owner,
+                          provider='codex', endpoint='ws://test', status=WorkerStatus.offline))
+            await db.commit()
+        return raw
+    with TestClient(app) as client:
+        owner, password = create_person(client)
+        admin, _ = create_person(client, role='admin')
+        token = admin_login(client)
+        raw = client.portal.call(seed_key, owner)
+        headers = {'Authorization': 'Bearer '+raw}
+        path = f'/admin/users/{owner}/providers'
+        def models():
+            return [x['id'] for x in client.get('/v1/models', headers=headers).json()['data']]
+        assert models() == ['gpt-6-sol']
+        assert client.post(path, data={'csrf_token': 'wrong', 'gemini': 'true'}, headers=AJAX).status_code == 403
+        assert client.post(path, data={'csrf_token': token, 'gemini': 'true'}, headers=AJAX).status_code == 200
+        assert models() == ['gpt-6-sol', 'gemini-manual']
+        assert 'Provider 权限' in client.get('/admin/users').text
+        assert client.post(path, data={'csrf_token': token}, headers=AJAX).status_code == 200
+        assert models() == ['gpt-6-sol']  # Automatic Worker entitlement is preserved.
+        assert client.post('/v1/responses', headers=headers, json={'model':'gemini-manual','input':'hi'}).status_code == 403
+        user_token = user_login(client, owner, password)
+        assert client.post(path, data={'csrf_token':user_token,'gemini':'true'}, headers=AJAX).status_code == 403
+        # A regular administrator cannot change another administrator's grants.
+        async def become_admin():
+            async with SessionLocal() as db:
+                user = await db.get(User, owner); user.role = 'admin'; await db.commit()
+        client.portal.call(become_admin)
+        assert client.post(f'/admin/users/{admin}/providers', data={'csrf_token':user_token,'gemini':'true'}, headers=AJAX).status_code == 403

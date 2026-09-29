@@ -288,7 +288,8 @@ async def read_worker_rate_limits(worker: Worker, db: AsyncSession):
         endpoint = worker.endpoint
         await db.rollback()
         try:
-            return await worker_rpc(endpoint, get_settings(), "/rate-limits")
+            from .rate_limits import provider_usage
+            return provider_usage(await worker_rpc(endpoint, get_settings(), "/rate-limits"))
         except httpx.HTTPStatusError as exc:
             raise HTTPException(409 if exc.response.status_code == 409 else 502,
                                 "Gemini 正在执行或登录，请稍后重试" if exc.response.status_code == 409 else "官方 CLI 暂未返回额度，请稍后重试")

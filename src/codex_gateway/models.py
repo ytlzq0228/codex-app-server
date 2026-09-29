@@ -25,6 +25,7 @@ class AdminUser(Base):
 
 class User(Base):
     __tablename__ = "users"
+    provider_grants: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
     quota_granted: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     username: Mapped[str] = mapped_column(String(120), primary_key=True)
     password_hash: Mapped[str | None] = mapped_column(String(256), nullable=True)

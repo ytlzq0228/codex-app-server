@@ -11,7 +11,7 @@ from .app_server import open_app_server
 from .config import get_settings
 from .database import SessionLocal
 from .models import MetricSnapshot, SubscriptionPlan, Worker
-from .rate_limits import summarize_windows
+from .rate_limits import summarize_windows, provider_usage
 from .subscriptions import normalize_plan
 
 STATES = {'healthy': '完全正常', 'limited': '登录 · 超限隔离',
@@ -42,7 +42,7 @@ def state_counts(workers):
     return {'version': 2, 'total': len(workers), 'counts': counts}
 
 
-def pool_usage(workers, weights, readings):
+def _pool_usage(workers, weights, readings):
     eligible = [w for w in workers if w.endpoint != 'removed://worker' and w.auth_mode and w.failure_kind != 'logged_out']
     totals = {key: [0.0, 0.0, 0] for key in ('risk', 'five_hour', 'week')}
     worker_windows = {}
@@ -56,7 +56,9 @@ def pool_usage(workers, weights, readings):
         total_weight += weight
         windows = {}
         reading = readings.get(str(worker.id), {})
-        succeeded = isinstance(reading.get('buckets'), list)
+        succeeded = isinstance(reading.get('buckets'), list) and (
+            (getattr(worker, 'provider', None) or 'codex') == 'codex'
+            or bool(reading.get('buckets')) or reading.get('unlimited') is True)
         for key in ('five_hour', 'week'):
             values = [b[key]['used'] for b in reading.get('buckets', [])
                       if b.get(key) and math.isfinite(b[key]['used'])]
@@ -84,13 +86,27 @@ def pool_usage(workers, weights, readings):
                         for key, (numerator, denominator, count) in totals.items()}}
 
 
+def pool_usage(workers, weights, readings):
+    # Preserve per-worker routing signals; never combine providers in the UI.
+    result = _pool_usage(workers, weights, readings)
+    result['version'] = 4
+    result['providers'] = {
+        provider: _pool_usage([w for w in workers if (getattr(w, 'provider', None) or 'codex') == provider], weights, readings)
+        for provider in ('codex', 'gemini')
+    }
+    return result
+
+
 async def read_usage(worker, semaphore):
-    if getattr(worker, "provider", "codex") != "codex":
-        return str(worker.id), {}
     settings = get_settings()
     async with semaphore:
         try:
             async with asyncio.timeout(25):
+                if (getattr(worker, 'provider', None) or 'codex') == 'gemini':
+                    from .gemini_backend import worker_rpc
+                    return str(worker.id), provider_usage(await worker_rpc(worker.endpoint, settings, '/rate-limits'))
+                if (getattr(worker, 'provider', None) or 'codex') != 'codex':
+                    return str(worker.id), {}
                 async with open_app_server(worker.endpoint, settings.app_server_token.get_secret_value(), 20) as server:
                     payload = await server.call('account/rateLimits/read', {'excludeResetCreditDetails': True})
                 return str(worker.id), summarize_windows(payload)
@@ -105,7 +121,8 @@ async def record_snapshot(metric, minutes, now):
         lock = 724910 if metric == 'worker_states' else 724911
         if not await db.scalar(text('SELECT pg_try_advisory_xact_lock(:key)'), {'key': lock}):
             return
-        if await db.get(MetricSnapshot, (metric, bucket)):
+        existing = await db.get(MetricSnapshot, (metric, bucket))
+        if existing and (metric != 'subscription_usage' or existing.payload.get('version', 0) >= 4):
             return
         workers = (await db.scalars(select(Worker))).all()
         if metric == 'worker_states':
@@ -126,8 +143,11 @@ async def record_snapshot(metric, minutes, now):
                             task.cancel()
                     await asyncio.gather(*tasks, return_exceptions=True)
             payload = pool_usage(workers, weights, readings)
-        await db.execute(insert(MetricSnapshot).values(metric=metric, bucket_at=bucket,
-                         observed_at=now, payload=payload).on_conflict_do_nothing())
+        if existing:
+            existing.observed_at, existing.payload = now, payload
+        else:
+            await db.execute(insert(MetricSnapshot).values(metric=metric, bucket_at=bucket,
+                             observed_at=now, payload=payload).on_conflict_do_nothing())
         await db.commit()
 
 

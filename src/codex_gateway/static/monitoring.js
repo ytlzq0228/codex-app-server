@@ -13,15 +13,18 @@
     target.replaceChildren();
     if (!rows.length) { target.append(el('p', '暂无历史采样', 'monitor-empty')); return; }
     target.append(legend(series));
-    const svg = svgNode('svg', {viewBox:'0 0 960 290', role:'img', 'aria-label': percent ? '订阅池用量历史折线图' : 'Worker 状态历史折线图'});
+    const width = Math.max(1, target.clientWidth), height = target.id === 'monitor-state-chart' ? 220 : 260;
+    const left = 48, right = width - 16, bottom = height - 36;
+    const svg = svgNode('svg', {width, height, viewBox:`0 0 ${width} ${height}`, role:'img', 'aria-label': percent ? '订阅池用量历史折线图' : 'Worker 状态历史折线图'});
     const end = Date.now(), start = end - days * 86400000;
     const rawMax = Math.max(1, ...rows.map(r => r.data.total || 0));
     const step = percent ? 25 : Math.max(1, Math.ceil(rawMax/4));
     const max = step*4;
-    const x = at => 55 + (new Date(at).getTime() - start) / (end-start) * 875;
-    const y = value => 240 - value/max*210;
-    for (let i=0;i<=4;i++) { const value = max*i/4; svg.append(svgNode('line',{x1:55,x2:930,y1:y(value),y2:y(value)}),svgNode('text',{x:45,y:y(value)+4,'text-anchor':'end'},`${Number(value.toFixed(1))}${percent?'%':''}`)); }
-    for (let i=0;i<=4;i++) svg.append(svgNode('text',{x:55+i*875/4,y:275,'text-anchor':i===0?'start':i===4?'end':'middle'},new Date(start+(end-start)*i/4).toLocaleString([], {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})));
+    const x = at => left + (new Date(at).getTime() - start) / (end-start) * (right-left);
+    const y = value => bottom - value/max*(bottom-16);
+    for (let i=0;i<=4;i++) { const value = max*i/4; svg.append(svgNode('line',{x1:left,x2:right,y1:y(value),y2:y(value)}),svgNode('text',{x:left-8,y:y(value)+4,'text-anchor':'end'},`${Number(value.toFixed(1))}${percent?'%':''}`)); }
+    const ticks = width < 600 ? 2 : 4;
+    for (let i=0;i<=ticks;i++) svg.append(svgNode('text',{x:left+i*(right-left)/ticks,y:height-8,'text-anchor':i===0?'start':i===ticks?'end':'middle'},new Date(start+(end-start)*i/ticks).toLocaleString([], {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'})));
     series.forEach(s => {
       let points = [], last = null;
       const flush = () => { if(points.length) svg.append(svgNode('polyline',{points:points.join(' '),fill:'none',stroke:s.color,'stroke-width':2})); points=[]; };
@@ -46,20 +49,35 @@
     series.forEach(s=>{const count=data.states.counts[s.key], share=data.states.total?count/data.states.total*100:0; stops.push(`${s.color} ${angle}% ${angle+share}%`);angle+=share; const li=el('li'); const dot=el('i',null,'monitor-dot');dot.style.background=s.color;li.append(dot,el('span',s.label),el('strong',`${count} · ${share.toFixed(1)}%`));list.append(li);});
     pie.style.background=data.states.total?`conic-gradient(${stops.join(',')})`:'#e2e8f0';pie.setAttribute('role','img');pie.setAttribute('aria-label',`Worker 状态分布，共 ${data.states.total} 个，详见图例`);
     $('monitor-pie').replaceChildren(pie,list);
-    const usageSeries=[['risk','综合风险'],['five_hour','5 小时窗口'],['week','周窗口']].map(([key,label],i)=>({key,label,color:['#e35b5b','#168aad','#8462cf'][i],value:d=>d.windows[key].used}));
-    const current=data.current_usage; $('monitor-usage').replaceChildren();
-    if(current){
-      usageSeries.forEach(s=>{const w=current.data.windows[s.key], article=el('article');const bar=el('div',null,'monitor-progress');
-        bar.setAttribute('role','progressbar');bar.setAttribute('aria-label',s.label);bar.setAttribute('aria-valuemin','0');bar.setAttribute('aria-valuemax','100');
-        if(w.used!=null){bar.setAttribute('aria-valuenow',String(w.used));const fill=el('div',null,'monitor-progress-fill');fill.style.width=`${Math.max(0,Math.min(100,w.used))}%`;fill.style.background=s.color;bar.append(fill);}else{bar.classList.add('monitor-progress-unknown');bar.setAttribute('aria-valuetext','暂无数据');}
-        article.append(el('span',s.label),el('strong',w.used==null?'暂无数据':`${w.used.toFixed(1)}%`),bar,el('small',`有效覆盖 ${w.covered} / ${current.data.eligible} 个 Worker · 权重覆盖 ${current.data.total_weight?(w.covered_weight/current.data.total_weight*100).toFixed(1):'0'}%`));$('monitor-usage').append(article);});
-      const stale=Date.now()-new Date(current.observed_at).getTime()>2*3600000;
-      $('monitor-usage').append(el('small',`${current.data.version < 2?'旧口径采样（缺失窗口未计入），下一小时更新 · ':''}${stale?'数据已过期 · ':''}采样：${stamp(current.observed_at)} · 未知套餐 ${current.data.unknown_plans} 个 Worker`));
-    } else $('monitor-usage').append(el('p','等待首次小时采样'));
-    chart($('monitor-usage-chart'),data.history.subscription_usage,usageSeries,3600000,true,days);
+    const current = data.current_usage;
+    for (const provider of ['codex', 'gemini']) {
+      const target = $('monitor-usage-' + provider), pool = current?.data.providers?.[provider];
+      const usageSeries = [['risk','综合风险'],['five_hour','5 小时窗口'],['week','周窗口']].map(([key,label],i) => ({key,label,color:['#e35b5b','#168aad','#8462cf'][i],value:d=>d.providers?.[provider]?.windows[key]?.used ?? null}));
+      target.replaceChildren();
+      if (pool) {
+        usageSeries.forEach(s => {
+          const w = pool.windows[s.key], article = el('article'), bar = el('div', null, 'monitor-progress');
+          bar.setAttribute('role', 'progressbar'); bar.setAttribute('aria-label', provider + ' ' + s.label);
+          bar.setAttribute('aria-valuemin', '0'); bar.setAttribute('aria-valuemax', '100');
+          if (w.used != null) {
+            bar.setAttribute('aria-valuenow', String(w.used));
+            const fill = el('div', null, 'monitor-progress-fill'); fill.style.width = `${Math.max(0, Math.min(100, w.used))}%`; fill.style.background = s.color; bar.append(fill);
+          } else { bar.classList.add('monitor-progress-unknown'); bar.setAttribute('aria-valuetext', '暂无数据'); }
+          article.append(el('span', s.label), el('strong', w.used == null ? '暂无数据' : `${w.used.toFixed(1)}%`), bar,
+            el('small', w.used == null ? '可用用量未知' : `剩余可用 ${(100-w.used).toFixed(1)}%`),
+            el('small', `有效覆盖 ${w.covered} / ${pool.eligible} 个 Worker · 权重覆盖 ${pool.total_weight ? (w.covered_weight/pool.total_weight*100).toFixed(1) : '0'}%`));
+          target.append(article);
+        });
+        const stale = Date.now()-new Date(current.observed_at).getTime() > 2*3600000;
+        target.append(el('small', `${stale ? '数据已过期 · ' : ''}采样：${stamp(current.observed_at)} · 未知套餐 ${pool.unknown_plans} 个 Worker`));
+      } else target.append(el('p', '等待首次按 Provider 采样'));
+      chart($('monitor-chart-' + provider), data.history.subscription_usage, usageSeries, 3600000, true, days);
+    }
     chart($('monitor-state-chart'),data.history.worker_states,series,600000,false,days);
   }
-  let generation=0;
-  async function load(){const version=++generation, days=Number($('monitor-days').value);$('monitor-status').textContent='正在读取监控数据…';try{const response=await fetch(`/admin/monitoring?days=${days}`,{headers:{Accept:'application/json'}});if(!response.ok)throw Error();const data=await response.json();if(version!==generation)return;render(data,days);$('monitor-status').textContent=`状态更新于 ${new Date().toLocaleTimeString()}`;}catch{if(version===generation)$('monitor-status').textContent='监控读取失败，将自动重试';}}
+  let generation=0, latest=null, latestDays=7;
+  async function load(){const version=++generation, days=Number($('monitor-days').value);$('monitor-status').textContent='正在读取监控数据…';try{const response=await fetch(`/admin/monitoring?days=${days}`,{headers:{Accept:'application/json'}});if(!response.ok)throw Error();const data=await response.json();if(version!==generation)return;latest=data;latestDays=days;render(data,days);$('monitor-status').textContent=`状态更新于 ${new Date().toLocaleTimeString()}`;}catch{if(version===generation)$('monitor-status').textContent='监控读取失败，将自动重试';}}
+  let lastWidth = 0, resizeFrame;
+  new ResizeObserver(entries => { const width = entries[0].contentRect.width; if (Math.abs(width-lastWidth)<1) return; lastWidth=width; cancelAnimationFrame(resizeFrame); resizeFrame=requestAnimationFrame(() => { if(latest) render(latest,latestDays); }); }).observe($('monitoring'));
   $('monitor-days').addEventListener('change',load);load();setInterval(load,60000);
 })();

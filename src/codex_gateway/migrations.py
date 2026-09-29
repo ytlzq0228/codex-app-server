@@ -6,6 +6,7 @@ from .worker_names import archived_worker_name
 
 
 async def upgrade(connection):
+    await connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS provider_grants JSON NOT NULL DEFAULT '[]'"))
     for table in ("workers", "response_bindings", "execution_sessions", "usage_records", "model_prices"):
         await connection.execute(text(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS provider VARCHAR(16) NOT NULL DEFAULT 'codex'"))
         await connection.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_provider ON {table} (provider)"))

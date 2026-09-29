@@ -24,12 +24,14 @@
     progress.setAttribute('aria-label', `${label}已用额度`);
     const caption = document.createElement('span');
     caption.className = 'usage-caption';
-    caption.textContent = `${label}：已用 ${window.used}%`;
+    caption.textContent = window.unlimited ? '无限制' : `${label}：已用 ${window.used}%`;
+    if (window.unlimited) progress.setAttribute('aria-valuetext', '无限制，已用 0%');
     meter.append(progress, caption);
     const reset = document.createElement('span');
     reset.className = 'usage-reset';
     reset.textContent = `重置：${window.resets_at != null ? resetTime(window.resets_at) : '—'}`;
-    line.append(meter, reset);
+    line.append(meter);
+    if (!window.unlimited) line.append(reset);
     return line;
   };
   document.querySelectorAll('[data-rate-limits]').forEach(box => {
@@ -43,6 +45,10 @@
           headers: {'X-Requested-With': 'XMLHttpRequest'}});
         const data = await response.json();
         if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '读取失败');
+        if (data.unlimited) {
+          content.replaceChildren(renderWindow('账号额度', {used: 0, unlimited: true}));
+          return;
+        }
         if (data.message) { content.textContent = data.message; return; }
         const bucket = data.buckets.find(item => item.five_hour || item.week);
         const windows = [];

@@ -171,6 +171,20 @@ async def edit_user(request: Request, username: str, role: str = Form(...), emai
     return {"message": "用户已更新，旧会话已失效", "secret": password}
 
 
+@router.post("/admin/users/{username}/providers")
+async def edit_provider_grants(request: Request, username: str, codex: bool = Form(False),
+                               gemini: bool = Form(False), csrf_token: str = Form(...),
+                               identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
+    verify_csrf(request, identity, csrf_token)
+    user = await db.scalar(select(User).where(User.username == username).with_for_update())
+    if not user:
+        raise HTTPException(404, "用户不存在")
+    authorize_role(request.state.user, user.role, user.role)
+    user.provider_grants = [name for name, enabled in (("codex", codex), ("gemini", gemini)) if enabled]
+    await db.commit()
+    return {"message": "Provider 额外授权已更新，对用户名下所有 Key 立即生效"}
+
+
 @router.get("/auth/google")
 async def google_start(request: Request, db: AsyncSession = Depends(get_session)):
     settings = get_settings()

@@ -1,6 +1,7 @@
 """Verify a deployed release against its source manifest and live containers."""
 import json,subprocess,pathlib,sys,hashlib,urllib.request,urllib.error
 root=pathlib.Path(sys.argv[1]); manifest=json.loads((root/'release-manifest.json').read_text()); files=manifest['files']; tag='release-'+manifest['commit'][:7]
+images=manifest.get('component_images', {'gateway':'codex-gateway:'+tag,'codex':'codex-gateway-worker:'+tag,'gemini':'codex-antigravity-worker:'+tag})
 for name,digest in files.items(): assert hashlib.sha256((root/name).read_bytes()).hexdigest()==digest,name
 print('DISK_MATCH',manifest['commit'],len(files),'files')
 def out(*args): return subprocess.check_output(args,text=True).strip()
@@ -18,16 +19,16 @@ print('IMAGE_LAYERS_AND_CONFIG_MATCH')
 rows=[]
 for name in ('codex-app-server-gateway-1','codex-app-server-worker-manager-1'):
  actual=json.loads(out('docker','exec',name,'python','-c',program)); assert actual==expected,(name,'runtime files mismatch',set(actual)^set(expected))
- info=json.loads(out('docker','inspect',name))[0]; assert info['Config']['Image']=='codex-gateway:'+tag
- assert info['Image']==out('docker','image','inspect','codex-gateway:'+tag,'--format','{{.Id}}')
+ info=json.loads(out('docker','inspect',name))[0]; assert info['Config']['Image']==images['gateway']
+ assert info['Image']==out('docker','image','inspect',images['gateway'],'--format','{{.Id}}')
  if name.endswith('worker-manager-1'):
   env=dict(item.split('=',1) for item in info['Config']['Env'])
-  assert env['CODEX_WORKER_IMAGE']=='codex-gateway-worker:'+tag
-  assert env['GEMINI_WORKER_IMAGE']=='codex-antigravity-worker:'+tag
+  assert env['CODEX_WORKER_IMAGE']==images['codex']
+  assert env['GEMINI_WORKER_IMAGE']==images['gemini']
  rows.append({'container':name,'image_id':info['Image'],'files_verified':len(actual)})
 for name in out('docker','ps','--filter','label=io.codex-gateway.managed=true','--format','{{.Names}}').splitlines():
  info=json.loads(out('docker','inspect',name))[0]; gemini=info['Config'].get('Labels',{}).get('io.codex-gateway.provider')=='gemini'
- image=('codex-antigravity-worker' if gemini else 'codex-gateway-worker')+':'+tag
+ image=images['gemini' if gemini else 'codex']
  assert info['Config']['Image']==image,(name,info['Config']['Image'])
  assert info['Image']==out('docker','image','inspect',image,'--format','{{.Id}}')
  pairs=[('worker/antigravity/service.py','/opt/service.py'),('worker/antigravity/client_bridge.py','/opt/client_bridge.py')] if gemini else [('worker/entrypoint.sh','/usr/local/bin/codex-worker')]
@@ -49,5 +50,5 @@ assert urllib.request.urlopen("http://worker-1:4500/readyz").status==200
 print("MANAGER_AND_CODEX_READY")'''
 print(out('docker','exec','codex-app-server-gateway-1','python','-c',code))
 print(json.dumps(rows,indent=2))
-(root/'release-verification.json').write_text(json.dumps({'commit':manifest['commit'],'containers':rows,'status':'passed'},indent=2)+'\n')
+(root/'release-verification.json').write_text(json.dumps({'commit':manifest['commit'],'release':manifest.get('release',manifest['commit']),'containers':rows,'status':'passed'},indent=2)+'\n')
 print('VERIFIED',len(rows),'containers')

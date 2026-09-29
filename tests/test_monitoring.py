@@ -72,7 +72,7 @@ def test_snapshots_api_weights_and_history(monkeypatch):
             async with SessionLocal() as db:
                 rows = (await db.scalars(select(MetricSnapshot).where(MetricSnapshot.metric == metric, MetricSnapshot.bucket_at == bucket))).all()
                 assert len(rows) == 1
-                assert rows[0].payload['version'] == (2 if metric == 'worker_states' else 3)
+                assert rows[0].payload['version'] == (2 if metric == 'worker_states' else 4)
     with TestClient(app) as client:
         assert client.get('/admin/monitoring', headers=AJAX).status_code in (401, 303)
         token = admin_login(client)
@@ -125,7 +125,7 @@ def test_successful_missing_windows_are_unlimited_but_failure_is_unknown():
     a, b, failed = worker(), worker(plan_type='pro'), worker()
     readings = {str(a.id): {'buckets': []}, str(b.id): {'buckets': [{'five_hour': None, 'week': None}]}, str(failed.id): {}}
     result = pool_usage([a,b,failed], {'plus': 1, 'pro': 3}, readings)
-    assert result['version'] == 3
+    assert result['version'] == 4
     for window in result['windows'].values():
         assert window == {'used': 0, 'covered_weight': 4, 'covered': 2}
     assert result['total_weight'] == 5
@@ -142,3 +142,39 @@ def test_removed_workers_are_excluded_from_state_total_and_percentages():
     assert state_counts([worker(endpoint='removed://worker')])['total'] == 0
     # Disabled workers that still exist remain visible as abnormal.
     assert state_counts([worker(enabled=False)])['counts']['other'] == 1
+
+
+def test_provider_pools_have_independent_weights_and_coverage():
+    codex = worker(provider='codex', plan_type='plus')
+    gemini = worker(provider='gemini', plan_type='enterprise')
+    failed = worker(provider='gemini', plan_type='enterprise')
+    result = pool_usage([codex, gemini, failed], {'plus': 1, 'gemini:enterprise': 10}, {
+        str(codex.id): {'buckets': [{'five_hour': {'used': 80}, 'week': {'used': 40}}]},
+        str(gemini.id): {'buckets': [], 'unlimited': True},
+    })
+    c, g = result['providers']['codex'], result['providers']['gemini']
+    assert c['windows']['risk']['used'] == 80
+    assert c['total_weight'] == 1 and c['eligible'] == 1
+    assert g['total_weight'] == 20 and g['eligible'] == 2
+    assert g['windows']['week'] == {'used': 0, 'covered_weight': 10, 'covered': 1}
+    assert result['workers'][str(failed.id)]['weighted_remaining'] is None
+    # A textual numeric quota is not a confirmed unlimited response.
+    unknown = pool_usage([gemini], {}, {str(gemini.id): {'buckets': [], 'available': True, 'message': '50%'}})
+    assert unknown['providers']['gemini']['windows']['risk']['used'] is None
+
+
+@pytest.mark.asyncio
+async def test_gemini_monitor_reads_enterprise_quota_and_keeps_errors_unknown(monkeypatch):
+    import codex_gateway.gemini_backend as backend
+    from codex_gateway.monitoring import read_usage
+    item = worker(provider='gemini')
+    async def success(endpoint, settings, path):
+        assert path == '/rate-limits'
+        return {'available': False, 'buckets': [], 'message': 'enterprise'}
+    monkeypatch.setattr(backend, 'worker_rpc', success)
+    _, reading = await read_usage(item, asyncio.Semaphore(1))
+    assert reading['unlimited'] is True and reading['message'] == '无限制'
+    async def fail(*args):
+        raise RuntimeError('failed')
+    monkeypatch.setattr(backend, 'worker_rpc', fail)
+    assert await read_usage(item, asyncio.Semaphore(1)) == (str(item.id), {})

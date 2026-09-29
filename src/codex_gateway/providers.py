@@ -74,16 +74,18 @@ def validate_chat_capabilities(request):
 async def allowed_providers(db, username):
     """Capabilities belong to the owner, shared by all their keys."""
     from sqlalchemy import select
-    from .models import Worker
-    return set(await db.scalars(select(Worker.provider).where(
+    from .models import User, Worker
+    automatic = set(await db.scalars(select(Worker.provider).where(
         Worker.owner_username == username, Worker.endpoint != "removed://worker").distinct()))
+    grants = await db.scalar(select(User.provider_grants).where(User.username == username))
+    return automatic | (set(grants or []) & CAPABILITIES.keys())
 
 
 async def authorize_model(db, principal, model):
     if principal.owner_username is None:
         return  # Existing development-key behavior.
     if provider_for(model) not in await allowed_providers(db, principal.owner_username):
-        error = {"code": "provider_not_allowed", "message": "Your account has no Worker for this model provider", "param": "model"}
+        error = {"code": "provider_not_allowed", "message": "Your account is not enabled for this model provider", "param": "model"}
         from .audit import current_audit
         if audit := current_audit.get():
             audit["rejection"] = error

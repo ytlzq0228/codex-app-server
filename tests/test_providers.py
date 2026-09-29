@@ -33,6 +33,21 @@ def test_gemini_rejects_unsupported(gemini, extra, param):
 def test_text_and_continuation_supported(gemini):
     validate_capabilities(ResponseRequest(model="gemini-test", input="hello", previous_response_id="resp_test"))
 
+
+@pytest.mark.parametrize("parallel", [None, False, True])
+@pytest.mark.parametrize("model", ["gemini-test", "gpt-6-sol"])
+def test_parallel_permission_keeps_gemini_serial_and_codex_unchanged(gemini, parallel, model):
+    from codex_gateway.schemas import ChatCompletionRequest
+    from codex_gateway.providers import validate_chat_capabilities
+    response = ResponseRequest(model=model, input="hello", parallel_tool_calls=parallel)
+    chat = ChatCompletionRequest(model=model, messages=[{"role": "user", "content": "hello"}],
+                                 parallel_tool_calls=parallel)
+    validate_capabilities(response)
+    validate_chat_capabilities(chat)
+    expected = False if model == "gemini-test" else parallel
+    assert response.parallel_tool_calls is expected
+    assert chat.parallel_tool_calls is expected
+
 @pytest.mark.asyncio
 async def test_pool_never_crosses_provider(gemini):
     workers = [SimpleNamespace(id=uuid4(), provider=p, enabled=True, status="ready", container_name=p,
@@ -54,7 +69,7 @@ async def test_pool_never_crosses_provider(gemini):
 
 @pytest.mark.parametrize("field,value", [("stop", "END"), ("seed", 1), ("frequency_penalty", 0.5),
                                         ("presence_penalty", 0.5), ("logit_bias", {"1": 1}), ("verbosity", "low"),
-                                        ("parallel_tool_calls", True), ("audio", {})])
+                                        ("audio", {})])
 def test_chat_options_are_not_lost_in_conversion(gemini, field, value):
     from codex_gateway.schemas import ChatCompletionRequest
     from codex_gateway.providers import validate_chat_capabilities

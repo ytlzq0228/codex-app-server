@@ -37,10 +37,9 @@ def validate_capabilities(request):
                 reject("input", "Gemini client tools currently support text results only")
     if any(i.get("type") == "image" for i in request.worker_input()):
         reject("input", "Gemini image input is not enabled")
-    if request.parallel_tool_calls is True:
-        reject("parallel_tool_calls", "Gemini client tools currently return one pending call at a time")
-    if request.parallel_tool_calls is None:
-        request.parallel_tool_calls = False
+    # Permission to parallelize does not require parallel execution. The Gemini
+    # relay continues to deliver one pending call at a time.
+    request.parallel_tool_calls = False
     for field in ("reasoning", "temperature", "top_p", "max_output_tokens", "service_tier", "truncation", "max_tool_calls", "prompt_cache_retention", "include"):
         if getattr(request, field, None) is not None:
             reject(field, f"Gemini does not support the {field} parameter")
@@ -67,8 +66,7 @@ def validate_chat_capabilities(request):
                   "verbosity", "audio", "function_call"):
         if getattr(request, field, None) is not None:
             reject(field, f"Gemini does not support the {field} parameter")
-    if request.parallel_tool_calls is True:
-        reject("parallel_tool_calls", "Gemini client tools currently return one pending call at a time")
+    request.parallel_tool_calls = False
     if request.model_extra:
         reject(next(iter(request.model_extra)), "Unrecognized Gemini parameter")
 

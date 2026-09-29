@@ -66,6 +66,18 @@ def test_cross_origin_post_is_rejected_without_touching_bearer_endpoints() -> No
         assert api.status_code == 200
 
 
+def test_redacted_same_origin_login_preserves_form_csrf_check() -> None:
+    headers = {**AJAX, "Origin": "null", "Sec-Fetch-Site": "same-origin"}
+    username, password = admin_credentials()
+    with TestClient(app, base_url="https://gateway.example.com") as client:
+        login = client.post("/auth/login", data={"username": username, "password": password},
+                            headers=headers, follow_redirects=False)
+        assert login.status_code == 302, login.text
+        response = client.post("/user/account/key", data={"csrf_token": "wrong"}, headers=headers)
+        assert response.status_code == 403
+        assert response.json()["error"]["message"] == "Invalid security token"
+
+
 def test_unauthenticated_post_returns_401_instead_of_a_redirect() -> None:
     with TestClient(app) as client:
         client.cookies.clear()

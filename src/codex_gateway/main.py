@@ -282,7 +282,12 @@ def cross_site_post(request: Request) -> bool:
     origin = request.headers.get("origin")
     if not origin:
         return False
-    return origin == "null" or urlsplit(origin).netloc != request.url.netloc
+    if origin == "null":
+        # Browsers can redact Origin even on same-origin form submissions.
+        # Fetch Metadata is browser-controlled; same-site (sibling domains)
+        # and missing metadata do not establish a same-origin request.
+        return request.headers.get("sec-fetch-site") != "same-origin"
+    return urlsplit(origin).netloc != request.url.netloc
 
 
 @app.middleware("http")

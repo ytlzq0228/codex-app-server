@@ -43,6 +43,9 @@ The app-server connection pool allows up to 10 WebSockets per API Key/Worker pai
   `CODEX_GATEWAY_ADMIN_SESSION_SECRET` is no longer read.
 - State-changing forms require a CSRF token. Login cannot carry one, so every
   cookie-authenticated POST additionally rejects a cross-origin `Origin` header.
+  A redacted `Origin: null` is accepted only when the browser also sends
+  `Sec-Fetch-Site: same-origin`; missing metadata, `same-site`, and `cross-site`
+  remain rejected. Proxies must preserve this browser header, never synthesize it.
   Bearer API paths `/v1/` and `/v1beta/models/` are exempt from this form-only
   check and still require a valid API key.
 - Password login is rate limited: five failures per account and twenty per

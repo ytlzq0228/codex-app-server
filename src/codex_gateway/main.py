@@ -307,7 +307,9 @@ async def request_limits_and_headers(request: Request, call_next):
         response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
-    response.headers["Referrer-Policy"] = "no-referrer"
+    # Keep Origin on same-origin form POSTs, including plain HTTP/IP access
+    # where browsers do not send Sec-Fetch-Site. Cross-origin referrers stay hidden.
+    response.headers["Referrer-Policy"] = "same-origin"
     response.headers["X-Request-Id"] = request_id
     return response
 

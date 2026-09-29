@@ -46,6 +46,10 @@ The app-server connection pool allows up to 10 WebSockets per API Key/Worker pai
   A redacted `Origin: null` is accepted only when the browser also sends
   `Sec-Fetch-Site: same-origin`; missing metadata, `same-site`, and `cross-site`
   remain rejected. Proxies must preserve this browser header, never synthesize it.
+  Pages use `Referrer-Policy: same-origin` to preserve the Origin on same-origin
+  form submissions while hiding cross-origin referrers. Do not override it with
+  `no-referrer`: that redacts form Origin, breaking plain HTTP/IP login where
+  browsers omit Fetch Metadata. Reload the login page after changing this policy.
   Bearer API paths `/v1/` and `/v1beta/models/` are exempt from this form-only
   check and still require a valid API key.
 - Password login is rate limited: five failures per account and twenty per

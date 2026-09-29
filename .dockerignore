@@ -4,3 +4,6 @@
 __pycache__
 .pytest_cache
 tests
+deploy-backups
+releases
+release-verification.json

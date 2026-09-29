@@ -8,9 +8,9 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 WorkingDirectory=/opt/codex-app-server
-ExecStart=/usr/bin/docker compose up -d --build --remove-orphans
-ExecReload=/usr/bin/docker compose up -d --build --remove-orphans
-ExecStop=/usr/bin/docker compose down
+ExecStart=/usr/bin/docker compose up -d --no-build db worker-1 worker-manager gateway
+ExecReload=/usr/bin/docker compose up -d --no-build db worker-1 worker-manager gateway
+ExecStop=/usr/bin/docker compose stop gateway worker-manager worker-1 db
 TimeoutStartSec=0
 
 [Install]

@@ -4,8 +4,50 @@
 
 1. Copy the repository to `/opt/codex-app-server` and create `.env` from `.env.example`.
 2. Replace every value containing `development` or `change-this`. `CODEX_GATEWAY_DEV_API_KEY` has no default and must stay empty outside development: any value it holds is a full-access API credential that bypasses ownership, provider entitlement and quota.
-3. Install `deploy/codex-gateway.service` in `/etc/systemd/system/`, then run `systemctl daemon-reload && systemctl enable --now codex-gateway`.
+3. Build/load the release images, install `deploy/codex-gateway.service` in `/etc/systemd/system/`, then run `systemctl daemon-reload && systemctl enable --now codex-gateway`.
 4. Put Caddy or another TLS reverse proxy in front of port 8000. The example preserves SSE flushing.
+
+## Release consistency (2026-09-29)
+
+| Environment | SSH target | Application directory | Compose override |
+| --- | --- | --- | --- |
+| Test | `<deploy-user>@<test-host>` | `/home/<deploy-user>/codex-app-server` | `compose.gemini-test.json` |
+| Production | `<deploy-user>@<app-1>` | `/opt/codex-app-server` | `compose.override.yaml` |
+
+The application release is commit `2ee9580e0089abad46b5827a32a77f067008b8f0`.
+Both environments use the same three images: `codex-gateway:release-2ee9580`
+(gateway and manager), `codex-gateway-worker:release-2ee9580`, and
+`codex-antigravity-worker:release-2ee9580`. Build once and promote the exact image
+archives; compare archive SHA-256, filesystem layers, and runtime image settings
+after loading, rather than rebuilding for production. Different Docker storage
+engines may display a config digest versus an OCI manifest digest as the image ID.
+
+Each application directory contains `release-manifest.json` with SHA-256 hashes
+of the deployed files, and `release-verification.json` with container verification
+results. Run `sudo python3 scripts/verify_deployment.py <application-directory>`
+to compare the disk files, installed gateway/manager package, and every running
+managed worker against that manifest, then check health and login-origin handling.
+Account data and environment-specific secrets are not part of the manifest.
+
+`/etc/systemd/system/codex-gateway.service.d/release.conf` explicitly selects
+both Compose files in each environment. Start/reload uses `--no-build` and the
+published image tags. Do not use `--remove-orphans`: dynamically created workers
+can carry historical Compose labels. Upgraded dynamic workers have those stale
+labels removed. Manager configuration pins the same worker images for future
+workers. Retained stopped rollback containers are not active release instances.
+
+For subsequent releases, synchronize the complete tracked source trees, including
+deleting obsolete source files, and reset gateway/manager build contexts to the
+application root. Do not leave build contexts pointing at an old single-file
+hotfix directory. Back up first, validate on test, then update production. Keep
+existing `.env`, model overrides, account volumes, and container network identities.
+Backups are stored under `deploy-backups/release-<commit>-<timestamp>/`; preserve
+the old image IDs, Compose overrides, database dump, account volumes, and container
+configuration snapshots together. Rollback must restore the prior overrides and
+container configuration as well as images. Never restore an older database over
+new user writes without reconciling those writes.
+
+Deployment backups and release archives are excluded from Docker build contexts.
 
 ## Backup and restore
 

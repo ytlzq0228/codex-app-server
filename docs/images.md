@@ -66,3 +66,36 @@ content, storing only history digests for continuation.
 
 Protocol reference: [OpenAI app-server documentation](https://developers.openai.com/codex/app-server).
 Wire fields were checked against locally generated app-server TypeScript types.
+
+## Gemini image input
+
+Gemini supports image understanding through `/v1/responses`, `/v1/chat/completions`
+and `/v1beta/models/{model}:generateContent` (also `streamGenerateContent`).
+Send OpenAI image parts as above, or Gemini native parts such as:
+
+```json
+{"contents":[{"role":"user","parts":[
+  {"text":"Describe this image"},
+  {"inlineData":{"mimeType":"image/png","data":"<base64 image bytes>"}}
+]}]}
+```
+
+Native `fileData` accepts a public HTTP(S) `fileUri` and image `mimeType`.
+PNG, JPEG, WEBP and GIF are accepted, up to 8 images, 10 MiB per image and
+20 MiB total decoded image content per turn. The gateway request-body limit
+still applies to base64 JSON. URL downloads allow ports 80/443, verify TLS,
+restrict redirects and resolved addresses to public IPs, and send no credentials.
+Private-network URLs, local files and Gemini Files API `gs://` URIs are unsupported.
+`detail` is accepted for compatibility; Gemini chooses its image resolution.
+
+The pinned Antigravity CLI only accepts text blocks on streaming stdin
+([official protocol](https://antigravity.google/docs/cli/headless/)). The Worker
+therefore exposes images as a private, per-turn MCP `gateway_read_image` tool;
+image bytes are returned as MCP image content, not embedded into the text prompt.
+Images keep their order and continuation only forwards new attachments. Every
+attachment must be read before the Worker emits an answer or invokes client tools.
+These internal reads do not become public client tool calls. Upgrade both gateway
+and all Gemini Workers; an older Worker returns an explicit capability error.
+
+Gemini client tool results remain text-only. This feature supports image input
+and text output, not image generation or editing.

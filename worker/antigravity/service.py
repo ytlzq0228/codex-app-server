@@ -19,7 +19,7 @@ from uuid import uuid4
 import pyte
 from fastapi import FastAPI, Depends, Header, HTTPException
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from client_bridge import ToolBridge, ACTIVE, install_mcp, execution_environment
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -531,12 +531,39 @@ async def logout():
     login = None
     return {"logged_in": False, "account": None, "message": "已退出 Gemini 登录"}
 
+class ImageAttachment(BaseModel):
+    mimeType: str
+    data: str = Field(min_length=1, max_length=13981016)
+
+    @model_validator(mode="after")
+    def validate_image(self):
+        import base64
+        try:
+            raw = base64.b64decode(self.data, validate=True)
+        except ValueError:
+            raise ValueError("Invalid image base64") from None
+        signatures = {"image/png": raw.startswith(b"\x89PNG\r\n\x1a\n"),
+                      "image/jpeg": raw.startswith(b"\xff\xd8\xff"),
+                      "image/gif": raw.startswith((b"GIF87a", b"GIF89a")),
+                      "image/webp": raw.startswith(b"RIFF") and raw[8:12] == b"WEBP"}
+        if len(raw) > 10 * 1024 * 1024 or not signatures.get(self.mimeType):
+            raise ValueError("Invalid image type or size")
+        return self
+
+
 class Turn(BaseModel):
     prompt: str = Field(min_length=1, max_length=1000000)
     model: str
     conversation: str | None = None
     workspace: str
     tools: list[dict] = Field(default_factory=list, max_length=64)
+    images: list[ImageAttachment] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def validate_images(self):
+        if sum(len(i.data) // 4 * 3 - len(i.data) + len(i.data.rstrip("=")) for i in self.images) > 20 * 1024 * 1024:
+            raise ValueError("Image input exceeds 20 MiB")
+        return self
 
 
 class ToolResult(BaseModel):
@@ -548,7 +575,7 @@ class ToolResult(BaseModel):
 
 @app.post("/capabilities", dependencies=[Depends(authorize)])
 async def capabilities():
-    return {"client_tools": 1, "tool_result_types": ["text"]}
+    return {"client_tools": 1, "image_input": 1, "tool_result_types": ["text"]}
 
 
 @app.post("/tool-result", dependencies=[Depends(authorize)])
@@ -590,7 +617,7 @@ async def turn(body: Turn):
             if any(not re.fullmatch(r"gateway_client_\d+", tool.get("name", "")) or
                    not isinstance(tool.get("inputSchema"), dict) for tool in body.tools):
                 raise ValueError("Invalid client tool declaration")
-            bridge = ToolBridge(body.tools)
+            bridge = ToolBridge(body.tools, images=[image.model_dump() for image in body.images])
             environment = execution_environment(workspace)
             isolated_home, isolated_workspace = environment.__enter__()
             configuration = bridge.configuration(isolated_workspace, home=isolated_home)
@@ -611,7 +638,12 @@ async def turn(body: Turn):
                     tail = (tail + chunk)[-8192:]
                 return tail
             stderr_task = asyncio.create_task(drain())
-            process.stdin.write((json.dumps({"event": "user", "message": {"content": body.prompt}}) + "\n").encode())
+            prompt = body.prompt
+            if body.images:
+                prompt = ("Before answering, inspect ALL " + str(len(body.images)) +
+                          " attached images using gateway_read_image with indices 1 through " + str(len(body.images)) +
+                          ". This internal attachment reader is allowed alongside remote client tools.\n\n" + prompt)
+            process.stdin.write((json.dumps({"event": "user", "message": {"content": prompt}}) + "\n").encode())
             await process.stdin.drain()
             thread = body.conversation or ""
             counts = {"input_tokens": 0, "output_tokens": 0, "cache_read_tokens": 0}
@@ -640,6 +672,9 @@ async def turn(body: Turn):
                             for key in counts:
                                 counts[key] += int((step.get("usage") or {}).get(key, 0) or 0)
                         if step.get("step_type") == "agent_response" and step.get("text_delta"):
+                            if len(bridge.images_read) != len(body.images):
+                                yield json.dumps({"error": "Gemini did not inspect every attached image", "kind": "request"}) + "\n"
+                                return
                             yield json.dumps({"thread_id": thread, "delta": step["text_delta"]}) + "\n"
                     elif item.get("event") == "result":
                         result = item.get("result", {})
@@ -649,6 +684,9 @@ async def turn(body: Turn):
                             return
                         if not thread:
                             raise ValueError("Missing conversation id")
+                        if len(bridge.images_read) != len(body.images):
+                            yield json.dumps({"error": "Gemini did not inspect every attached image", "kind": "request"}) + "\n"
+                            return
                         # Antigravity reports uncached input separately; OpenAI usage
                         # and gateway billing require cached input as a subset of total input.
                         counts["input_tokens"] += counts["cache_read_tokens"]

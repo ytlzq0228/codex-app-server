@@ -23,7 +23,6 @@ def test_registry_preserves_legacy(gemini):
     ({"text": {"format": {"type": "unsupported"}}}, "text"),
     ({"temperature": 0}, "temperature"),
     ({"unknown_option": True}, "unknown_option"),
-    ({"input": [{"role": "user", "content": [{"type": "input_image", "image_url": "https://example.org/a.png"}]}]}, "input"),
 ])
 def test_gemini_rejects_unsupported(gemini, extra, param):
     with pytest.raises(HTTPException) as exc:

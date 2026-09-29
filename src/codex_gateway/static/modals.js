@@ -1,4 +1,10 @@
 (() => {
+  document.querySelectorAll('dialog[data-password-dialog]').forEach(dialog => dialog.addEventListener('close', () => {
+    dialog.querySelector('form').reset();
+    const error = dialog.querySelector('[data-form-error]');
+    error.textContent = '';
+    error.hidden = true;
+  }));
   document.querySelectorAll('[data-modal-open]').forEach(button => button.addEventListener('click', () => {
     document.getElementById(button.dataset.modalOpen).showModal();
   }));

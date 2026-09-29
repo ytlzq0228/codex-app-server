@@ -45,18 +45,29 @@ class GeminiAdapter:
                     raise WorkerFailure("Worker identity changed", kind="account_changed")
         payload = {"prompt": request.input_text(), "model": self.settings.model_alias_map().get(request.model, request.model),
                    "conversation": request.previous_response_id, "workspace": target.workspace}
+        image_parts = request.worker_input()
+        has_images = any(part.get("type") == "image" for part in image_parts)
         specs = definitions(request) if request.tool_choice != "none" else []
-        if definitions(request) or tool_run is not None:
+        if definitions(request) or tool_run is not None or has_images:
             try:
                 capabilities = await worker_rpc(target.endpoint, self.settings, "/capabilities")
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code == 404:
-                    raise ToolProtocolError("Gemini worker must be upgraded to support client tools", "client_tools_unavailable") from exc
+                    raise ToolProtocolError("Gemini worker must be upgraded to support " + ("image input" if has_images else "client tools"),
+                                            "image_input_unavailable" if has_images else "client_tools_unavailable") from exc
                 raise WorkerFailure("Gemini worker capability check failed") from exc
             except httpx.HTTPError as exc:
                 raise WorkerFailure("Gemini worker capability check failed") from exc
-            if capabilities.get("client_tools") != 1:
+            if has_images and capabilities.get("image_input") != 1:
+                raise ToolProtocolError("Gemini worker must be upgraded to support image input", "image_input_unavailable")
+            if (definitions(request) or tool_run is not None) and capabilities.get("client_tools") != 1:
                 raise ToolProtocolError("Gemini worker does not support this client tool protocol", "client_tools_unavailable")
+        if has_images:
+            from .gemini_images import prepare_images
+            try:
+                payload["prompt"], payload["images"] = await prepare_images(image_parts)
+            except ValueError as exc:
+                raise ToolProtocolError(str(exc), "invalid_image") from exc
         if specs:
             from jsonschema.validators import validator_for
             from jsonschema.exceptions import SchemaError

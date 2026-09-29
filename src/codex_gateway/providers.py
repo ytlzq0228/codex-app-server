@@ -13,7 +13,7 @@ class Capabilities:
     reasoning: bool = False
 
 CAPABILITIES = {"codex": Capabilities(images=True, tools=True, structured_output=True, reasoning=True),
-                "gemini": Capabilities(tools=True, structured_output=True)}
+                "gemini": Capabilities(images=True, tools=True, structured_output=True)}
 
 def provider_for(model):
     from .config import get_settings
@@ -35,8 +35,6 @@ def validate_capabilities(request):
         if isinstance(item, dict) and item.get("type") in {"function_call_output", "custom_tool_call_output"}:
             if any(part.get("type") != "input_text" for part in content_parts(item.get("output"))):
                 reject("input", "Gemini client tools currently support text results only")
-    if any(i.get("type") == "image" for i in request.worker_input()):
-        reject("input", "Gemini image input is not enabled")
     # Permission to parallelize does not require parallel execution. The Gemini
     # relay continues to deliver one pending call at a time.
     request.parallel_tool_calls = False

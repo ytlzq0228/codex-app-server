@@ -16,12 +16,20 @@ ACTIVE = {}
 
 
 class ToolBridge:
-    def __init__(self, tools):
+    def __init__(self, tools, images=None):
         self.token = secrets.token_urlsafe(32)
         self.server_name = "gateway_client_" + uuid4().hex[:16]
         self.tools = {tool["name"]: tool for tool in tools}
         if len(self.tools) != len(tools) or len(tools) > 64:
             raise ValueError("Invalid tool declarations")
+        self.images = images or []
+        self.images_read = set()
+        if self.images:
+            self.tools["gateway_read_image"] = {
+                "name": "gateway_read_image", "description": "Inspect one user-attached image. Read every attached image before answering or calling client tools.",
+                "inputSchema": {"type": "object", "properties": {"index": {"type": "integer", "minimum": 1, "maximum": len(self.images)}},
+                                "required": ["index"], "additionalProperties": False},
+            }
         self.events = asyncio.Queue(maxsize=64)
         self.pending = {}
         self.serial = asyncio.Lock()
@@ -30,6 +38,14 @@ class ToolBridge:
     async def call(self, name, arguments):
         if name not in self.tools or not isinstance(arguments, dict):
             raise ValueError("Undeclared tool or invalid arguments")
+        if name == "gateway_read_image" and self.images:
+            index = arguments.get("index")
+            if type(index) is not int or not 1 <= index <= len(self.images):
+                raise ValueError("Invalid attachment index")
+            self.images_read.add(index)
+            return {"content": [{"type": "image", **self.images[index - 1]}]}
+        if len(self.images_read) != len(self.images):
+            return {"isError": True, "content": [{"type": "text", "text": "Read every attached image with gateway_read_image before calling client tools."}]}
         # Match the gateway's one outstanding result per execution protocol.
         async with self.serial:
             if self.closed:

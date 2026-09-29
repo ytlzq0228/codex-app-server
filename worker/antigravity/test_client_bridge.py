@@ -119,3 +119,22 @@ class ConcurrentEnvironmentTests(unittest.TestCase):
                     self.assertEqual(settings.read_bytes(), before)
             self.assertFalse(h1.exists())
             self.assertFalse(w1.exists())
+
+class ImageBridgeTests(unittest.IsolatedAsyncioTestCase):
+    async def test_images_are_local_and_do_not_escape_to_client(self):
+        image = {"mimeType": "image/png", "data": "example"}
+        bridge = ToolBridge([], images=[image])
+        result = await bridge.call("gateway_read_image", {"index": 1})
+        self.assertEqual(result, {"content": [{"type": "image", **image}]})
+        self.assertEqual(bridge.images_read, {1})
+        self.assertTrue(bridge.events.empty())
+        with self.assertRaises(ValueError):
+            await bridge.call("gateway_read_image", {"index": True})
+        bridge.close()
+
+    async def test_client_tools_wait_for_image_read(self):
+        bridge = ToolBridge([{"name": "gateway_client_0"}], images=[{"mimeType": "image/png", "data": "example"}])
+        result = await bridge.call("gateway_client_0", {})
+        self.assertTrue(result["isError"])
+        self.assertTrue(bridge.events.empty())
+        bridge.close()

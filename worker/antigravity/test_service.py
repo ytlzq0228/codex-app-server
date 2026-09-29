@@ -33,7 +33,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.configuration.stop()
         self.directory.cleanup()
 
-    async def execute(self, events):
+    async def execute(self, events, images=None):
         proc = type("Process", (), {})()
         proc.wait = AsyncMock(return_value=1)
         proc.stdin = FakeInput()
@@ -41,7 +41,7 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         proc.stderr = type("Stderr", (), {"read": AsyncMock(return_value=b"")})()
         stopped = AsyncMock()
         with patch.object(service.asyncio, "create_subprocess_exec", AsyncMock(return_value=proc)), patch.object(service, "stop", stopped):
-            response = await service.turn(service.Turn(prompt="hello", model="gemini-test", workspace=str(self.workspace)))
+            response = await service.turn(service.Turn(prompt="hello", model="gemini-test", workspace=str(self.workspace), images=images or []))
             rows = []
             async for chunk in response.body_iterator:
                 row = json.loads(chunk)
@@ -62,6 +62,20 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[-1]["input_tokens"], 17)
         self.assertEqual(rows[-1]["cache_read_tokens"], 10)
         self.assertEqual(rows[-1]["output_tokens"], 3)
+
+    async def test_unread_image_cannot_emit_text_or_success(self):
+        image = {"mimeType": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="}
+        for events in ([{"event": "step_update", "step_update": {"step_type": "agent_response", "text_delta": "guess"}}],
+                       [{"event": "init", "conversation_id": "thread"}, {"event": "result", "result": {"status": "SUCCESS"}}]):
+            rows = await self.execute(events, images=[image])
+            self.assertEqual(rows[-1]["kind"], "request")
+            self.assertFalse(any("delta" in row or "done" in row for row in rows))
+
+    def test_invalid_image_rejected_before_execution(self):
+        from pydantic import ValidationError
+        with self.assertRaises(ValidationError):
+            service.Turn(prompt="hello", model="gemini-test", workspace=str(self.workspace),
+                         images=[{"mimeType": "image/png", "data": "AAAA"}])
 
     async def test_quota_failure_never_success(self):
         rows = await self.execute([{"event": "result", "result": {"status": "FAILED", "error": "RESOURCE_EXHAUSTED: quota"}}])

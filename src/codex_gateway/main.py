@@ -826,6 +826,15 @@ async def legacy_user_routes(request: Request, call_next):
     return await call_next(request)
 
 
+@app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
+async def root_redirect(request: Request):
+    from fastapi.responses import RedirectResponse
+    target = "/user/overview"
+    if request.url.query:
+        target += "?" + request.url.query
+    return RedirectResponse(target, status_code=307)
+
+
 @app.api_route("/healthz", methods=["GET", "HEAD", "OPTIONS"])
 async def health() -> dict[str, str]:
     return {"status": "ok"}

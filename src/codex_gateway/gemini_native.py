@@ -90,8 +90,10 @@ def translate_request(body, model, stream):
         text, calls, results = [], [], []
         seen_results = {}
         for part in content.get("parts", []):
-            if set(part) - {"text", "thought", "thoughtSignature", "functionCall", "functionResponse"}:
+            if set(part) - {"text", "thought", "thoughtSignature", "functionCall", "functionResponse", "inlineData", "fileData"}:
                 raise ValueError("Unsupported content part fields")
+            if ("inlineData" in part or "fileData" in part) and len(set(part) & {"text", "inlineData", "fileData", "functionCall", "functionResponse"}) != 1:
+                raise ValueError("An image part must contain exactly one content source")
             if "functionCall" in part:
                 if role != "model":
                     raise ValueError("functionCall requires model role")
@@ -119,6 +121,26 @@ def translate_request(body, model, stream):
                 ids.remove(cid)
                 results.append({"role": "tool", "tool_call_id": cid,
                                 "content": json.dumps(r.get("response", {}), ensure_ascii=False)})
+            elif "inlineData" in part or "fileData" in part:
+                if role != "user":
+                    raise ValueError("Images require user role")
+                if "inlineData" in part and "fileData" in part:
+                    raise ValueError("Specify only one image source")
+                source = part.get("inlineData", part.get("fileData"))
+                if not isinstance(source, dict) or source.get("mimeType") not in {
+                        "image/png", "image/jpeg", "image/jpg", "image/webp", "image/gif"}:
+                    raise ValueError("Only PNG, JPEG, WEBP and GIF image parts are supported")
+                if "inlineData" in part:
+                    if set(source) != {"mimeType", "data"} or not isinstance(source["data"], str):
+                        raise ValueError("inlineData requires mimeType and base64 data")
+                    url = "data:" + source["mimeType"] + ";base64," + source["data"]
+                else:
+                    if set(source) != {"mimeType", "fileUri"} or not isinstance(source["fileUri"], str) or not source["fileUri"].startswith(("https://", "http://")):
+                        raise ValueError("fileData requires a public HTTP(S) image URL")
+                    url = source["fileUri"]
+                from .multimodal import image_part
+                image_part({"type": "input_image", "image_url": url})
+                text.append({"type": "image_url", "image_url": {"url": url}})
             elif "text" in part:
                 if not part.get("thought"):
                     text.append(part["text"])
@@ -126,7 +148,8 @@ def translate_request(body, model, stream):
                 raise ValueError("Only text and function parts are supported")
         if text or calls:
             message = {"role": "assistant" if role == "model" else "user",
-                       "content": "\n".join(text) or None}
+                       "content": ([{"type": "text", "text": p} if isinstance(p, str) else p for p in text]
+                                   if any(isinstance(p, dict) for p in text) else "\n".join(text) or None)}
             if calls:
                 message["tool_calls"] = calls
             messages.append(message)

@@ -467,3 +467,8 @@ gemini异常状态叫做offline/灰色
 ⚠ Eligibility Check
   ⎿  Eligibility check failed: Your current account is not eligible for Antigravity. Try signing in with another personal Google account. If you believe
      this is an error, please contact your administrator.
+
+
+增加管理员可以手动为用户开启provider能力的开关。
+
+

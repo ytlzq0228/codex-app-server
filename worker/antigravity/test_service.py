@@ -82,6 +82,16 @@ class TransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[-1]["kind"], "limit")
         self.assertNotIn("done", rows[-1])
 
+    async def test_empty_success_is_an_error(self):
+        rows = await self.execute([
+            {"event": "init", "conversation_id": "thread"},
+            {"event": "step_update", "step_update": {"state": "DONE", "step_type": "user_input"}},
+            {"event": "result", "result": {"status": "SUCCESS", "response": "", "usage": {"output_tokens": 0}}},
+        ])
+        self.assertEqual(rows[-1]["kind"], "connection")
+        self.assertIn("without delivering", rows[-1]["error"])
+        self.assertFalse(any(row.get("done") for row in rows))
+
     async def test_eof_never_success(self):
         rows = await self.execute([])
         self.assertEqual(rows[-1]["kind"], "connection")

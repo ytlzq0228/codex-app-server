@@ -613,6 +613,7 @@ async def turn(body: Turn):
         source = None
         environment = None
         terminal = None
+        produced_output = False
         try:
             if any(not re.fullmatch(r"gateway_client_\d+", tool.get("name", "")) or
                    not isinstance(tool.get("inputSchema"), dict) for tool in body.tools):
@@ -654,6 +655,7 @@ async def turn(body: Turn):
                         yield json.dumps({"heartbeat": True}) + "\n"
                         continue
                     if item.get("event") == "client_tool":
+                        produced_output = True
                         if not thread:
                             raise ValueError("Tool call before conversation initialization")
                         yield json.dumps({**item, "thread_id": thread, **counts,
@@ -672,6 +674,7 @@ async def turn(body: Turn):
                             for key in counts:
                                 counts[key] += int((step.get("usage") or {}).get(key, 0) or 0)
                         if step.get("step_type") == "agent_response" and step.get("text_delta"):
+                            produced_output = True
                             if len(bridge.images_read) != len(body.images):
                                 yield json.dumps({"error": "Gemini did not inspect every attached image", "kind": "request"}) + "\n"
                                 return
@@ -686,6 +689,9 @@ async def turn(body: Turn):
                             raise ValueError("Missing conversation id")
                         if len(bridge.images_read) != len(body.images):
                             yield json.dumps({"error": "Gemini did not inspect every attached image", "kind": "request"}) + "\n"
+                            return
+                        if not produced_output:
+                            yield json.dumps({"error": "Gemini CLI reported success without delivering any response or client tool call; resume with a new user turn", "kind": "connection"}) + "\n"
                             return
                         # Antigravity reports uncached input separately; OpenAI usage
                         # and gateway billing require cached input as a subset of total input.

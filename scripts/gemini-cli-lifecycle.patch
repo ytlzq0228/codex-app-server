@@ -1,0 +1,183 @@
+--- a/chunk-5FZXKDXH.js
++++ b/chunk-5FZXKDXH.js
+@@ -267922,6 +267922,12 @@
+           let match2 = buffer.match(responseLineRE);
+           while (match2) {
+             const processedChunkString = match2[1];
++            // SSE error envelopes must be handled before response conversion drops them.
++            const streamEnvelope = JSON.parse(processedChunkString);
++            if (streamEnvelope?.error) {
++              throw new ApiError({ message: JSON.stringify(streamEnvelope),
++                status: Number(streamEnvelope.error.code) || 502 });
++            }
+             try {
+               const partialResponse = new Response(processedChunkString, {
+                 headers: response === null || response === void 0 ? void 0 : response.headers,
+@@ -334403,6 +334409,8 @@
+         }
+       }
+     }
++    // Preserve submitted input and completed tools when a request fails or is cancelled.
++    const submittedHistoryLength = this.agentHistory.get().length;
+     const requestHistory = this.getHistoryTurns(true);
+     const streamWithRetries = async function* () {
+       let isSuccess = false;
+@@ -334520,7 +334528,7 @@
+           const originalLength = this.promptOriginalHistoryLength;
+           const originalTokenCount = this.promptOriginalTokenCount;
+           if (isAborted2 && originalLength !== void 0) {
+-            this.agentHistory.rollback(originalLength);
++            this.agentHistory.rollback(submittedHistoryLength);
+             this.chatRecordingService.updateMessagesFromHistory(
+               this.agentHistory.get()
+             );
+@@ -334531,7 +334539,7 @@
+             this.promptOriginalTokenCount = void 0;
+             this.lastPromptId = void 0;
+           } else if (!isOriginalFunctionResponse) {
+-            this.agentHistory.rollback(historyLengthBefore);
++            this.agentHistory.rollback(submittedHistoryLength);
+             this.chatRecordingService.updateMessagesFromHistory(
+               this.agentHistory.get()
+             );
+--- a/chunk-JDPZ4CE3.js
++++ b/chunk-JDPZ4CE3.js
+@@ -267665,6 +267665,12 @@
+           let match2 = buffer.match(responseLineRE);
+           while (match2) {
+             const processedChunkString = match2[1];
++            // SSE error envelopes must be handled before response conversion drops them.
++            const streamEnvelope = JSON.parse(processedChunkString);
++            if (streamEnvelope?.error) {
++              throw new ApiError({ message: JSON.stringify(streamEnvelope),
++                status: Number(streamEnvelope.error.code) || 502 });
++            }
+             try {
+               const partialResponse = new Response(processedChunkString, {
+                 headers: response === null || response === void 0 ? void 0 : response.headers,
+@@ -332079,6 +332085,8 @@
+         }
+       }
+     }
++    // Preserve submitted input and completed tools when a request fails or is cancelled.
++    const submittedHistoryLength = this.agentHistory.get().length;
+     const requestHistory = this.getHistoryTurns(true);
+     const streamWithRetries = async function* () {
+       let isSuccess = false;
+@@ -332170,7 +332178,7 @@
+           const originalLength = this.promptOriginalHistoryLength;
+           const originalTokenCount = this.promptOriginalTokenCount;
+           if (isAborted2 && originalLength !== void 0) {
+-            this.agentHistory.rollback(originalLength);
++            this.agentHistory.rollback(submittedHistoryLength);
+             this.chatRecordingService.updateMessagesFromHistory(this.agentHistory.get());
+             if (originalTokenCount !== void 0) {
+               this.lastPromptTokenCount = originalTokenCount;
+@@ -332179,7 +332187,7 @@
+             this.promptOriginalTokenCount = void 0;
+             this.lastPromptId = void 0;
+           } else if (!isOriginalFunctionResponse) {
+-            this.agentHistory.rollback(historyLengthBefore);
++            this.agentHistory.rollback(submittedHistoryLength);
+             this.chatRecordingService.updateMessagesFromHistory(this.agentHistory.get());
+             this.lastPromptTokenCount = baselinePromptTokenCount;
+           }
+--- a/chunk-Y2J3C62M.js
++++ b/chunk-Y2J3C62M.js
+@@ -267922,6 +267922,12 @@
+           let match2 = buffer.match(responseLineRE);
+           while (match2) {
+             const processedChunkString = match2[1];
++            // SSE error envelopes must be handled before response conversion drops them.
++            const streamEnvelope = JSON.parse(processedChunkString);
++            if (streamEnvelope?.error) {
++              throw new ApiError({ message: JSON.stringify(streamEnvelope),
++                status: Number(streamEnvelope.error.code) || 502 });
++            }
+             try {
+               const partialResponse = new Response(processedChunkString, {
+                 headers: response === null || response === void 0 ? void 0 : response.headers,
+@@ -334403,6 +334409,8 @@
+         }
+       }
+     }
++    // Preserve submitted input and completed tools when a request fails or is cancelled.
++    const submittedHistoryLength = this.agentHistory.get().length;
+     const requestHistory = this.getHistoryTurns(true);
+     const streamWithRetries = async function* () {
+       let isSuccess = false;
+@@ -334520,7 +334528,7 @@
+           const originalLength = this.promptOriginalHistoryLength;
+           const originalTokenCount = this.promptOriginalTokenCount;
+           if (isAborted2 && originalLength !== void 0) {
+-            this.agentHistory.rollback(originalLength);
++            this.agentHistory.rollback(submittedHistoryLength);
+             this.chatRecordingService.updateMessagesFromHistory(
+               this.agentHistory.get()
+             );
+@@ -334531,7 +334539,7 @@
+             this.promptOriginalTokenCount = void 0;
+             this.lastPromptId = void 0;
+           } else if (!isOriginalFunctionResponse) {
+-            this.agentHistory.rollback(historyLengthBefore);
++            this.agentHistory.rollback(submittedHistoryLength);
+             this.chatRecordingService.updateMessagesFromHistory(
+               this.agentHistory.get()
+             );
+--- a/gemini-3HFX2LNT.js
++++ b/gemini-3HFX2LNT.js
+@@ -12421,6 +12421,7 @@
+           }
+           currentMessages = [{ role: "user", parts: toolResponseParts }];
+         } else {
++          if (invalidStreamError) process.exitCode = 1;
+           if (streamFormatter) {
+             const metrics = uiTelemetryService.getMetrics();
+             const durationMs = Date.now() - startTime;
+@@ -17632,7 +17633,7 @@
+       resumedSessionData
+     });
+     await runExitCleanup();
+-    process.exit(ExitCodes.SUCCESS);
++    process.exit(process.exitCode ?? ExitCodes.SUCCESS);
+   }
+ }
+ function initializeOutputListenersAndFlush(config) {
+--- a/gemini-4IF7D7UG.js
++++ b/gemini-4IF7D7UG.js
+@@ -12405,6 +12405,7 @@
+           }
+           currentMessages = [{ role: "user", parts: toolResponseParts }];
+         } else {
++          if (invalidStreamError) process.exitCode = 1;
+           if (streamFormatter) {
+             const metrics = uiTelemetryService.getMetrics();
+             const durationMs = Date.now() - startTime;
+@@ -17616,7 +17617,7 @@
+       resumedSessionData
+     });
+     await runExitCleanup();
+-    process.exit(ExitCodes.SUCCESS);
++    process.exit(process.exitCode ?? ExitCodes.SUCCESS);
+   }
+ }
+ function initializeOutputListenersAndFlush(config) {
+--- a/gemini-NPCD6A4N.js
++++ b/gemini-NPCD6A4N.js
+@@ -12405,6 +12405,7 @@
+           }
+           currentMessages = [{ role: "user", parts: toolResponseParts }];
+         } else {
++          if (invalidStreamError) process.exitCode = 1;
+           if (streamFormatter) {
+             const metrics = uiTelemetryService.getMetrics();
+             const durationMs = Date.now() - startTime;
+@@ -17616,7 +17617,7 @@
+       resumedSessionData
+     });
+     await runExitCleanup();
+-    process.exit(ExitCodes.SUCCESS);
++    process.exit(process.exitCode ?? ExitCodes.SUCCESS);
+   }
+ }
+ function initializeOutputListenersAndFlush(config) {

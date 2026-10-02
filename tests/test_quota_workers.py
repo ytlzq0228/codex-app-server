@@ -261,7 +261,7 @@ def test_owner_isolation_account_read_and_admin_transfer(worker_services):
         assert f'data-worker-id="{worker}"' in admin_workers
         assert f'data-worker-owner="{alice}"' in admin_workers
         assert 'id="worker-owner-dialog"' in admin_workers
-        assert '<th>归属</th><th>登录账号 / 套餐</th>' in admin_workers
+        assert '<th>归属</th><th>节点</th><th>登录账号 / 套餐</th>' in admin_workers
         assert 'contributor@example.com' in admin_workers and '>plus</span>' in admin_workers
         assert client.post('/admin/workers/'+worker+'/owner',data={'csrf_token':token,'username':bob},headers=AJAX).status_code==200
         assert f'data-worker-owner="{bob}"' in client.get('/admin/workers').text

@@ -138,6 +138,8 @@ app.mount("/static", StaticFiles(directory=PACKAGE_ROOT / "static"), name="stati
 app.include_router(admin_auth_router)
 app.include_router(admin_user_router)
 app.include_router(admin_router)
+from .infra import router as infra_router
+app.include_router(infra_router)
 from .self_service import router as self_service_router
 from .reporting import router as reporting_router
 app.include_router(self_service_router)

@@ -109,3 +109,10 @@ def delete_worker(name: str, authorization: str | None = Header(default=None)) -
         container.remove(force=True)
     except APIError as exc:
         raise HTTPException(409, "could not remove worker") from exc
+
+
+@app.get("/infra")
+def infrastructure(authorization: str | None = Header(default=None)):
+    authorize(authorization)
+    from .docker_monitor import snapshot
+    return snapshot(client)

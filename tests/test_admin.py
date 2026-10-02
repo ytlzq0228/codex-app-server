@@ -75,7 +75,7 @@ def test_admin_navigation_uses_four_isolated_pages() -> None:
         assert 'id="worker-name-dialog"' in workers
         assert 'name="name" required maxlength="80"' in workers
         assert 'name="username"' in workers and '保存归属' in workers
-        assert '<th>归属</th><th>登录账号 / 套餐</th><th>认证方式</th>' in workers
+        assert '<th>归属</th><th>节点</th><th>登录账号 / 套餐</th><th>认证方式</th>' in workers
         assert '归属 / 登录账号' not in workers
         assert 'id="sessions"' in sessions and 'id="keys"' not in sessions
         assert 'id="history"' in history and 'id="sessions"' not in history

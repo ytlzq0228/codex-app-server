@@ -52,9 +52,18 @@ deleting obsolete source files, and reset gateway/manager build contexts to the
 application root. Do not leave build contexts pointing at an old single-file
 hotfix directory. Back up first, validate on test, then update production. Keep
 existing `.env`, model overrides, account volumes, and container network identities.
-Backups are stored under `deploy-backups/release-<commit>-<timestamp>/`; preserve
-the old image IDs, Compose overrides, database dump, account volumes, and container
-configuration snapshots together. Rollback must restore the prior overrides and
+Only the latest deployment backup is retained. Use
+`sudo python3 scripts/deploy_release.py <application-directory> <artifact-directory>`
+for subsequent gateway/manager releases. Artifacts must contain `image.tar`,
+`source.tar.gz` and `release-manifest.json`. The deployment script automatically
+runs `backup_release.py` before replacing application files or containers and
+clears the former production backup directory too. For a standalone backup use
+`sudo python3 scripts/backup_release.py <application-directory>`; add
+`--historical-root /opt/codex-app-server/deploy-backups` for the former layout. The script checks database access, deletes historical backups
+**before** creating the new backup, and saves configuration, a consistent database
+dump, gateway/manager images and container settings. Account volumes and Worker
+images remain in place for application-only releases; back them up separately
+when a release changes Worker data or images. Rollback must restore the prior overrides and
 container configuration as well as images. Never restore an older database over
 new user writes without reconciling those writes.
 

@@ -489,10 +489,13 @@ class Login:
 
     async def read(self):
         try:
-            while self.process.returncode is None and time.monotonic() < self.expires:
+            # A child can exit before the next PTY read; drain its buffered output.
+            while time.monotonic() < self.expires:
                 try:
                     data = os.read(self.fd, 65536)
                 except BlockingIOError:
+                    if self.process.returncode is not None:
+                        break
                     await asyncio.sleep(.1)
                     continue
                 except OSError:
@@ -515,8 +518,23 @@ class Login:
                 if self.code_submitted and re.search(r"(?i)invalid|expired|failed|denied|error", plain[-800:]):
                     self.error = "Claude 授权失败。授权码可能无效、已过期或已被使用；请关闭窗口后重新登录并获取新的授权码。"
                     break
+            if not self.account and not self.error and self.process.returncode is None:
+                # PTY EOF can precede asyncio's child-exit notification.
+                try:
+                    await asyncio.wait_for(self.process.wait(), timeout=2)
+                except asyncio.TimeoutError:
+                    pass
+            if not self.account and not self.error and self.code_submitted and self.process.returncode == 0:
+                # CLI success is authoritative even when its terminal wording changes.
+                # Do not accept old credentials after cancellation or a failed exit.
+                account, _ = await read_account()
+                if account:
+                    self.account = account
             if not self.account and not self.error:
-                self.error = "登录已结束或超时，请重新开始"
+                self.error = ("登录会话已超时，请重新开始" if time.monotonic() >= self.expires
+                              else "Claude 登录进程已结束，但未确认登录成功，请重新开始")
+        except Exception:
+            self.error = "无法确认 Claude 登录结果，请稍后探测账号或重试"
         finally:
             await stop(self.process)
             if self.fd is not None:

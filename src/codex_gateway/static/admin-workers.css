@@ -1,0 +1,40 @@
+/* Fixed column proportions and two-line cells keep the table within its panel. */
+.worker-page #workers{padding:20px 16px}
+.worker-page .worker-table{table-layout:fixed;width:100%}
+.worker-page .worker-table .col-name{width:16%}
+.worker-page .worker-table .col-status{width:6%}
+.worker-page .worker-table .col-owner{width:7%}
+.worker-page .worker-table .col-node{width:6%}
+.worker-page .worker-table .col-account{width:13%}
+.worker-page .worker-table .col-auth{width:10%}
+.worker-page .worker-table .col-usage{width:20%}
+.worker-page .worker-table .col-actions{width:22%}
+.worker-page .worker-table th,.worker-page .worker-table td{padding:8px 5px;overflow:hidden}
+.worker-page .worker-table th{white-space:nowrap;text-overflow:ellipsis}
+.worker-page .worker-table td{line-height:20px}
+.worker-page .worker-name{gap:4px;min-width:0}
+.worker-page .worker-dot{flex:0 0 8px}
+.worker-page .worker-name-text{min-width:0;flex:1}
+.worker-page .worker-name-text strong,.worker-page .worker-name-text small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:20px;margin:0}
+.worker-page .edit-icon-button{flex:0 0 22px;width:22px;height:24px;padding:3px}
+.worker-page .worker-owner-display{gap:2px;min-width:0}
+.worker-page .worker-owner-display>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.worker-page .worker-account-plan{min-width:0;gap:0}
+.worker-page .worker-account-plan>span,.worker-page .worker-account-plan>small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:20px;max-width:100%}
+.worker-page .worker-account-plan .plan-pill{max-width:100%;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;line-height:16px}
+.worker-page .worker-table .badge{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:middle;padding:3px 6px;line-height:14px}
+.worker-page .worker-current-error{display:block;line-height:20px;color:var(--red);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.worker-page .worker-rate-limits{min-width:0;width:100%;white-space:normal;line-height:20px}
+.worker-page [data-rate-content]{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;width:100%;max-width:205px;max-height:40px;overflow:hidden}
+.worker-page .usage-window{min-width:0;margin:0;display:block}
+.worker-page .usage-meter{width:100%;height:40px}
+.worker-page .worker-table .row-actions{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.6fr) minmax(0,1fr) minmax(0,1fr);gap:4px}
+.worker-page .worker-table .row-actions form{min-width:0}
+.worker-page .worker-table .row-actions button{width:100%;padding:6px 5px;line-height:16px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:1100px){.worker-page .content{padding-left:12px;padding-right:12px}.worker-page #workers{padding:16px 8px}.worker-page .worker-table th,.worker-page .worker-table td{padding-left:3px;padding-right:3px}.worker-page .worker-table .row-actions{gap:2px}.worker-page .worker-table .row-actions button{padding-left:2px;padding-right:2px}.worker-page .worker-node{padding-left:5px;padding-right:5px}}
+.worker-page .worker-table .row-actions button{display:block;height:30px}
+
+.worker-page .worker-account-plan>small{display:flex;align-items:center;gap:2px}
+.worker-page .worker-account-plan .plan-pill{display:block;min-width:0;flex:1;min-height:20px;padding:2px 6px;line-height:16px}
+
+.worker-page .usage-window:only-child{grid-column:1 / -1}

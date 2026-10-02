@@ -115,13 +115,21 @@
       }
     }
   }
+  async function logoutBeforeLogin(run) {
+    if (!run.needsLogout) return;
+    status.textContent = '正在退出当前账号…';
+    showProgress('正在安全退出原账号…');
+    await call(run, 'logout');
+    run.needsLogout = false; run.reload = true;
+    if (run.closed) location.reload();
+  }
   document.querySelectorAll('[data-provider-login], [data-gemini-login]').forEach(form => form.addEventListener('submit', async event => {
     event.preventDefault();
     if (current && !current.closed) return;
     if (form.dataset.confirm && !confirm(form.dataset.confirm)) return;
     const fields = new FormData(form);
     const provider = form.dataset.provider || 'gemini';
-    const run = {provider, label: provider === 'claude' ? 'Claude' : 'Gemini', base: (form.dataset.geminiAdmin === 'true' ? '/admin/workers/' : '/user/workers/') + form.dataset.workerId + '/provider-login/', csrf: fields.get('csrf_token')};
+    const run = {provider, label: provider === 'claude' ? 'Claude' : 'Gemini', base: (form.dataset.geminiAdmin === 'true' ? '/admin/workers/' : '/user/workers/') + form.dataset.workerId + '/provider-login/', csrf: fields.get('csrf_token'), needsLogout: fields.get('force') === 'true'};
     current = run; hideControls(); code.value = ''; expiry.textContent = '';
     dialog.querySelector('.eyebrow').textContent = run.label.toUpperCase();
     link.textContent = '打开 ' + (provider === 'claude' ? 'Claude' : 'Google') + ' 授权页面';
@@ -130,13 +138,8 @@
     title.textContent = '登录 ' + run.label + ' 订阅账号'; status.textContent = '正在启动登录…'; dialog.showModal();
     showProgress('正在启动登录服务…');
     try {
-      if (fields.get('force') === 'true') {
-        status.textContent = '正在退出当前账号…';
-        showProgress('正在安全退出原账号…');
-        await call(run, 'logout'); run.reload = true;
-        if (run.closed) { location.reload(); return; }
-        status.textContent = '原账号已退出，正在准备重新登录…';
-      }
+      await logoutBeforeLogin(run);
+      if (run.closed) return;
       const data = await call(run, 'start'); run.session = data.session_id;
       if (run.closed) { await call(run, 'input', {key: 'cancel'}); return; }
       render(run, data); poll(run);
@@ -166,12 +169,14 @@
         }
         if (!visible(run)) return;
         run.session = ''; run.done = false;
+        await logoutBeforeLogin(run);
+        if (run.closed) return;
         const data = await call(run, 'start'); run.session = data.session_id;
         if (run.closed) { await call(run, 'input', {key: 'cancel'}); return; }
         render(run, data);
       }
     } catch (error) {
-      if (visible(run)) { status.textContent = error.message; retry.hidden = false; }
+      if (visible(run)) { status.textContent = error.message; run.done = true; hideControls(); retry.hidden = false; }
     } finally {
       run.busy = false; retry.disabled = false;
       if (visible(run) && !run.done) poll(run);

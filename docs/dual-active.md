@@ -80,8 +80,11 @@ Web 登录使用同一公共域名，
 切换后有新写入时，必须保留集群数据库并将应用回退到兼容版本；
 不能直接启动连接旧本地数据库的原 gateway。Worker 回迁也必须先停止
 新实例并同步最新账号/工作区卷，才能启动保留实例。禁止同时运行两个
-相同账号的副本。正式迁移备份目录：
-`/opt/codex-app-server/deploy-backups/ha-20261002`。
+相同账号的副本。原迁移备份 `/opt/codex-app-server/deploy-backups/ha-20261002`
+已按后续“仅保留最近一次备份”的要求清理。当前每个正式节点的最新备份
+位于 `/opt/codex-app-server-ha/deploy-backups/release-<时间>/`。
+之后使用 `scripts/deploy_release.py` 发布：先检查数据库访问，再删除历史备份、
+创建本次备份，然后只更新 gateway 和 worker-manager。
 
 节点故障时不自动复制 Worker，也不把已有绑定迁到其他账号。保留节点
 继续提供未绑定请求与其自身 Worker 的会话，故障节点 Worker 的既有绑定

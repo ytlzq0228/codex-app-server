@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>系统运行状态 · Codex Gateway</title><link rel="stylesheet" href="/static/admin.css"><link rel="stylesheet" href="/static/controls.css"><link rel="stylesheet" href="/static/infra.css"><script defer src="/static/infra.js"></script></head>
+<body class="admin-page">{% include "shared/sidebar.html" %}<main class="content">
+<header class="topbar"><div><p class="eyebrow">INFRASTRUCTURE</p><h1>系统运行状态</h1><p class="muted">APP 节点、Docker 负载与共享数据库，每 30 秒自动刷新。</p></div><button id="infra-refresh" class="button button-primary">立即刷新</button></header>
+<p id="infra-updated" class="muted" role="status" aria-live="polite">正在读取运行状态…</p>
+<section class="panel"><div class="section-head"><h2>共享数据库</h2></div><div id="infra-database"></div></section>
+<section><div class="section-head"><h2>APP 节点与 Docker 负载</h2></div><div id="infra-nodes" class="infra-grid"></div></section>
+<p class="muted">CPU 为容器采样值之和，占宿主机全部 CPU 的比例；内存为容器工作集之和，不包含宿主机其他进程。单个容器 CPU 可超过 100%。无法读取的指标显示“—”，停止的容器不计入当前负载。</p>
+</main></body></html>

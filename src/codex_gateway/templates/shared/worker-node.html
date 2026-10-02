@@ -1,0 +1,1 @@
+<span class="worker-node {{ 'node-' ~ worker.node_id if worker.node_id in ['app-1', 'app-2'] else 'node-local' }}" title="{{ worker.node_id or '本机' }}">{{ worker.node_id or "本机" }}</span>

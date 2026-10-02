@@ -81,3 +81,73 @@ def test_usage_includes_both_cache_classes(worker):
     assert worker.usage_counts({"input_tokens": 2, "cache_read_input_tokens": 5,
         "cache_creation_input_tokens": 8, "output_tokens": 3}) == {
         "input_tokens": 15, "cache_read_tokens": 5, "cache_write_tokens": 8, "output_tokens": 3}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('output', [b'Login successful\r\n', b''])
+async def test_login_exit_success_drains_pty_and_confirms_account(worker, monkeypatch, output):
+    from types import SimpleNamespace
+    import asyncio
+    session = worker.Login()
+    session.code_submitted = True
+    session.fd = 123
+    session.process = SimpleNamespace(returncode=0)
+    chunks = iter([output])
+    def read(fd, size):
+        return next(chunks, b'')
+    async def account():
+        return {'type':'claude-subscription', 'email':'test@example.test'}, None
+    async def stop(process):
+        pass
+    monkeypatch.setattr(worker.os, 'read', read)
+    monkeypatch.setattr(worker.os, 'close', lambda fd: None)
+    monkeypatch.setattr(worker, 'read_account', account)
+    monkeypatch.setattr(worker, 'stop', stop)
+    session.task = asyncio.create_task(session.read())
+    await session.task
+    assert session.error is None
+    assert session.state()['logged_in'] is True
+    assert session.state()['expires_in'] > 500
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('code_submitted,exit_code', [(False,0),(True,1)])
+async def test_login_failed_exit_does_not_accept_previous_account(worker,monkeypatch,code_submitted,exit_code):
+    from types import SimpleNamespace
+    session=worker.Login()
+    session.code_submitted=code_submitted
+    session.fd=123
+    session.process=SimpleNamespace(returncode=exit_code)
+    async def account():
+        raise AssertionError('must not accept previous credentials')
+    async def stop(process):
+        pass
+    monkeypatch.setattr(worker.os,'read',lambda *args:b'')
+    monkeypatch.setattr(worker.os,'close',lambda fd:None)
+    monkeypatch.setattr(worker,'read_account',account)
+    monkeypatch.setattr(worker,'stop',stop)
+    await session.read()
+    assert not session.account
+    assert session.error
+
+
+@pytest.mark.asyncio
+async def test_login_reads_real_pty_after_fast_child_exit(worker,monkeypatch):
+    import asyncio
+    import pty
+    session=worker.Login()
+    master,slave=pty.openpty()
+    session.fd=master
+    os.set_blocking(master,False)
+    session.code_submitted=True
+    session.process=await asyncio.create_subprocess_exec('/bin/sh','-c',"printf 'Login successful\\n'",stdout=slave,stderr=slave)
+    os.close(slave)
+    await session.process.wait()
+    async def account():
+        return {'type':'claude-subscription','email':'test@example.test'},None
+    monkeypatch.setattr(worker,'read_account',account)
+    session.task=asyncio.create_task(session.read())
+    await session.task
+    assert 'Login successful' in session.text
+    assert session.state()['logged_in']
+    assert not session.error

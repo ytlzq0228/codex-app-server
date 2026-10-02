@@ -24,14 +24,19 @@
     progress.setAttribute('aria-label', `${label}已用额度`);
     const caption = document.createElement('span');
     caption.className = 'usage-caption';
-    caption.textContent = window.unlimited ? '无限制' : `${label}：已用 ${window.used}%`;
+    const used = document.createElement('span');
+    used.textContent = window.unlimited ? '无限制' : `${label}：已用 ${window.used}%`;
     if (window.unlimited) progress.setAttribute('aria-valuetext', '无限制，已用 0%');
+    caption.append(used);
     meter.append(progress, caption);
     const reset = document.createElement('span');
     reset.className = 'usage-reset';
     reset.textContent = `重置：${window.resets_at != null ? resetTime(window.resets_at) : '—'}`;
+    used.title = used.textContent;
+    reset.title = reset.textContent;
+    if (!window.unlimited) caption.append(reset);
+    meter.title = used.textContent + (window.unlimited ? '' : '\n' + reset.textContent);
     line.append(meter);
-    if (!window.unlimited) line.append(reset);
     return line;
   };
   document.querySelectorAll('[data-rate-limits]').forEach(box => {

@@ -110,3 +110,44 @@ Official baselines:
 - https://developers.openai.com/api/docs/guides/streaming-responses
 - https://developers.openai.com/api/docs/guides/error-codes
 - https://developers.openai.com/api/docs/guides/rate-limits
+
+
+## Claude provider and Anthropic Messages (2026-10-02)
+
+Claude models must be explicitly configured with provider `claude`. The three
+generation routes share key authentication, provider grants, scheduling, account
+generation fencing, tool continuations, billing and request audit.
+
+| Capability | Claude via Responses / Chat | Anthropic `POST /v1/messages` |
+|---|---|---|
+| Text, images, streaming | Supported | Supported; native message/block SSE lifecycle |
+| System instructions | Responses instructions sent as CLI system prompt; Chat roles preserved in history | String or text blocks; cache hints ignored |
+| Client functions | Supported; Responses also supports custom grammar tools/namespaces | `tool_use` / `tool_result`, text and image results |
+| Tool choice / concurrency | auto / none; one pending call at a time | auto / none; any / tool rejected |
+| Structured output | JSON object / JSON Schema, incompatible with tools | `output_config.format` JSON Schema, incompatible with tools |
+| Reasoning effort | low / medium / high / xhigh / max | `output_config.effort` |
+| Continuation | `previous_response_id` for persisted keys, or guarded full history | Stable `metadata.user_id` plus verified history prefix; Claude Code session UUID extracted |
+| Cache accounting | Input includes cache read + creation | Input excludes cache; both cache classes reported separately |
+| Token limits / sampling / stop | Accepted, ignored; worker defaults | `max_tokens`, temperature, top_p, top_k, stop_sequences accepted, ignored |
+| Other advisory options | truncation, service_tier, cache retention, max_tool_calls, include ignored | thinking budget/display, cache_control, context_management, betas, speed, fallbacks, inference_geo ignored |
+| Thinking output | Not emitted | Not emitted in stage one; historical signatures discarded |
+| Unsupported structures | Existing security and unsupported-input validation remains | Prefill, server tools, MCP connectors, documents/PDF/files, attachments and containers rejected |
+| Token count | — | `POST /v1/messages/count_tokens` estimates JSON characters / 4, rounded up; authenticated and provider-authorized |
+| Finish reasons | stop / tool_calls | end_turn / tool_use; max_tokens, stop_sequence and refusal are not distinguished |
+| Batch / file APIs | Unsupported | Unsupported |
+
+Native requests require `anthropic-version` and accept either a gateway
+`x-api-key` or Bearer key. The optional `?beta=true` query is accepted;
+`anthropic-beta` headers remain available to request audit. Native aliases use
+`CODEX_GATEWAY_CLAUDE_NATIVE_MODEL_ALIASES` and must resolve to an enabled Claude
+model. Responses expose `request-id`, `anthropic-version`, `x-gateway-model`
+and `x-gateway-generation-policy: worker-defaults`; Claude OpenAI routes also
+expose the generation-policy header. Estimated token counts additionally expose
+`x-gateway-token-count: estimated`.
+
+Native errors use the Anthropic envelope. Capacity exhaustion maps to HTTP 529,
+subscription exhaustion to 429 and upstream 502 to 500. Once streaming starts,
+errors are SSE `event: error` frames and do not end with a successful message_stop.
+Client disconnects close the Worker stream and cancel its CLI process.
+
+Deployment and validation evidence: [Claude implementation](claude-implementation.md).

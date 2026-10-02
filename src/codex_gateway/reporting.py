@@ -207,5 +207,9 @@ async def subscription_cost(request: Request, month: str = Form(...), amount: De
 
 
 @router.get("/user/debug")
-async def debug(request: Request, identity=Depends(require_user)):
-    return render(request, identity, page="debug")
+async def debug(request: Request, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
+    from .providers import allowed_providers, provider_for
+    providers = await allowed_providers(db, identity.username)
+    models = [{"id": model, "provider": provider_for(model)}
+              for model in get_settings().public_models() if provider_for(model) in providers]
+    return render(request, identity, page="debug", debug_models=models)

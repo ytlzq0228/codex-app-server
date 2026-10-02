@@ -50,7 +50,7 @@
     pie.style.background=data.states.total?`conic-gradient(${stops.join(',')})`:'#e2e8f0';pie.setAttribute('role','img');pie.setAttribute('aria-label',`Worker 状态分布，共 ${data.states.total} 个，详见图例`);
     $('monitor-pie').replaceChildren(pie,list);
     const current = data.current_usage;
-    for (const provider of ['codex', 'gemini']) {
+    for (const provider of ['codex', 'gemini', 'claude']) {
       const target = $('monitor-usage-' + provider), pool = current?.data.providers?.[provider];
       const usageSeries = [['risk','综合风险'],['five_hour','5 小时窗口'],['week','周窗口']].map(([key,label],i) => ({key,label,color:['#e35b5b','#168aad','#8462cf'][i],value:d=>d.providers?.[provider]?.windows[key]?.used ?? null}));
       target.replaceChildren();

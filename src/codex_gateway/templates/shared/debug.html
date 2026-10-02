@@ -1,0 +1,14 @@
+<section class="panel">
+<h2>API 调试</h2><p>使用你的 Key 调用本站 API。请求经过正常认证、调度和用量记录；流式响应会实时显示。Key 仅保留在当前页面。</p>
+<form id="debug-form" class="stack-form">
+<label>API Key<input type="password" name="key" autocomplete="off" required></label>
+<label>接口<select name="endpoint"><option value="/v1/responses">Responses</option><option value="/v1/chat/completions">Chat Completions</option><option value="/v1/messages">Claude · Messages</option><option value="/v1/messages/count_tokens">Claude · Token 估算</option><option value="/v1/models">查询模型</option></select></label>
+<label>可用模型<select name="model"><option value="">选择模型</option>{% for model in debug_models %}<option value="{{ model.id }}" data-provider="{{ model.provider }}">{{ model.id }} · {{ model.provider }}</option>{% endfor %}</select></label>
+<p class="muted">模型按当前账号权限显示；请求仍以填写的 Key 权限为准。没有可选模型时，请贡献对应厂商的 Worker 或联系管理员授权并配置模型。</p>
+<label><input type="checkbox" name="stream">流式响应</label><button type="button" id="debug-example" class="button">填入请求示例</button>
+<p id="debug-help" class="muted"></p><label id="debug-body-label">请求 JSON<textarea name="body" rows="12" spellcheck="false"></textarea></label>
+<div class="row-actions"><button type="submit" class="button button-primary">发送请求</button><button type="button" id="debug-stop" class="button" disabled>停止请求</button></div>
+</form><p id="debug-status" role="status" aria-live="polite"></p><pre id="debug-headers"></pre><pre id="debug-output" tabindex="0" aria-label="API 响应"></pre>
+</section>
+{% include 'shared/client-setup.html' %}
+<script src="/static/debug.js?v=1" defer></script>

@@ -18,6 +18,7 @@ class ToolRun:
     reply: asyncio.Future | None = None
     call_id: str | None = None
     accepted_call_id: str | None = None
+    result_is_error: bool = False
     task: asyncio.Task | None = None
     claimed: bool = False
     thread_id: str | None = None
@@ -145,6 +146,10 @@ class ToolSessions:
             run.accepted_call_id=run.call_id
             self.retire((key,run.call_id), 'client_tool_result_duplicate')
             output=tool_outputs(request)[0][1]
+            if getattr(target, "provider", None) == "claude":
+                items = request.input if isinstance(request.input, list) else [request.input]
+                run.result_is_error = any(isinstance(item, dict) and item.get("call_id") == run.call_id
+                                          and item.get("is_error") is True for item in items)
             run.reply.set_result(output)
         else:
             if len(self.runs)>=self.limit or sum(r.target.connection_key.split(":",1)[0] == key for r in self.runs) >= 8:

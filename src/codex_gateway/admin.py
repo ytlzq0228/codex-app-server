@@ -343,7 +343,7 @@ async def default_worker(session: AsyncSession, settings: Settings) -> Worker:
 @router.post("/workers")
 async def create_worker(request: Request, name: str = Form(min_length=1, max_length=48), provider: str = Form("codex"), csrf_token: str = Form(...), admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
     verify_csrf(request, admin, csrf_token)
-    if provider not in {"codex", "gemini"}:
+    if provider not in {"codex", "gemini", "claude"}:
         raise HTTPException(400, "不支持的 Worker 类型")
     name = name.strip().lower().replace("_", "-")
     if not WORKER_NAME_RE.fullmatch(name):
@@ -420,9 +420,9 @@ async def delete_worker(request: Request, worker_id: UUID, csrf_token: str = For
 
 
 async def probe_worker_record(worker: Worker, session: AsyncSession, settings: Settings) -> dict:
-    if (worker.provider or "codex") == "gemini":
-        from .gemini_backend import probe_gemini
-        return await probe_gemini(worker, session, settings)
+    if (worker.provider or "codex") in {"gemini", "claude"}:
+        from .provider_accounts import probe_provider
+        return await probe_provider(worker, session, settings)
     from .contributions import update_account
     try:
         async with open_app_server(worker.endpoint, settings.app_server_token.get_secret_value(), settings.app_server_timeout_seconds) as app_server:
@@ -498,8 +498,8 @@ async def login_worker_endpoint(endpoint: str, settings: Settings, *, force: boo
 
 
 async def relogin_worker_record(worker, session, settings, *, force, poll_url):
-    if (worker.provider or "codex") == "gemini":
-        return {"message": "请在我的 Worker 页面使用 Gemini 登录窗口", "provider": "gemini"}
+    if (worker.provider or "codex") in {"gemini", "claude"}:
+        return {"message": f"请在我的 Worker 页面使用 {worker.provider.title()} 登录窗口", "provider": worker.provider}
     logged_out = False
 
     async def record_logout():

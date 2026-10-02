@@ -13,6 +13,7 @@ class Capabilities:
     reasoning: bool = False
 
 CAPABILITIES = {"codex": Capabilities(images=True, tools=True, structured_output=True, reasoning=True),
+                "claude": Capabilities(images=True, tools=True, structured_output=True, reasoning=True),
                 "gemini": Capabilities(images=True, tools=True, structured_output=True)}
 
 def provider_for(model):
@@ -28,6 +29,8 @@ def validate_capabilities(request):
         return
     if provider not in CAPABILITIES:
         reject("model", "This provider is not enabled", "provider_unavailable")
+    if provider == "claude":
+        return _validate_claude(request)
     items = request.input if isinstance(request.input, list) else [request.input]
     # Gemini's relay currently accepts text results only, including in full history.
     from .multimodal import content_parts
@@ -60,6 +63,14 @@ def validate_capabilities(request):
 def validate_chat_capabilities(request):
     if provider_for(request.model) == "codex":
         return
+    if provider_for(request.model) == "claude":
+        for field in ("seed", "frequency_penalty", "presence_penalty", "logit_bias", "verbosity", "audio", "function_call"):
+            if getattr(request, field, None) is not None:
+                reject(field, f"Claude does not support the {field} parameter")
+        request.parallel_tool_calls = False
+        if request.model_extra:
+            reject(next(iter(request.model_extra)), "Unrecognized Claude parameter")
+        return
     for field in ("stop", "seed", "frequency_penalty", "presence_penalty", "logit_bias",
                   "verbosity", "audio", "function_call"):
         if getattr(request, field, None) is not None:
@@ -67,6 +78,28 @@ def validate_chat_capabilities(request):
     request.parallel_tool_calls = False
     if request.model_extra:
         reject(next(iter(request.model_extra)), "Unrecognized Gemini parameter")
+
+
+def _validate_claude(request):
+    request.parallel_tool_calls = False
+    if request.reasoning is not None:
+        if set(request.reasoning) - {"effort"} or request.reasoning.get("effort") not in {"low", "medium", "high", "xhigh", "max"}:
+            reject("reasoning", "Claude effort must be low, medium, high, xhigh or max")
+    if request.text and request.text != {"format": {"type": "text"}}:
+        schema = request.output_schema()
+        if schema is None or set(request.text) != {"format"}:
+            reject("text", "Unsupported Claude text options")
+        from jsonschema.validators import validator_for
+        from jsonschema.exceptions import SchemaError
+        try:
+            validator_for(schema).check_schema(schema)
+        except SchemaError:
+            reject("text", "Invalid output JSON Schema")
+        from .client_tools import definitions
+        if definitions(request):
+            reject("text", "Combining Claude structured output with tools is not supported")
+    if request.model_extra:
+        reject(next(iter(request.model_extra)), "Unrecognized Claude parameter")
 
 
 async def allowed_providers(db, username):

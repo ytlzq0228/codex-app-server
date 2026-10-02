@@ -11,7 +11,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import httpx
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -102,7 +102,12 @@ async def lifespan(app: FastAPI):
     contribution_task = asyncio.create_task(account_monitor_loop(), name="worker-contributions") if settings.backend != "mock" else None
     from .monitoring import monitoring_loop
     monitoring_task = asyncio.create_task(monitoring_loop(), name="monitoring-snapshots")
+    from .claude_sessions import session_cleanup_loop
+    cleanup_task = asyncio.create_task(session_cleanup_loop(), name="claude-session-cleanup") if settings.backend != "mock" else None
     yield
+    if cleanup_task:
+        cleanup_task.cancel()
+        await asyncio.gather(cleanup_task, return_exceptions=True)
     monitoring_task.cancel()
     await asyncio.gather(monitoring_task, return_exceptions=True)
     if contribution_task:
@@ -133,6 +138,7 @@ app.include_router(contribution_router)
 app.add_middleware(RequestAuditMiddleware)
 from .gemini_native import GeminiNativeMiddleware
 app.add_middleware(GeminiNativeMiddleware)
+from .claude_native import ClaudeNativeMiddleware
 
 
 def utcnow() -> datetime:
@@ -178,7 +184,7 @@ async def quarantine_worker(worker_id, reason: str, kind: str = "connection") ->
         worker = await session.scalar(select(Worker).where(Worker.id == worker_id).execution_options(populate_existing=True))
         if not worker:
             return False
-        if (getattr(worker, "provider", None) or "codex") == "gemini" and kind != "connection":
+        if (getattr(worker, "provider", None) or "codex") in {"gemini", "claude"} and kind != "connection":
             worker.status = WorkerStatus.error
             worker.failure_kind = kind
             worker.failure_reason = reason[:500]
@@ -204,10 +210,10 @@ async def quarantine_worker(worker_id, reason: str, kind: str = "connection") ->
 
 
 async def recover_worker(worker: Worker) -> bool:
-    if (getattr(worker, "provider", None) or "codex") == "gemini":
-        from .gemini_backend import probe_gemini
+    if (getattr(worker, "provider", None) or "codex") in {"gemini", "claude"}:
+        from .provider_accounts import probe_provider
         from sqlalchemy.ext.asyncio import async_object_session
-        result = await probe_gemini(worker, async_object_session(worker), get_settings())
+        result = await probe_provider(worker, async_object_session(worker), get_settings())
         if result["ok"]:
             worker.recovered_at = utcnow()
         return result["ok"]
@@ -252,7 +258,7 @@ async def worker_recovery_loop() -> None:
             await asyncio.sleep(settings.worker_recovery_interval_seconds)
             async with SessionLocal() as session:
                 await expire_response_bindings(session)
-                workers = (await session.scalars(select(Worker).where(Worker.enabled.is_(True), ((Worker.status == WorkerStatus.error) | ((Worker.provider == "gemini") & (Worker.status == WorkerStatus.offline) & Worker.auth_mode.is_not(None)))).with_for_update(skip_locked=True))).all()
+                workers = (await session.scalars(select(Worker).where(Worker.enabled.is_(True), ((Worker.status == WorkerStatus.error) | ((Worker.provider.in_(["gemini", "claude"])) & (Worker.status == WorkerStatus.offline) & Worker.auth_mode.is_not(None)))).with_for_update(skip_locked=True))).all()
                 now = utcnow()
                 for worker in workers:
                     if not worker.retry_after or worker.retry_after <= now:
@@ -554,8 +560,8 @@ async def complete_with_failover(body: ResponseRequest, backend: CompletionBacke
             raise HTTPException(503, detail={"error": {"message": f"Timed out waiting for an available {target.provider} worker connection", "type": "server_error", "code": "worker_capacity_exceeded", "param": None}}, headers={"Retry-After": "5"}) from exc
         if target.worker_id and exc.kind != "account_changed":
             await quarantine_worker(target.worker_id, str(exc), exc.kind)
-        if target.provider == "gemini" and exc.kind == "limit":
-            raise HTTPException(429, detail={"error": {"message": "Gemini subscription quota is exhausted; retry later", "type": "rate_limit_error", "code": "provider_quota_exhausted", "param": None}}, headers={"Retry-After": "60"}) from exc
+        if target.provider in {"gemini", "claude"} and exc.kind == "limit":
+            raise HTTPException(429, detail={"error": {"message": f"{target.provider.title()} subscription quota is exhausted; retry later", "type": "rate_limit_error", "code": "provider_quota_exhausted", "param": None}}, headers={"Retry-After": "60"}) from exc
         if not (allow_retry and exc.safe_to_retry):
             raise
         reset_auto_resume(body, "worker_pre_turn_failure")
@@ -679,6 +685,7 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
     except Exception as exc:
         session_failure = isinstance(exc, WorkerFailure) and exc.kind == "session"
         tool_failure = isinstance(exc, WorkerFailure) and isinstance(exc.__cause__, ToolProtocolError)
+        request_failure = tool_failure or (target.provider == "claude" and isinstance(exc, WorkerFailure) and exc.kind == "request")
         capacity_failure = isinstance(exc, WorkerFailure) and exc.kind == "capacity"
         logger.exception("Responses backend failed: request_id=%s worker_id=%s failure_kind=%s", response_id,
                          target.worker_id, exc.kind if isinstance(exc, WorkerFailure) else type(exc).__name__)
@@ -691,10 +698,12 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
             "code": exc.__cause__.code if tool_failure else "previous_response_not_found" if session_failure else "worker_capacity_exceeded" if capacity_failure else "backend_error",
             "message": str(exc) if tool_failure else "The previous response session is no longer available" if session_failure else "Timed out waiting for an available Codex worker connection" if capacity_failure else "The Codex backend could not complete the request",
         }
-        if target.provider == "gemini":
-            error = {"code": "provider_quota_exhausted" if isinstance(exc, WorkerFailure) and exc.kind == "limit" else error["code"], "message": "Gemini subscription quota is exhausted" if isinstance(exc, WorkerFailure) and exc.kind == "limit" else str(exc.__cause__) if tool_failure else "Timed out waiting for an available Gemini worker connection" if capacity_failure else "Gemini could not complete the request"}
+        if target.provider in {"gemini", "claude"}:
+            error = {"code": "provider_quota_exhausted" if isinstance(exc, WorkerFailure) and exc.kind == "limit" else error["code"], "message": f"{target.provider.title()} subscription quota is exhausted" if isinstance(exc, WorkerFailure) and exc.kind == "limit" else str(exc.__cause__) if tool_failure else f"Timed out waiting for an available {target.provider.title()} worker connection" if capacity_failure else f"{target.provider.title()} could not complete the request"}
+        if request_failure and not tool_failure:
+            error = {"code": "invalid_request", "message": worker_failure_message(exc)}
         if audit := current_audit.get(): audit["rejection"] = error
-        await save_usage(response_id, principal, target, body.model, 400 if tool_failure else 404 if session_failure else 503 if capacity_failure else 502, started, error_code=error["code"], previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))
+        await save_usage(response_id, principal, target, body.model, 429 if target.provider == "claude" and error["code"] == "provider_quota_exhausted" else 400 if request_failure else 404 if session_failure else 503 if capacity_failure else 502, started, error_code=error["code"], previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))
         yield sse({"type": "error", "sequence_number": sequence, **error, "param": None}); sequence += 1
         failed = {**created, "status": "failed", "error": error}
         yield sse({"type": "response.failed", "sequence_number": sequence, "response": failed})
@@ -771,14 +780,17 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
                 retried = True
     except Exception as exc:
         tool_failure = isinstance(exc, WorkerFailure) and isinstance(exc.__cause__, ToolProtocolError)
+        request_failure = tool_failure or (target.provider == "claude" and isinstance(exc, WorkerFailure) and exc.kind == "request")
         capacity_failure = isinstance(exc, WorkerFailure) and exc.kind == "capacity"
         error_code = exc.__cause__.code if tool_failure else "worker_capacity_exceeded" if capacity_failure else "backend_error"
         error_message = str(exc) if tool_failure else "Timed out waiting for an available Codex worker connection" if capacity_failure else "The Codex backend could not complete the request"
-        if target.provider == "gemini":
+        if target.provider in {"gemini", "claude"}:
             error_code = "provider_quota_exhausted" if isinstance(exc, WorkerFailure) and exc.kind == "limit" else error_code
-            error_message = "Gemini subscription quota is exhausted" if error_code == "provider_quota_exhausted" else str(exc.__cause__) if tool_failure else "Timed out waiting for an available Gemini worker connection" if capacity_failure else "Gemini could not complete the request"
+            error_message = f"{target.provider.title()} subscription quota is exhausted" if error_code == "provider_quota_exhausted" else str(exc.__cause__) if tool_failure else f"Timed out waiting for an available {target.provider.title()} worker connection" if capacity_failure else f"{target.provider.title()} could not complete the request"
+        if request_failure and not tool_failure:
+            error_code, error_message = "invalid_request", worker_failure_message(exc)
         if audit := current_audit.get(): audit["rejection"] = {"code": error_code, "message": error_message}
-        await save_usage(completion_id, principal, target, body.model, 400 if tool_failure else 503 if capacity_failure else 502, started, error_code=error_code, request_params=body.model_dump(mode="json"))
+        await save_usage(completion_id, principal, target, body.model, 429 if target.provider == "claude" and error_code == "provider_quota_exhausted" else 400 if request_failure else 503 if capacity_failure else 502, started, error_code=error_code, request_params=body.model_dump(mode="json"))
         yield chat_sse({"error": {"message": error_message, "type": "invalid_request_error" if tool_failure else "server_error", "code": error_code}})
         yield chat_sse("[DONE]")
         return
@@ -857,7 +869,9 @@ async def retrieve_model(model_id: str, principal: ApiPrincipal = Depends(requir
 
 
 @app.post("/v1/chat/completions")
-async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrincipal = Depends(require_api_key), backend: CompletionBackend = Depends(get_backend), session: AsyncSession = Depends(get_session)):
+async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrincipal = Depends(require_api_key), backend: CompletionBackend = Depends(get_backend), session: AsyncSession = Depends(get_session), response: Response = None):
+    if response is not None and provider_for(body.model) == "claude":
+        response.headers["x-gateway-generation-policy"] = "worker-defaults"
     settings = get_settings()
     if body.model not in settings.public_models():
         return openai_error(400, f"Model '{body.model}' is not available", "model_not_found", param="model")
@@ -883,7 +897,7 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
     allow_retry = not pending_target and (execution_binding is None or (request._execution_auto_resume and target.provider == "codex")) and principal.pinned_worker_id is None
     await release_request_session(session)
     if body.stream:
-        return StreamingResponse(chat_completion_stream(body, request, backend, principal, target, allow_retry), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        return StreamingResponse(chat_completion_stream(body, request, backend, principal, target, allow_retry), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", **({"x-gateway-generation-policy": "worker-defaults"} if provider_for(body.model) == "claude" else {})})
     started = time.monotonic()
     completion_id, created = f"chatcmpl-{uuid4().hex}", int(time.time())
     try:
@@ -900,7 +914,9 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
 
 
 @app.post("/v1/responses")
-async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depends(require_api_key), backend: CompletionBackend = Depends(get_backend), session: AsyncSession = Depends(get_session)):
+async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depends(require_api_key), backend: CompletionBackend = Depends(get_backend), session: AsyncSession = Depends(get_session), response: Response = None):
+    if response is not None and provider_for(body.model) == "claude":
+        response.headers["x-gateway-generation-policy"] = "worker-defaults"
     settings = get_settings()
     if body.model not in settings.public_models():
         return openai_error(400, f"Model '{body.model}' is not available", "model_not_found", param="model")
@@ -942,7 +958,7 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
         track_backend(target, None, source="selected_worker")
     await release_request_session(session)
     if body.stream:
-        return StreamingResponse(response_stream(body, backend, principal, target, public_previous_id, not pending_target and (binding is None or (body._execution_auto_resume and target.provider == "codex")) and principal.pinned_worker_id is None), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+        return StreamingResponse(response_stream(body, backend, principal, target, public_previous_id, not pending_target and (binding is None or (body._execution_auto_resume and target.provider == "codex")) and principal.pinned_worker_id is None), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", **({"x-gateway-generation-policy": "worker-defaults"} if provider_for(body.model) == "claude" else {})})
     started = time.monotonic()
     try:
         result, target = await complete_with_failover(body, backend, principal, target, allow_retry=not pending_target and (binding is None or (body._execution_auto_resume and target.provider == "codex")) and principal.pinned_worker_id is None)
@@ -960,3 +976,21 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
     response_id = f"resp_{uuid4().hex}"
     await save_usage(response_id, principal, target, body.model, 200, started, result, persist_binding=True, previous_response_id=public_previous_id, request_params=body.model_dump(mode="json"))
     return response_object(response_id, body, result, previous_response_id=public_previous_id)
+
+
+@app.post("/v1/responses/count_tokens", include_in_schema=False)
+async def estimate_claude_tokens(body: ResponseRequest, principal: ApiPrincipal = Depends(require_api_key), session: AsyncSession = Depends(get_session)):
+    from .providers import authorize_model
+    if body.model not in get_settings().public_models() or provider_for(body.model) != "claude":
+        return openai_error(404, "Claude model is not available", "model_not_found", param="model")
+    await authorize_model(session, principal, body.model)
+    if unsupported := body.unsupported():
+        return openai_error(400, unsupported[1], "unsupported_parameter", param=unsupported[0])
+    validate_capabilities(body)
+    import math
+    chars = len(json.dumps({"input": body.input, "system": body.instructions, "tools": body.tools}, ensure_ascii=False))
+    return {"input_tokens": math.ceil(chars / 4)}
+
+
+# Wrap the HTTP guards too, so size/errors and request IDs retain native wire format.
+app.add_middleware(ClaudeNativeMiddleware)

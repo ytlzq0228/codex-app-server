@@ -92,7 +92,7 @@ def pool_usage(workers, weights, readings):
     result['version'] = 4
     result['providers'] = {
         provider: _pool_usage([w for w in workers if (getattr(w, 'provider', None) or 'codex') == provider], weights, readings)
-        for provider in ('codex', 'gemini')
+        for provider in ('codex', 'gemini', 'claude')
     }
     return result
 
@@ -105,6 +105,9 @@ async def read_usage(worker, semaphore):
                 if (getattr(worker, 'provider', None) or 'codex') == 'gemini':
                     from .gemini_backend import worker_rpc
                     return str(worker.id), provider_usage(await worker_rpc(worker.endpoint, settings, '/rate-limits'))
+                if getattr(worker, 'provider', None) == 'claude':
+                    from .gemini_backend import worker_rpc
+                    return str(worker.id), summarize_windows(await worker_rpc(worker.endpoint, settings, '/rate-limits'))
                 if (getattr(worker, 'provider', None) or 'codex') != 'codex':
                     return str(worker.id), {}
                 async with open_app_server(worker.endpoint, settings.app_server_token.get_secret_value(), 20) as server:

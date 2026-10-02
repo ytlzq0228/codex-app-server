@@ -39,27 +39,6 @@ document.querySelectorAll('form[data-portal]').forEach(form => form.addEventList
   finally { button.disabled = false; }
 }));
 document.getElementById('portal-close').onclick = () => location.reload();
-let controller;
-const debug = document.getElementById('debug-form');
-if (debug) {
-  document.getElementById('debug-stop').onclick = () => controller?.abort();
-  debug.onsubmit = async event => {
-    event.preventDefault(); controller?.abort(); controller = new AbortController();
-    const output = document.getElementById('debug-output'), status = document.getElementById('debug-status');
-    output.textContent = ''; status.textContent = '请求中…';
-    const started = performance.now();
-    try {
-      const fields = new FormData(debug), endpoint = fields.get('endpoint');
-      const response = await fetch(endpoint, {method:endpoint === '/v1/models' ? 'GET':'POST', headers:{Authorization:'Bearer '+fields.get('key'), 'Content-Type':'application/json'}, body:endpoint === '/v1/models' ? undefined:JSON.stringify(JSON.parse(fields.get('body'))), signal:controller.signal});
-      status.textContent = 'HTTP '+response.status;
-      const reader = response.body.getReader(), decoder = new TextDecoder();
-      while (true) { const {done,value} = await reader.read(); if(done) break; output.textContent += decoder.decode(value,{stream:true}); }
-      output.textContent += decoder.decode();
-      status.textContent += ' · '+Math.round(performance.now()-started)+' ms';
-    } catch(error) { status.textContent = error.message; }
-  };
-}
-
 // Save each price independently without discarding edits in other rows.
 document.querySelectorAll('[data-price-form]').forEach(form => {
   const row = form.closest('tr');
@@ -82,7 +61,7 @@ document.querySelectorAll('[data-price-form]').forEach(form => {
       const status = row.querySelector('[data-price-status]');
       status.textContent = '已定价'; status.className = 'badge badge-ok';
       const current = new FormData(form);
-      message.textContent = ['model','input_price','output_price'].every(key => current.get(key) === submitted.get(key)) ? '已保存' : '有新修改未保存';
+      message.textContent = ['model','input_price','output_price','cache_read_price','cache_write_price'].every(key => current.get(key) === submitted.get(key)) ? '已保存' : '有新修改未保存';
     } catch (error) { message.textContent = error.message; message.className = 'price-error'; }
     finally { button.disabled = false; }
   });

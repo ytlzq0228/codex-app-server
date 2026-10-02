@@ -23,3 +23,28 @@ Declarations are compiled before opening an HTTP stream. Invalid or unsupported 
 Validation uses at most four disposable parser processes concurrently, each with a 3-second wall timeout, 2-second CPU limit, and 256 MiB address-space limit on Linux. Declarations are limited to 32 KiB and generated grammar input to 256 KiB. Parser complexity limits also apply. Successful declaration checks are cached in a bounded 128-entry cache. Cancellation/timeouts kill and reap the parser process; the parser does not inherit gateway credentials. Worker execution policy is unchanged.
 
 Protocol reference: https://developers.openai.com/api/docs/guides/function-calling
+
+
+## Claude Code relay
+
+Claude uses the same bounded tool-session store, key isolation, duplicate-result
+rejection and 300-second expiry as the other backends. The Worker runs the
+official CLI with built-in tools disabled and exposes only the declared client
+tools through its per-turn MCP relay. It never executes client Bash/Read calls;
+the requesting client does so and returns the result.
+
+Original tool names are retained. Namespaces become `namespace__name`; colliding
+or overlong encodings fall back to stable gateway aliases. JSON Schema and custom
+grammar validation happen before delivery, with at most two correction attempts.
+Text and image results are relayed through `/tool-result`; image URLs are resolved
+by the bounded public-address downloader.
+
+Anthropic clients receive `tool_use.id = call_id` and must return that exact value
+as `tool_result.tool_use_id`. Only one pending result is accepted per request.
+Returning historical calls as new pending results, changing model/tools mid-call,
+or returning a result under another key fails explicitly. Client-side tool calls
+are incompatible with structured-output mode.
+
+Claude Code may append system reminders after its tool result. The gateway keeps
+the original history for audit and includes those reminders as text in the relay
+reply. A trailing new user message is never silently consumed as a tool result.

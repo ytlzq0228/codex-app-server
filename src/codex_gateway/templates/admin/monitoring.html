@@ -5,7 +5,7 @@
   <section class="panel">
     <div class="section-head"><div><p class="eyebrow">SUBSCRIPTION POOL</p><h2>当前订阅池总用量</h2></div><a href="/admin/finance">配置套餐权重</a></div>
     <p class="muted">Codex 与 Gemini 独立计算。各 Provider 内按套餐权重加权，显示已用比例及剩余可用比例。</p>
-    {% for provider, label in [('codex', 'Codex'), ('gemini', 'Gemini')] %}
+    {% for provider, label in [('codex', 'Codex'), ('gemini', 'Gemini'), ('claude', 'Claude')] %}
     <section class="monitor-provider" aria-labelledby="monitor-{{ provider }}-title"><h3 id="monitor-{{ provider }}-title">{{ label }}</h3><div id="monitor-usage-{{ provider }}" class="monitor-metrics"></div><div id="monitor-chart-{{ provider }}" class="monitor-chart"></div></section>
     {% endfor %}
     <p class="muted">每小时采样，包含仍登录的 Worker（含停用及隔离），排除未登录及已删除记录；同一账号的多个 Worker 分别计入。未知套餐按权重 1；读取成功且确认不限额的窗口按用量 0% 计入，读取失败为未知。历史中尚未按 Provider 区分的采样不混入新图表。</p>

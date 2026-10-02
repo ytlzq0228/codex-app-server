@@ -45,7 +45,7 @@ def normal_item(item):
     if kind in {"function_call_output", "custom_tool_call_output"}:
         output = item.get("output")
         return {"type": kind, "call_id": item.get("call_id"),
-                "output": semantic_content(output)}
+                "output": semantic_content(output), **({"is_error": True} if item.get("is_error") is True else {})}
     return None
 
 
@@ -218,7 +218,7 @@ async def prepare(request, principal, endpoint, audit, *, pending_thread=None, b
                     request._execution_auto_resume = True
                     action, reason = "resume", "explicit_identity_and_history_prefix"
         if provider != "codex" and row.state != "new" and action == "new_thread":
-            raise conflict("Gemini conversation cannot be safely resumed; start a new conversation", "conversation_resume_unavailable")
+            raise conflict("Provider conversation cannot be safely resumed; start a new conversation", "conversation_resume_unavailable")
         token = str(uuid4())
         claim = {"logical_id": logical, "token": token, "history": checkpoint,
                  "config": (row.config_hash if pending_thread and row.config_hash else configuration(request)),

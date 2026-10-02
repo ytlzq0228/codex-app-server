@@ -82,7 +82,7 @@ async def workers_page(request: Request, identity=Depends(require_user), db: Asy
 @router.post("/user/workers")
 async def contribute_worker(request: Request, name: str = Form("", max_length=80), provider: str = Form("codex"), suffix: str = Form(""), csrf_token: str = Form(...), identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     verify_csrf(request, identity, csrf_token)
-    if provider not in {"codex", "gemini"}:
+    if provider not in {"codex", "gemini", "claude"}:
         raise HTTPException(400, "不支持的厂商")
     # Names passed to Docker are server-generated, preventing name collisions or
     # access to another owner's retained Docker volumes.
@@ -106,7 +106,7 @@ async def contribute_worker(request: Request, name: str = Form("", max_length=80
     if await db.scalar(select(Worker.id).where(Worker.name == label)):
         raise HTTPException(409, "该 Worker 序号已经使用，请选择其他数字")
     worker = Worker(provider=provider, owner_username=identity.username, name=label,
-                    container_name=container_name, endpoint=f"{'http' if provider == 'gemini' else 'ws'}://{container_name}:4500", status=WorkerStatus.offline)
+                    container_name=container_name, endpoint=f"{'http' if provider in {'gemini', 'claude'} else 'ws'}://{container_name}:4500", status=WorkerStatus.offline)
     db.add(worker)
     try:
         await db.flush()
@@ -150,9 +150,9 @@ async def contributor_account(request: Request, worker_id: UUID, csrf_token: str
     verify_csrf(request, identity, csrf_token)
     worker = await owned_worker(request, db, worker_id)
     settings = get_settings()
-    if (worker.provider or "codex") == "gemini":
-        from .gemini_backend import probe_gemini
-        return await probe_gemini(worker, db, settings)
+    if (worker.provider or "codex") in {"gemini", "claude"}:
+        from .provider_accounts import probe_provider
+        return await probe_provider(worker, db, settings)
     try:
         async with open_app_server(worker.endpoint, settings.app_server_token.get_secret_value(), 20) as server:
             account = (await server.call("account/read", {"refreshToken": True})).get("account")
@@ -224,12 +224,12 @@ async def refresh_worker_account(worker_id):
         worker = await db.scalar(select(Worker).where(Worker.id == worker_id, Worker.enabled.is_(True), Worker.endpoint != "removed://worker").with_for_update(skip_locked=True))
         if not worker:
             return
-        if (worker.provider or "codex") == "gemini":
+        if (worker.provider or "codex") in {"gemini", "claude"}:
             if worker.status == WorkerStatus.ready and worker.account_checked_at and (datetime.now(timezone.utc) - worker.account_checked_at).total_seconds() < 300:
                 return
-            from .gemini_backend import probe_gemini
+            from .provider_accounts import probe_provider
             if not worker.retry_after or worker.retry_after <= datetime.now(timezone.utc):
-                await probe_gemini(worker, db, settings, inference=worker.status in {WorkerStatus.offline, WorkerStatus.error})
+                await probe_provider(worker, db, settings, inference=worker.status in {WorkerStatus.offline, WorkerStatus.error})
             return
         if worker.status in {WorkerStatus.offline, WorkerStatus.error}:
             if not worker.retry_after or worker.retry_after <= datetime.now(timezone.utc):
@@ -281,20 +281,21 @@ async def account_monitor_loop():
 
 
 async def read_worker_rate_limits(worker: Worker, db: AsyncSession):
-    if worker.provider == "gemini":
+    if worker.provider in {"gemini", "claude"}:
         if not worker.auth_mode or worker.failure_kind == "logged_out":
             raise HTTPException(409, "Worker 未登录，请先登录并探测")
         from .gemini_backend import worker_rpc
-        endpoint = worker.endpoint
+        endpoint, provider = worker.endpoint, worker.provider
         await db.rollback()
         try:
-            from .rate_limits import provider_usage
-            return provider_usage(await worker_rpc(endpoint, get_settings(), "/rate-limits"))
+            from .rate_limits import provider_usage, summarize_windows
+            payload = await worker_rpc(endpoint, get_settings(), "/rate-limits")
+            return summarize_windows(payload) if provider == "claude" else provider_usage(payload)
         except httpx.HTTPStatusError as exc:
             raise HTTPException(409 if exc.response.status_code == 409 else 502,
-                                "Gemini 正在执行或登录，请稍后重试" if exc.response.status_code == 409 else "官方 CLI 暂未返回额度，请稍后重试")
+                                "订阅 Worker 正在执行或登录，请稍后重试" if exc.response.status_code == 409 else "官方 CLI 暂未返回额度，请稍后重试")
         except httpx.HTTPError:
-            raise HTTPException(502, "Gemini 额度查询暂时不可用")
+            raise HTTPException(502, "订阅 Worker 额度查询暂时不可用")
     if (worker.provider or "codex") != "codex":
         raise HTTPException(400, "该厂商尚不支持额度查询")
     from .rate_limits import summarize_windows
@@ -326,6 +327,8 @@ async def admin_worker_rate_limits(request: Request, worker_id: UUID, csrf_token
     return await read_worker_rate_limits(worker, db)
 
 
+@router.post("/admin/workers/{worker_id}/provider-login/{action}")
+@router.post("/user/workers/{worker_id}/provider-login/{action}")
 @router.post("/admin/workers/{worker_id}/gemini-login/{action}")
 @router.post("/user/workers/{worker_id}/gemini-login/{action}")
 async def gemini_login_action(request: Request, worker_id: UUID, action: str,
@@ -337,7 +340,7 @@ async def gemini_login_action(request: Request, worker_id: UUID, action: str,
     if admin_path and not is_admin(request):
         raise HTTPException(403, "仅管理员可以管理其他用户的 Worker")
     worker = await owned_worker(request, db, worker_id, allow_admin_all=admin_path)
-    if worker.provider != "gemini" or action not in {"start", "status", "input", "logout"}:
+    if worker.provider not in {"gemini", "claude"} or action not in {"start", "status", "input", "logout"}:
         raise HTTPException(400, "Invalid login operation")
     from .gemini_backend import worker_rpc
     try:
@@ -345,23 +348,23 @@ async def gemini_login_action(request: Request, worker_id: UUID, action: str,
                                    {"session_id": session_id, "action": key, "code": code, "menu_id": menu_id})
     except httpx.HTTPStatusError as exc:
         raise HTTPException(409 if exc.response.status_code == 409 else 502,
-                            "Worker 正忙，请等待当前操作结束" if exc.response.status_code == 409 else "Gemini 登录操作未完成，请稍后重试")
+                            "Worker 正忙，请等待当前操作结束" if exc.response.status_code == 409 else "订阅 Worker 登录操作未完成，请稍后重试")
     except httpx.HTTPError:
-        raise HTTPException(502, "Gemini 服务暂时不可用")
+        raise HTTPException(502, "订阅 Worker 服务暂时不可用")
     if action == "logout":
         await update_account(worker, None, force_invalidate=True)
         worker.status = WorkerStatus.offline
         worker.failure_kind = "logged_out"
-        worker.failure_reason = "用户已退出 Gemini 登录"
+        worker.failure_reason = "用户已退出订阅账号登录"
         await reconcile_worker(db, worker)
         await db.commit()
-        return payload
+        return {**payload, "message": "已退出订阅账号，贡献额度已重新计算，已有会话已失效"}
     if payload.get("logged_in") and payload.get("account"):
         await update_account(worker, payload["account"])
         worker.status = WorkerStatus.offline
         worker.failure_kind = worker.failure_reason = worker.quarantined_at = None
         worker.retry_after = None
-        from .gemini_backend import probe_gemini
-        payload["verification"] = await probe_gemini(
+        from .provider_accounts import probe_provider
+        payload["verification"] = await probe_provider(
             worker, db, get_settings(), login_session=payload["session_id"])
     return payload

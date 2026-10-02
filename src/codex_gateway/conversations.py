@@ -43,6 +43,13 @@ def explicit_identity(params, observation, key, endpoint, request_id):
         return sorted({v for v in result if isinstance(v, str) and v and len(v) <= 256
                        and not v.startswith(('[REDACTED]', '[OMITTED:', '[DEPTH LIMIT]'))})
     threads = values('thread_id', 'thread-id')
+    user_id = (params.get("metadata") or {}).get("user_id")
+    from .providers import provider_for
+    if provider_for(params.get("model", "")) == "claude" and isinstance(user_id, str) and user_id and len(user_id) <= 512:
+        import re
+        match = re.search(r"(?:^|_)session_([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:$|_)", user_id)
+        threads = sorted(set(threads + [match.group(1).lower() if match else user_id]))
+
     installations = values('installation_id', 'x-codex-installation-id')
     if isinstance(cm.get('x-codex-installation-id'), str):
         installations = sorted(set(installations + [cm['x-codex-installation-id']]))

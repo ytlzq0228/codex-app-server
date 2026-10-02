@@ -68,7 +68,9 @@ async def overview(request: Request, identity=Depends(require_user), db: AsyncSe
 async def account(request: Request, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     keys = (await db.scalars(select(ApiKey).where(ApiKey.owner_username == identity.username, ApiKey.deleted_at.is_(None)))).all()
     from .quota import quota_summary
-    return render(request, identity, page="account", keys=keys, quota=await quota_summary(db, identity.username))
+    from .providers import allowed_providers
+    return render(request, identity, page="account", keys=keys, quota=await quota_summary(db, identity.username),
+                  account_providers=sorted(await allowed_providers(db, identity.username)))
 
 
 @router.post("/user/account/key")
@@ -173,14 +175,14 @@ async def edit_user(request: Request, username: str, role: str = Form(...), emai
 
 @router.post("/admin/users/{username}/providers")
 async def edit_provider_grants(request: Request, username: str, codex: bool = Form(False),
-                               gemini: bool = Form(False), csrf_token: str = Form(...),
+                               gemini: bool = Form(False), claude: bool = Form(False), csrf_token: str = Form(...),
                                identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
     verify_csrf(request, identity, csrf_token)
     user = await db.scalar(select(User).where(User.username == username).with_for_update())
     if not user:
         raise HTTPException(404, "用户不存在")
     authorize_role(request.state.user, user.role, user.role)
-    user.provider_grants = [name for name, enabled in (("codex", codex), ("gemini", gemini)) if enabled]
+    user.provider_grants = [name for name, enabled in (("codex", codex), ("gemini", gemini), ("claude", claude)) if enabled]
     await db.commit()
     return {"message": "Provider 额外授权已更新，对用户名下所有 Key 立即生效"}
 

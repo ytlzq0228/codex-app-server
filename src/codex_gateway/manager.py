@@ -17,7 +17,7 @@ WORKSPACE_SLOT_COUNT = int(os.environ.get("CODEX_MAX_WS_PER_KEY_WORKER", "10"))
 
 class WorkerSpec(BaseModel):
     name: str
-    provider: Literal["codex", "gemini"] = "codex"
+    provider: Literal["codex", "gemini", "claude"] = "codex"
 
 
 def authorize(authorization: str | None) -> None:
@@ -47,20 +47,27 @@ def create_worker(spec: WorkerSpec, authorization: str | None = Header(default=N
     authorize(authorization)
     if not NAME_RE.fullmatch(spec.name):
         raise HTTPException(400, "invalid worker name")
+    if spec.provider == "claude":
+        image = os.environ.get("CLAUDE_WORKER_IMAGE", "codex-claude-worker:2.1.287")
+    elif spec.provider == "gemini":
+        image = os.environ.get("GEMINI_WORKER_IMAGE", "codex-antigravity-worker:1.2.12")
+    else:
+        image = os.environ["CODEX_WORKER_IMAGE"]
+    home = {"claude": "/home/claude", "gemini": "/home/agy", "codex": "/home/codex/.codex"}[spec.provider]
     try:
         container = client.containers.run(
-            os.environ.get("GEMINI_WORKER_IMAGE", "codex-antigravity-worker:1.2.12") if spec.provider == "gemini" else os.environ["CODEX_WORKER_IMAGE"], name=spec.name, detach=True,
+            image, name=spec.name, detach=True,
             environment={"CODEX_WORKER_TOKEN": os.environ["CODEX_WORKER_TOKEN"]},
             labels={MANAGED_LABEL: "true", "io.codex-gateway.worker": spec.name, "io.codex-gateway.provider": spec.provider},
             network=os.environ["CODEX_DOCKER_NETWORK"], read_only=True,
-            volumes={(f"{spec.name}-gemini-home" if spec.provider == "gemini" else f"{spec.name}-codex-home"): {"bind": "/home/agy" if spec.provider == "gemini" else "/home/codex/.codex", "mode": "rw"}, f"{spec.name}-workspaces": {"bind": "/workspace", "mode": "rw"}},
+            volumes={f"{spec.name}-{spec.provider}-home": {"bind": home, "mode": "rw"}, f"{spec.name}-workspaces": {"bind": "/workspace", "mode": "rw"}},
             tmpfs={"/tmp": "size=256m,nosuid,nodev", "/run/codex": "size=1m,noexec,nosuid,nodev,uid=10001,gid=10001"},
             cap_drop=["ALL"], security_opt=["no-new-privileges:true"], pids_limit=256,
             mem_limit="4g", nano_cpus=2_000_000_000, restart_policy={"Name": "unless-stopped"},
         )
     except APIError as exc:
         raise HTTPException(409, "could not create worker") from exc
-    return {"id": container.id, "name": spec.name, "endpoint": f"{'http' if spec.provider == 'gemini' else 'ws'}://{spec.name}:4500"}
+    return {"id": container.id, "name": spec.name, "endpoint": f"{'http' if spec.provider in {'gemini', 'claude'} else 'ws'}://{spec.name}:4500"}
 
 
 @app.put("/workers/{name}/workspaces/{workspace_id}")

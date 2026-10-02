@@ -99,3 +99,18 @@ and all Gemini Workers; an older Worker returns an explicit capability error.
 
 Gemini client tool results remain text-only. This feature supports image input
 and text output, not image generation or editing.
+
+
+## Claude images
+
+Claude receives native Anthropic base64 image blocks, without an image-reading
+tool. OpenAI URL/data-image input and Anthropic `image.source` base64/URL input
+are converted to the same Worker content. Images in client tool results are also
+supported.
+
+The gateway accepts PNG/JPEG/GIF/WEBP, checks their MIME signatures, caps each
+image at 10 MiB and each turn at 20 images / 20 MiB decoded. The configured total
+request-byte limit still applies to base64 JSON. Remote downloads reuse the
+public-IP-only resolver, redirect validation, TLS verification, timeout and byte
+limits; no Worker or gateway credentials are sent to the image host. Documents,
+PDFs, file IDs and private-network image URLs are unsupported.

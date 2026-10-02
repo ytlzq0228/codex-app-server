@@ -8,7 +8,9 @@
 <a id="gemini-login-link" class="button button-primary button-wide" target="_blank" rel="noopener noreferrer">打开 Google 授权页面</a>
 <form id="gemini-code-form" class="stack-form"><label for="gemini-auth-code">授权码<input id="gemini-auth-code" type="password" autocomplete="off" maxlength="4096" placeholder="粘贴授权页面返回的授权码" required></label><p class="form-help">使用拥有订阅权益的账号完成授权。项目与许可证将在登录过程中选择。</p><button class="button button-primary" type="submit">确认授权</button></form>
 </div>
+<p id="provider-login-expiry" class="muted" role="status"></p>
+<button id="provider-login-retry" class="button" type="button" hidden>重试</button>
 <dl id="gemini-login-account" class="gemini-login-account" hidden></dl>
 <div class="dialog-actions"><button class="button" type="button" data-modal-close>关闭</button></div>
 </dialog>
-<script src="/static/gemini-login.js?v=3" defer></script>
+<script src="/static/gemini-login.js?v=5" defer></script>

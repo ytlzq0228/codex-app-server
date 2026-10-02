@@ -144,7 +144,8 @@ class ResponseRequest(OpenAIRequestModel):
             return "conversation", "The conversation parameter is not supported; use previous_response_id"
         if self.prompt is not None:
             return "prompt", "Prompt templates are not supported"
-        if self.top_logprobs is not None or (self.include and "message.output_text.logprobs" in self.include):
+        from .providers import provider_for
+        if self.top_logprobs is not None or (provider_for(self.model) != "claude" and self.include and "message.output_text.logprobs" in self.include):
             return "top_logprobs", "Token log probabilities are not supported by this Codex gateway"
         return None
 

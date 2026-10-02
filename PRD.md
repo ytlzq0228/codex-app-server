@@ -489,3 +489,24 @@ Worker 状态和历史波动图表放在同一个d容器里面，左右布局。
 页面中按钮与输入框或者选择框控件水平没有居中，请优化前端，高度对齐，水平居中
 
 /user/account页面，修改密码功能改成一个按钮，然后弹窗输入新老密码。另外，如果没有配置过密码，是纯google开户的用户，不显示修改密码功能
+
+
+这个项目目前已经完成适配codex appserver和gemini agy worker的能力。包含chat response 图片 工具。请查看现有的系统逻辑，评估并设计增加对claude模型的支持能力：
+1、新建新的claude类型的worker
+2、API请求的时候传入claude的模型名字，则命中新增的claude转发逻辑。
+3、新增的claude的转发逻辑不要影响现有的openAI和gemini转发逻辑
+4、测试环境<deploy-user>@<test-host>.你可以直接在测试环境上测试worker和claude cli客户端。在测试环境上使用127.0.0.1进行能力调用。
+5、我们希望实现该服务尽可能对其原生claude API的所有能力。所有调用能力和格式尽可能follow原生API。
+6、你可以在测试环境上进行各种测试。最终的开发你不需要全部完成，我会让之前写这个系统的agent来使用你的方案继续完成后面的开发动作
+7、有问题通过表单的方式问我
+
+双活方案
+参考服务器部署方案查看现有的服务器端环境
+目前本系统的环境为 <deploy-user>@<app-1>主/已部署当前版本、<deploy-user>@<app-2>备/新机器
+本机高可用方案：
+1、使用DB Proxy连接目前的PG数据库集群。迁移现有的本地数据库内的实例到数据库集群
+2、<app-1>和<app-2>均支持用户流量接入，两个APP节点双活
+3、<app-1>和<app-2>均运行worker管理和docker服务。所有用户的Worker 50 50创建在两个APP节点上，创建worker的时候，选择当前worker负载低的APP节点创建1个新worker，用户无感，系统自动选择。用户的一个账号只在one of two APP nodes上创建，不需要创建冗余docker。单一APP节点挂掉的情况下，系统降级后只少有一半的活跃worker可用。
+4、不管用户流量从app-01还是app-02进入。均可以使用本app本地的worker或者跨app节点使用其他的worker。本地worker还是跨app worker调度算法和优先级完全相同。目前库内已经有worker状态表。看两个app节点如何维护这张表，以及如何抽象出共享状态的worker管理。
+5、检查系统全部逻辑，保证app运行内存尽可能做到无状态，保证用户在切换app节点的时候的状态连续性。
+6、测试环境<deploy-user>@<test-host-2>。

@@ -58,6 +58,17 @@ def definitions(request):
 
 def tool_outputs(request):
     items = request.input if isinstance(request.input,list) else [request.input]
+    # Claude Code appends per-turn system reminders after tool_result blocks.
+    # Preserve those reminders in the relay reply while retaining the original
+    # request/history for audit and prefix verification. A new user message is
+    # deliberately not consumed as a tool result.
+    from .providers import provider_for
+    reminders = []
+    if provider_for(getattr(request, "model", "")) == "claude":
+        items = list(items)
+        while items and isinstance(items[-1], dict) and items[-1].get("role") in {"system", "developer"}:
+            reminder = items.pop()
+            reminders.insert(0, request._item_text(reminder))
     outputs = []
     for item in reversed(items):
         if not isinstance(item,dict) or item.get('type') not in {'function_call_output','custom_tool_call_output'}:
@@ -75,7 +86,13 @@ def tool_outputs(request):
         outputs.append((call_id,output))
     if len({i for i,_ in outputs})!=len(outputs):
         raise ToolProtocolError('Duplicate tool output call_id')
-    return list(reversed(outputs))
+    outputs = list(reversed(outputs))
+    if outputs and reminders:
+        call_id, output = outputs[-1]
+        extra = "\n\n".join(reminders)
+        output = output + "\n\n" + extra if isinstance(output, str) else [*output, {"type": "input_text", "text": extra}]
+        outputs[-1] = (call_id, output)
+    return outputs
 
 
 def validate(request):

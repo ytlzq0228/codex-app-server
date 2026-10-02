@@ -1,23 +1,19 @@
-"""Antigravity transport, kept separate from the existing Codex backend."""
+"""Claude Code transport, kept separate from the existing Codex backend."""
 import json
 import logging
+from contextlib import aclosing
 from datetime import datetime, timedelta, timezone
 import httpx
 from jsonschema.exceptions import ValidationError
-from .backend import AppServerBackend, WorkerFailure, classify_worker_failure
+from .backend import WorkerFailure, classify_worker_failure
 from .schemas import BackendResult, BackendStreamEvent
 from .client_tools import definitions, dynamic_specs, public_call, tool_outputs, ToolProtocolError
 from .grammar_tools import call_matches_grammar
 from .tool_sessions import ToolSessions
 
-async def worker_rpc(endpoint, settings, path, payload=None):
-    async with httpx.AsyncClient(timeout=90 if path == "/login/verify" else 45) as client:
-        response = await client.post(endpoint + path, json=payload or {},
-            headers={"Authorization": "Bearer " + settings.app_server_token.get_secret_value()})
-        response.raise_for_status()
-        return response.json()
+from .gemini_backend import worker_rpc
 
-class GeminiAdapter:
+class ClaudeAdapter:
     def __init__(self, settings):
         self.settings = settings
         self.tool_sessions = ToolSessions(self._turn_events)
@@ -26,8 +22,9 @@ class GeminiAdapter:
         try:
             events = (self.tool_sessions.stream(request, target) if definitions(request) or tool_outputs(request)
                       else self._turn_events(request, target))
-            async for event in events:
-                yield event
+            async with aclosing(events):
+                async for event in events:
+                    yield event
         except ToolProtocolError as exc:
             raise WorkerFailure(str(exc), kind="request") from exc
 
@@ -41,65 +38,40 @@ class GeminiAdapter:
             from .models import Worker
             async with SessionLocal() as db:
                 worker = await db.get(Worker, target.worker_id)
-                if not worker or worker.provider != "gemini" or worker.execution_generation != target.worker_generation or worker.endpoint != target.endpoint:
+                if not worker or worker.provider != "claude" or worker.execution_generation != target.worker_generation or worker.endpoint != target.endpoint:
                     raise WorkerFailure("Worker identity changed", kind="account_changed")
-        payload = {"prompt": request.input_text(), "model": self.settings.model_alias_map().get(request.model, request.model),
-                   "conversation": request.previous_response_id, "workspace": target.workspace}
-        image_parts = request.worker_input()
-        has_images = any(part.get("type") == "image" for part in image_parts)
+        from uuid import uuid4
+        from .claude_images import content_blocks
+        payload = {"model": self.settings.model_alias_map().get(request.model, request.model),
+                   "session_id": request.previous_response_id or str(uuid4()),
+                   "conversation": request.previous_response_id, "workspace": target.workspace,
+                   "system": request.instructions, "effort": (request.reasoning or {}).get("effort"),
+                   "json_schema": request.output_schema()}
+        # The system prompt is sent separately, never duplicated in user content.
+        content_request = request.model_copy(update={"instructions": None})
+        payload["content"] = await content_blocks(content_request.worker_input())
         specs = definitions(request) if request.tool_choice != "none" else []
-        if definitions(request) or tool_run is not None or has_images:
+        # Keep original names where unambiguous; aliases remain a safe fallback
+        # for colliding or overlong namespace encodings.
+        from .client_tools import NAME
+        names = [(s["namespace"] + "__" if s["namespace"] else "") + s["name"] for s in specs]
+        if len(set(names)) == len(names) and all(NAME.fullmatch(n) for n in names):
+            specs = [{**s, "alias": n} for s, n in zip(specs, names)]
+        validators = {}
+        from jsonschema.validators import validator_for
+        from jsonschema.exceptions import SchemaError
+        for spec in specs:
+            cls = validator_for(spec["schema"])
             try:
-                capabilities = await worker_rpc(target.endpoint, self.settings, "/capabilities")
-            except httpx.HTTPStatusError as exc:
-                if exc.response.status_code == 404:
-                    raise ToolProtocolError("Gemini worker must be upgraded to support " + ("image input" if has_images else "client tools"),
-                                            "image_input_unavailable" if has_images else "client_tools_unavailable") from exc
-                raise WorkerFailure("Gemini worker capability check failed") from exc
-            except httpx.HTTPError as exc:
-                raise WorkerFailure("Gemini worker capability check failed") from exc
-            if has_images and capabilities.get("image_input") != 1:
-                raise ToolProtocolError("Gemini worker must be upgraded to support image input", "image_input_unavailable")
-            if (definitions(request) or tool_run is not None) and capabilities.get("client_tools") != 1:
-                raise ToolProtocolError("Gemini worker does not support this client tool protocol", "client_tools_unavailable")
-        if has_images:
-            from .gemini_images import prepare_images
-            try:
-                payload["prompt"], payload["images"] = await prepare_images(image_parts)
-            except ValueError as exc:
-                raise ToolProtocolError(str(exc), "invalid_image") from exc
-        if specs:
-            from jsonschema.validators import validator_for
-            from jsonschema.exceptions import SchemaError
-            validators = {}
-            payload["tools"] = [{k: v for k, v in tool.items() if k != "type"} for tool in dynamic_specs(specs)]
-            for spec, tool in zip(specs, payload["tools"]):
-                cls = validator_for(spec["schema"])
-                try:
-                    cls.check_schema(spec["schema"])
-                except SchemaError as exc:
-                    raise ToolProtocolError("Invalid client function JSON Schema") from exc
-                validators[spec["alias"]] = cls(spec["schema"])
-                tool["description"] += "\nArguments must match this JSON Schema: " + json.dumps(spec["schema"], ensure_ascii=False)
-            payload["prompt"] = (
-                "You are serving a remote client through MCP relay tools. "
-                "Use the registered gateway_client tools for the client's tool requests. "
-                "Their descriptions identify the original tool name and full argument schema. "
-                "Client paths refer to the remote client's filesystem, not this worker. "
-                "Do not probe tools with empty arguments; include all required parameters.\n\n"
-                + payload["prompt"]
-                + "\n\nREMOTE CLIENT TOOL DISPATCH: Native worker tools cannot access the client workspace. "
-                "To fulfill the latest user request, call only the matching MCP relay below with its required arguments. "
-                "Do not enumerate or probe tools. Tool names mentioned in the client instructions map to these aliases:\n"
-                + "\n".join(json.dumps({"client_tool": spec["name"], "mcp_tool": spec["alias"],
-                                        "parameters": spec["schema"]}, ensure_ascii=False) for spec in specs)
-            )
+                cls.check_schema(spec["schema"])
+            except SchemaError as exc:
+                raise ToolProtocolError("Invalid client function JSON Schema") from exc
+            validators[spec["alias"]] = cls(spec["schema"])
+        payload["tools"] = [{k: v for k, v in tool.items() if k != "type"} for tool in dynamic_specs(specs)]
+        if not specs:
+            payload["system"] = (payload["system"] or "") + "\nNo tools are available in this session; answer directly and never write tool invocations."
         output_schema = request.output_schema()
         output_chunks = []
-        if output_schema is not None:
-            payload["prompt"] += ("\n\nReturn only a JSON value matching this JSON Schema. "
-                                  "Do not include Markdown fences or commentary.\n"
-                                  + json.dumps(output_schema, ensure_ascii=False))
         thread = ""
         grammar_failures = 0
         grammar_needs_correction = False
@@ -110,7 +82,7 @@ class GeminiAdapter:
                 async with client.stream("POST", target.endpoint + "/turn", json=payload,
                         headers={"Authorization": "Bearer " + self.settings.app_server_token.get_secret_value()}) as response:
                     if response.status_code != 200:
-                        raise WorkerFailure("Gemini worker rejected execution", kind="capacity" if response.status_code == 409 else "connection")
+                        raise WorkerFailure("Claude worker rejected execution", kind={409: "capacity", 400: "request", 422: "request", 401: "logged_out", 429: "limit"}.get(response.status_code, "connection"))
                     async for line in response.aiter_lines():
                         if not line:
                             continue
@@ -122,7 +94,7 @@ class GeminiAdapter:
                         thread = data.get("thread_id") or thread
                         if data.get("event") == "client_tool":
                             if tool_run is None or not thread:
-                                raise ToolProtocolError("Unexpected Gemini client tool request")
+                                raise ToolProtocolError("Unexpected Claude client tool request")
                             reply = {"run_id": data["run_id"], "worker_call_id": data["worker_call_id"]}
                             try:
                                 call = public_call(specs, data)
@@ -134,7 +106,7 @@ class GeminiAdapter:
                             if call is None or schema_error is not None or not await call_matches_grammar(specs, data, call):
                                 grammar_failures += 1
                                 logging.getLogger(__name__).warning(
-                                    "Gemini client tool correction: alias=%s attempt=%s validator=%s path=%s",
+                                    "Claude client tool correction: alias=%s attempt=%s validator=%s path=%s",
                                     data["tool"], grammar_failures,
                                     schema_error.validator if schema_error else "custom_grammar",
                                     list(schema_error.absolute_path) if schema_error else [],
@@ -156,11 +128,16 @@ class GeminiAdapter:
                             await self.tool_sessions.await_result(tool_run, call)
                             yield BackendStreamEvent(thread_id=thread, tool_call=call,
                                 input_tokens=data.get("input_tokens", 0), output_tokens=data.get("output_tokens", 0),
-                                cache_read_tokens=data.get("cache_read_tokens", 0))
+                                cache_read_tokens=data.get("cache_read_tokens", 0),
+                                cache_write_tokens=data.get("cache_write_tokens", 0))
                             output = await self.tool_sessions.receive_result(tool_run)
-                            content = ([{"type": "text", "text": output}] if isinstance(output, str)
-                                       else [{"type": "text", "text": part["text"]} for part in output])
-                            await worker_rpc(target.endpoint, self.settings, "/tool-result", {**reply, "content": content})
+                            from .multimodal import user_parts
+                            blocks = await content_blocks(user_parts(output))
+                            content = [{"type": "text", "text": p["text"]} if p["type"] == "text" else
+                                       {"type": "image", "data": p["source"]["data"], "mimeType": p["source"]["media_type"]}
+                                       for p in blocks]
+                            await worker_rpc(target.endpoint, self.settings, "/tool-result", {**reply, "content": content,
+                                             "is_error": tool_run.result_is_error})
                             continue
                         if data.get("done") and grammar_needs_correction:
                             raise ToolProtocolError("Model ended without correcting the invalid client tool input")
@@ -177,17 +154,22 @@ class GeminiAdapter:
                                 parsed = json.loads(output)
                                 validator_for(output_schema)(output_schema).validate(parsed)
                             except (ValueError, IndexError, ValidationError) as exc:
-                                raise ToolProtocolError("Gemini output did not match the requested JSON Schema",
+                                raise ToolProtocolError("Claude output did not match the requested JSON Schema",
                                                         "structured_output_invalid") from exc
                             delta = json.dumps(parsed, ensure_ascii=False)
                         yield BackendStreamEvent(thread_id=thread, delta=delta, done=data.get("done", False),
                             input_tokens=data.get("input_tokens", 0), output_tokens=data.get("output_tokens", 0),
-                            cache_read_tokens=data.get("cache_read_tokens", 0))
+                            cache_read_tokens=data.get("cache_read_tokens", 0),
+                            cache_write_tokens=data.get("cache_write_tokens", 0))
                         if data.get("done"):
                             return
-            raise WorkerFailure("Gemini stream ended without a final result")
+            raise WorkerFailure("Claude stream ended without a final result")
         except httpx.HTTPError as exc:
-            raise WorkerFailure("Gemini worker connection failed") from exc
+            raise WorkerFailure("Claude worker connection failed") from exc
+        except (ValueError, KeyError, TypeError) as exc:
+            if isinstance(exc, ToolProtocolError):
+                raise
+            raise WorkerFailure("Claude worker returned an invalid event") from exc
 
     async def complete(self, request, target):
         text = ""
@@ -199,60 +181,12 @@ class GeminiAdapter:
             if event.tool_call:
                 calls.append(event.tool_call)
         if not terminal.done and not calls:
-            raise WorkerFailure("Gemini returned no final result")
+            raise WorkerFailure("Claude returned no final result")
         return BackendResult(text=text, tool_calls=calls, thread_id=terminal.thread_id,
                              input_tokens=terminal.input_tokens, output_tokens=terminal.output_tokens,
-                             cache_read_tokens=terminal.cache_read_tokens)
+                             cache_read_tokens=terminal.cache_read_tokens, cache_write_tokens=terminal.cache_write_tokens)
 
-class ProviderBackend:
-    def __init__(self, settings):
-        self.codex = AppServerBackend(settings)
-        self.gemini = GeminiAdapter(settings)
-        from .claude_backend import ClaudeAdapter
-        self.claude = ClaudeAdapter(settings)
-        # Preserve existing Codex pool monitoring and client-tool continuations.
-        self.pool = self.codex.pool
-        self.tool_sessions = self.codex.tool_sessions
-        self.gemini.tool_sessions = self.tool_sessions
-        self.claude.tool_sessions = self.tool_sessions
-        self.tool_sessions.run_events = self._turn_events
-
-    async def _turn_events(self, request, target, run):
-        async for event in self.adapter(target)._turn_events(request, target, run):
-            yield event
-
-    def continuation_target(self, request, key):
-        return self.codex.continuation_target(request, key)
-
-    def continuation_thread(self, request, key):
-        return self.codex.continuation_thread(request, key)
-
-    def adapter(self, target):
-        if target.provider == "codex":
-            return self.codex
-        if target.provider == "gemini":
-            return self.gemini
-        if target.provider == "claude":
-            return self.claude
-        raise WorkerFailure("Provider is not implemented", kind="request")
-
-    async def complete(self, request, target):
-        return await self.adapter(target).complete(request, target)
-
-    async def stream(self, request, target):
-        if target.provider == "claude":
-            from contextlib import aclosing
-            async with aclosing(self.claude.stream(request, target)) as events:
-                async for event in events:
-                    yield event
-            return
-        async for event in self.adapter(target).stream(request, target):
-            yield event
-
-    async def close(self):
-        await self.codex.close()
-
-async def probe_gemini(worker, db, settings, *, inference=True, login_session=None):
+async def probe_claude(worker, db, settings, *, inference=True, login_session=None):
     from .contributions import update_account
     from .models import WorkerStatus
     from .quota import reconcile_worker
@@ -261,31 +195,31 @@ async def probe_gemini(worker, db, settings, *, inference=True, login_session=No
                                    {"session_id": login_session} if login_session else None)
         account = payload.get("account")
         if not account:
-            raise WorkerFailure("Gemini account or inference unavailable", kind=payload.get("kind", "logged_out"))
+            raise WorkerFailure("Claude account or inference unavailable", kind=payload.get("kind", "logged_out"))
         await update_account(worker, account)
         if payload.get("available") is False:
-            raise WorkerFailure("Gemini inference unavailable", kind=payload.get("kind", "connection"))
+            raise WorkerFailure("Claude inference unavailable", kind=payload.get("kind", "connection"))
         worker.status = WorkerStatus.ready
         worker.failure_kind = worker.failure_reason = worker.retry_after = worker.quarantined_at = None
         worker.last_seen_at = datetime.now(timezone.utc)
-        ok, message = True, "Gemini 账号和模型访问检查通过"
+        ok, message = True, "Claude 账号和模型访问检查通过"
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 409:
-            return {"ok": False, "busy": True, "logged_in": bool(worker.auth_mode), "message": "Gemini 正在执行或登录，请稍后探测"}
+            return {"ok": False, "busy": True, "logged_in": bool(worker.auth_mode), "message": "Claude 正在执行或登录，请稍后探测"}
         worker.status = WorkerStatus.error
         worker.failure_kind = "connection"
         worker.retry_after = datetime.now(timezone.utc) + timedelta(seconds=settings.worker_failure_cooldown_seconds)
-        ok, message = False, "Gemini 服务暂时不可用"
+        ok, message = False, "Claude 服务暂时不可用"
     except Exception as exc:
         kind = exc.kind if isinstance(exc, WorkerFailure) else classify_worker_failure(str(exc))
         worker.status = WorkerStatus.error
         worker.failure_kind = kind
         if kind == "logged_out":
             await update_account(worker, None)
-        worker.failure_reason = ("账号已登录，但未通过 Antigravity 资格检查，请更换账号或联系管理员。"
-                                 if kind == "ineligible" else "Gemini account check failed")
+        worker.failure_reason = ("账号已登录，但未通过 Claude 资格检查，请更换账号或联系管理员。"
+                                 if kind == "ineligible" else "Claude account check failed")
         worker.retry_after = datetime.now(timezone.utc) + timedelta(seconds=settings.worker_limit_cooldown_seconds if kind == "limit" else settings.worker_failure_cooldown_seconds)
-        ok, message = False, (worker.failure_reason if kind == "ineligible" else "Gemini 检查失败，请检查登录状态或稍后重试")
+        ok, message = False, (worker.failure_reason if kind == "ineligible" else "Claude 检查失败，请检查登录状态或稍后重试")
     await reconcile_worker(db, worker)
     await db.commit()
     return {"ok": ok, "logged_in": bool(worker.auth_mode), "message": message}

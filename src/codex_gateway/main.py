@@ -52,6 +52,8 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     if settings.auto_create_schema:
         async with engine.begin() as connection:
+            if connection.dialect.name == "postgresql":
+                await connection.execute(text("SELECT pg_advisory_xact_lock(719342000)"))
             await connection.run_sync(Base.metadata.create_all)
             # This project intentionally has no migration framework yet. Keep existing
             # installations forward-compatible until Alembic is introduced.
@@ -84,12 +86,14 @@ async def lifespan(app: FastAPI):
                     await connection.execute(text(ddl))
                 await upgrade(connection)
     async with SessionLocal() as session:
+        if settings.node_id:
+            await session.execute(text("SELECT pg_advisory_xact_lock(719342002)"))
         await bootstrap_users(session, settings)
         worker = await session.scalar(select(Worker).where(Worker.container_name == "codex-worker-1"))
-        if not worker:
-            worker = Worker(owner_username=settings.admin_username, name="worker-1", container_name="codex-worker-1", endpoint=settings.app_server_url, status=WorkerStatus.ready)
+        if not worker and settings.bootstrap_worker:
+            worker = Worker(node_id=settings.node_id or None, owner_username=settings.admin_username, name="worker-1", container_name="codex-worker-1", endpoint=settings.app_server_url, status=WorkerStatus.ready)
             session.add(worker)
-        elif worker.endpoint != "removed://worker":
+        elif worker and settings.bootstrap_worker and worker.endpoint != "removed://worker":
             worker.container_name = "codex-worker-1"
             worker.endpoint = settings.app_server_url
         # Apply contribution rule changes to existing users before serving traffic.
@@ -104,7 +108,12 @@ async def lifespan(app: FastAPI):
     monitoring_task = asyncio.create_task(monitoring_loop(), name="monitoring-snapshots")
     from .claude_sessions import session_cleanup_loop
     cleanup_task = asyncio.create_task(session_cleanup_loop(), name="claude-session-cleanup") if settings.backend != "mock" else None
+    from .cluster import heartbeat_loop
+    node_task = asyncio.create_task(heartbeat_loop(app.state.backend, settings), name="node-heartbeat") if settings.node_id else None
     yield
+    if node_task:
+        node_task.cancel()
+        await asyncio.gather(node_task, return_exceptions=True)
     if cleanup_task:
         cleanup_task.cancel()
         await asyncio.gather(cleanup_task, return_exceptions=True)
@@ -135,6 +144,8 @@ app.include_router(self_service_router)
 app.include_router(reporting_router)
 from .contributions import router as contribution_router
 app.include_router(contribution_router)
+from .cluster import router as cluster_router
+app.include_router(cluster_router)
 app.add_middleware(RequestAuditMiddleware)
 from .gemini_native import GeminiNativeMiddleware
 app.add_middleware(GeminiNativeMiddleware)
@@ -259,6 +270,8 @@ async def worker_recovery_loop() -> None:
             async with SessionLocal() as session:
                 await expire_response_bindings(session)
                 workers = (await session.scalars(select(Worker).where(Worker.enabled.is_(True), ((Worker.status == WorkerStatus.error) | ((Worker.provider.in_(["gemini", "claude"])) & (Worker.status == WorkerStatus.offline) & Worker.auth_mode.is_not(None)))).with_for_update(skip_locked=True))).all()
+                if settings.node_id:
+                    workers = [worker for worker in workers if worker.node_id == settings.node_id]
                 now = utcnow()
                 for worker in workers:
                     if not worker.retry_after or worker.retry_after <= now:
@@ -454,6 +467,12 @@ async def pool_routing_signals(session: AsyncSession):
     backend = getattr(app.state, "backend", None)
     pool = getattr(backend, "pool", None)
     active = await pool.active_connections_by_worker() if pool and hasattr(pool, "active_connections_by_worker") else {}
+    if get_settings().node_id:
+        from .cluster import live_nodes
+        active = {}
+        for node in await live_nodes(session, get_settings()):
+            for worker_id, count in node.active_connections.items():
+                active[worker_id] = active.get(worker_id, 0) + count
     latest = await session.scalar(select(MetricSnapshot).where(
         MetricSnapshot.metric == "subscription_usage",
         MetricSnapshot.observed_at >= datetime.now(timezone.utc) - timedelta(hours=2),
@@ -488,11 +507,17 @@ async def choose_target(
     candidates = [worker for worker in candidates if (getattr(worker, "provider", None) or "codex") == provider and worker.id not in excluded and worker.enabled and worker.status in {WorkerStatus.ready, WorkerStatus.busy}]
     if not candidates:
         raise worker_unavailable(bound=binding is not None)
+    if settings.node_id:
+        from .cluster import live_nodes
+        healthy = {node.id for node in await live_nodes(session, settings)}
+        candidates = [worker for worker in candidates if worker.node_id in healthy]
     key_slug = str(principal.key_id or "development")
     for worker in candidates:
         try:
+            from .cluster import manager_for
+            manager_url = await manager_for(session, worker, settings)
             async with httpx.AsyncClient(timeout=15) as client:
-                response = await client.put(f"{settings.manager_url}/workers/{worker.container_name}/workspaces/{key_slug}", headers={"Authorization": f"Bearer {settings.manager_token.get_secret_value()}"})
+                response = await client.put(f"{manager_url}/workers/{worker.container_name}/workspaces/{key_slug}", headers={"Authorization": f"Bearer {settings.manager_token.get_secret_value()}"})
             if response.status_code >= 400:
                 raise RuntimeError(f"Worker manager returned HTTP {response.status_code}")
             return BackendTarget(connection_key=f"{key_slug}:{worker.id}", endpoint=worker.endpoint, workspace=f"{settings.workspace_worker_root}/{key_slug}", worker_id=worker.id, worker_generation=worker.execution_generation, provider=getattr(worker, "provider", None) or "codex")
@@ -849,6 +874,18 @@ async def root_redirect(request: Request):
 
 @app.api_route("/healthz", methods=["GET", "HEAD", "OPTIONS"])
 async def health() -> dict[str, str]:
+    settings = get_settings()
+    if settings.node_id:
+        from .cluster import live_nodes
+        try:
+            async with SessionLocal() as db:
+                healthy = {node.id for node in await live_nodes(db, settings)}
+            if settings.node_id not in healthy:
+                raise HTTPException(503, "Application node is not ready")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(503, "Shared database is unavailable") from exc
     return {"status": "ok"}
 
 
@@ -883,9 +920,9 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
     request = body.to_response_request()
     validate_capabilities(request)
     await validate_grammars(request)
-    pending_target = backend.continuation_target(request, principal.key_id) if hasattr(backend, "continuation_target") else None
+    from .cluster import pending_route
+    pending_target, pending_thread = await pending_route(request, principal.key_id, backend)
     await validate_pending_worker(backend, pending_target, session)
-    pending_thread = backend.continuation_thread(request, principal.key_id) if pending_target and hasattr(backend, "continuation_thread") else None
     if pending_target:
         from .audit import track_backend
         track_backend(pending_target, pending_thread, source="authenticated_tool_call")
@@ -943,11 +980,11 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
             return openai_error(404, "previous_response_id is no longer available", "previous_response_not_found", param="previous_response_id")
         await touch_response_thread(session, binding)
         body = body.model_copy(update={"previous_response_id": binding.thread_id})
-    pending_target = backend.continuation_target(body, principal.key_id) if hasattr(backend, "continuation_target") else None
+    from .cluster import pending_route
+    pending_target, pending_thread = await pending_route(body, principal.key_id, backend)
     if pending_target and binding and pending_target.worker_id != binding.worker_id:
         return openai_error(400, "Tool output and previous_response_id refer to different Workers", "invalid_client_tool")
     await validate_pending_worker(backend, pending_target, session)
-    pending_thread = backend.continuation_thread(body, principal.key_id) if pending_target and hasattr(backend, "continuation_thread") else None
     if pending_target:
         from .audit import track_backend
         track_backend(pending_target, pending_thread, source="authenticated_tool_call")

@@ -348,8 +348,19 @@ async def create_worker(request: Request, name: str = Form(min_length=1, max_len
     name = name.strip().lower().replace("_", "-")
     if not WORKER_NAME_RE.fullmatch(name):
         raise HTTPException(400, "Worker 名称必须以小写字母开头，并且只能包含小写字母、数字和连字符")
+    from .cluster import select_node
+    node_id, manager_url = await select_node(session, settings)
+    if await session.scalar(select(Worker.id).where(Worker.name == name)):
+        raise HTTPException(409, "Worker name already exists")
+    if settings.node_id:
+        from .cluster import provision
+        worker = Worker(node_id=node_id, provider=provider, owner_username=admin.username,
+            name=name, container_name=name, endpoint="provisioning://worker", status=WorkerStatus.offline)
+        session.add(worker)
+        await provision(session, worker, settings, manager_url)
+        return result("Worker 已创建", f"{name} 的容器已经创建，可在列表中登录并探测状态。")
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(f"{settings.manager_url}/workers", json={"name": name, "provider": provider}, headers={"Authorization": f"Bearer {settings.manager_token.get_secret_value()}"})
+        response = await client.post(f"{manager_url}/workers", json={"name": name, "provider": provider}, headers={"Authorization": f"Bearer {settings.manager_token.get_secret_value()}"})
     if response.status_code >= 400:
         try:
             manager_message = response.json().get("detail", "Worker manager could not create the container")
@@ -358,7 +369,7 @@ async def create_worker(request: Request, name: str = Form(min_length=1, max_len
         status_code = response.status_code if 400 <= response.status_code < 500 else 502
         raise HTTPException(status_code, manager_message)
     data = response.json()
-    session.add(Worker(provider=provider, owner_username=admin.username, name=name, container_name=data["name"], endpoint=data["endpoint"], status=WorkerStatus.offline))
+    session.add(Worker(node_id=node_id, provider=provider, owner_username=admin.username, name=name, container_name=data["name"], endpoint=data["endpoint"], status=WorkerStatus.offline))
     await session.commit()
     return result("Worker 已创建", f"{name} 的容器已经创建，可在列表中登录并探测状态。")
 
@@ -390,8 +401,10 @@ async def delete_worker(request: Request, worker_id: UUID, csrf_token: str = For
         raise HTTPException(404, "Worker not found")
     original_name = worker.name
     original_container_name = worker.container_name
+    from .cluster import manager_for
+    manager_url = await manager_for(session, worker, settings)
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.delete(f"{settings.manager_url}/workers/{original_container_name}", headers={"Authorization": f"Bearer {settings.manager_token.get_secret_value()}"})
+        response = await client.delete(f"{manager_url}/workers/{original_container_name}", headers={"Authorization": f"Bearer {settings.manager_token.get_secret_value()}"})
     if not manager_delete_succeeded(response.status_code):
         try:
             manager_message = response.json().get("detail", "Worker manager could not remove the container")

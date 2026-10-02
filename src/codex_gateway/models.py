@@ -92,6 +92,7 @@ class SubscriptionCost(Base):
 
 class Worker(Base):
     __tablename__ = "workers"
+    node_id: Mapped[str | None] = mapped_column(String(80), nullable=True, index=True)
     provider: Mapped[str] = mapped_column(String(16), default="codex", server_default="codex", index=True)
     owner_username: Mapped[str | None] = mapped_column(ForeignKey("users.username"), index=True)
     provider_project: Mapped[str | None] = mapped_column(String(180), nullable=True)
@@ -113,6 +114,26 @@ class Worker(Base):
     quarantined_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     retry_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     recovered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+class AppNode(Base):
+    __tablename__ = "app_nodes"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    gateway_url: Mapped[str] = mapped_column(String(500))
+    manager_url: Mapped[str] = mapped_column(String(500))
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    heartbeat_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    active_connections: Mapped[dict] = mapped_column(JSON, default=dict)
+
+
+class PendingToolRoute(Base):
+    __tablename__ = "pending_tool_routes"
+    key_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    call_id: Mapped[str] = mapped_column(String(180), primary_key=True)
+    node_id: Mapped[str] = mapped_column(String(80))
+    thread_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    target: Mapped[dict] = mapped_column(JSON)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
 
 class ApiKey(Base):
     __tablename__ = "api_keys"

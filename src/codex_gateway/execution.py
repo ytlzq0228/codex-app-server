@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from fastapi import HTTPException
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from .client_tools import definitions, ToolProtocolError
@@ -152,6 +152,12 @@ async def prepare(request, principal, endpoint, audit, *, pending_thread=None, b
         superseded = False
         if row.state == "waiting_tool" and not pending_thread:
             live = tool_sessions.has_pending(principal.key_id, row.thread_id) if tool_sessions else False
+            if get_settings().node_id and not live:
+                from .models import PendingToolRoute
+                live = bool(await db.scalar(select(PendingToolRoute.call_id).where(
+                    PendingToolRoute.key_id == str(principal.key_id),
+                    PendingToolRoute.thread_id == row.thread_id,
+                    PendingToolRoute.expires_at > func.now())))
             # Only a full history followed by a new user turn can rebuild. Never
             # reinterpret an orphaned tool result as permission to rerun tools.
             items = history_items(request)

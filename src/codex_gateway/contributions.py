@@ -105,7 +105,9 @@ async def contribute_worker(request: Request, name: str = Form("", max_length=80
     label = f"{identity.username}-worker-{int(suffix):02d}"
     if await db.scalar(select(Worker.id).where(Worker.name == label)):
         raise HTTPException(409, "该 Worker 序号已经使用，请选择其他数字")
-    worker = Worker(provider=provider, owner_username=identity.username, name=label,
+    from .cluster import select_node
+    node_id, manager_url = await select_node(db, settings)
+    worker = Worker(node_id=node_id, provider=provider, owner_username=identity.username, name=label,
                     container_name=container_name, endpoint=f"{'http' if provider in {'gemini', 'claude'} else 'ws'}://{container_name}:4500", status=WorkerStatus.offline)
     db.add(worker)
     try:
@@ -113,12 +115,18 @@ async def contribute_worker(request: Request, name: str = Form("", max_length=80
     except IntegrityError:
         await db.rollback()
         raise HTTPException(409, "该 Worker 名称已经使用，请选择其他序号")
+    if settings.node_id:
+        from .cluster import provision
+        await provision(db, worker, settings, manager_url)
+        return {"message": "Worker 已创建，请登录账号后探测状态", "worker_id": str(worker.id)}
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(settings.manager_url + "/workers", json={"name": container_name, "provider": provider},
+            response = await client.post(manager_url + "/workers", json={"name": container_name, "provider": provider},
                 headers={"Authorization": "Bearer " + settings.manager_token.get_secret_value()})
         if response.status_code >= 400:
             raise HTTPException(502, "Worker 创建失败，请重试")
+        if settings.node_id:
+            worker.endpoint = response.json()["endpoint"]
         await db.commit()
     except httpx.HTTPError:
         await db.rollback()
@@ -269,6 +277,9 @@ async def account_monitor_loop():
         try:
             async with SessionLocal() as db:
                 ids = (await db.scalars(select(Worker.id).where(Worker.enabled.is_(True), Worker.endpoint != "removed://worker"))).all()
+            if settings.node_id:
+                async with SessionLocal() as db:
+                    ids = (await db.scalars(select(Worker.id).where(Worker.id.in_(ids), Worker.node_id == settings.node_id))).all()
             results = await asyncio.gather(*(inspect(worker_id) for worker_id in ids), return_exceptions=True)
             for result in results:
                 if isinstance(result, Exception):

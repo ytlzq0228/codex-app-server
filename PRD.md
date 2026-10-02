@@ -501,7 +501,7 @@ Worker 状态和历史波动图表放在同一个d容器里面，左右布局。
 7、有问题通过表单的方式问我
 
 双活方案
-参考服务器部署方案查看现有的服务器端环境
+参考服务器清单查看现有的服务器端环境
 目前本系统的环境为 <deploy-user>@<app-1>主/已部署当前版本、<deploy-user>@<app-2>备/新机器
 本机高可用方案：
 1、使用DB Proxy连接目前的PG数据库集群。迁移现有的本地数据库内的实例到数据库集群
@@ -509,4 +509,4 @@ Worker 状态和历史波动图表放在同一个d容器里面，左右布局。
 3、<app-1>和<app-2>均运行worker管理和docker服务。所有用户的Worker 50 50创建在两个APP节点上，创建worker的时候，选择当前worker负载低的APP节点创建1个新worker，用户无感，系统自动选择。用户的一个账号只在one of two APP nodes上创建，不需要创建冗余docker。单一APP节点挂掉的情况下，系统降级后只少有一半的活跃worker可用。
 4、不管用户流量从app-01还是app-02进入。均可以使用本app本地的worker或者跨app节点使用其他的worker。本地worker还是跨app worker调度算法和优先级完全相同。目前库内已经有worker状态表。看两个app节点如何维护这张表，以及如何抽象出共享状态的worker管理。
 5、检查系统全部逻辑，保证app运行内存尽可能做到无状态，保证用户在切换app节点的时候的状态连续性。
-6、测试环境<deploy-user>@<test-host-2>。
+6、测试环境<deploy-user>@<test-host>。测试期间你可以使用<test-host>+<app-2>进行测试。然后在<app-1>+<app-2>上正式部署

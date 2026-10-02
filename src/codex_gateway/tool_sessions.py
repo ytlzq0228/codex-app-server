@@ -104,6 +104,9 @@ class ToolSessions:
         try:
             async for event in self.run_events(run.request,run.target,run):
                 run.thread_id = event.thread_id or run.thread_id
+                if event.tool_call:
+                    from .cluster import publish_tool
+                    await publish_tool(run, self.ttl)
                 await run.queue.put(event)
         except asyncio.CancelledError:
             if run.accepted_call_id:

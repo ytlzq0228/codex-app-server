@@ -1,0 +1,165 @@
+{
+  "release": "ha-20261002",
+  "date": "2026-10-02",
+  "automated_tests": {
+    "passed": 418,
+    "duration_seconds": 109.07
+  },
+  "test_cluster": {
+    "two_entrypoints": true,
+    "cross_node_codex": true,
+    "continuation": true,
+    "response_id": "resp_ec64fe70052e4081898060d07715349b",
+    "tool_continuation": true,
+    "reverse_claude_stream": true,
+    "node_outage_degradation": true
+  },
+  "production": {
+    "both_entrypoints": true,
+    "login_session_across_nodes": true,
+    "cross_node_codex": true,
+    "cross_entrypoint_continuation": true,
+    "cross_node_gemini": true,
+    "cross_node_claude_sse": true,
+    "both_public_site_vips": true,
+    "public_internal_path_blocked": true,
+    "least_loaded_creation": "app-2",
+    "cross_node_workspace": true,
+    "cross_node_delete": true,
+    "temporary_container_removed": true
+  },
+  "ingress": [
+    {
+      "site_vip": "<site-a-vip>",
+      "disabled_ingress_node": "<app-1>",
+      "health": 200
+    },
+    {
+      "site_vip": "<site-a-vip>",
+      "disabled_ingress_node": "<app-2>",
+      "health": 200
+    },
+    {
+      "site_vip": "<site-b-vip>",
+      "disabled_ingress_node": "<app-1>",
+      "health": 200
+    },
+    {
+      "site_vip": "<site-b-vip>",
+      "disabled_ingress_node": "<app-2>",
+      "health": 200
+    }
+  ],
+  "data": [
+    {
+      "table": "admin_users",
+      "before": 1,
+      "after": 1,
+      "missing_original_ids": 0,
+      "ephemeral": false
+    },
+    {
+      "table": "api_keys",
+      "before": 43,
+      "after": 44,
+      "missing_original_ids": 0,
+      "ephemeral": false
+    },
+    {
+      "table": "execution_sessions",
+      "before": 30,
+      "after": 30,
+      "missing_original_ids": 0,
+      "ephemeral": false
+    },
+    {
+      "table": "google_auth_config",
+      "before": 1,
+      "after": 1,
+      "missing_original_ids": 0,
+      "ephemeral": false
+    },
+    {
+      "table": "login_failures",
+      "before": 2,
+      "after": 2,
+      "missing_original_ids": 0,
+      "ephemeral": true
+    },
+    {
+      "table": "metric_snapshots",
+      "before": 867,
+      "after": 869,
+      "missing_original_ids": 0,
+      "ephemeral": false
+    },
+    {
+      "table": "model_prices",
+      "before": 9,
+      "after": 9,
+      "missing_original_ids": 0,
+      "ephemeral": false
+    },
+    {
+      "table": "oauth_states",
+      "before": 0,
+      "after": 0,
+      "missing_original_ids": 0,
+      "ephemeral": true
+    },
+    {
+      "table": "response_bindings",
+      "before": 2118,
+      "after": 2118,
+      "missing_original_ids": 0,
+      "ephemeral": false
+    },
+    {
+      "table": "subscription_costs",
+      "before": 0,
+      "after": 0,
+      "missing_original_ids": 0,
+      "ephemeral": false
+    },
+    {
+      "table": "subscription_plans",
+      "before": 6,
+      "after": 6,
+      "missing_original_ids": 0,
+      "ephemeral": false
+    },
+    {
+      "table": "usage_records",
+      "before": 3404,
+      "after": 3404,
+      "missing_original_ids": 0,
+      "ephemeral": false
+    },
+    {
+      "table": "user_sessions",
+      "before": 2,
+      "after": 2,
+      "missing_original_ids": 0,
+      "ephemeral": true
+    },
+    {
+      "table": "users",
+      "before": 5,
+      "after": 6,
+      "missing_original_ids": 0,
+      "ephemeral": false
+    },
+    {
+      "table": "workers",
+      "before": 24,
+      "after": 24,
+      "missing_original_ids": 0,
+      "ephemeral": false
+    }
+  ],
+  "worker_placement": {
+    "app-1": 6,
+    "app-2": 5
+  },
+  "backups": "/opt/codex-app-server/deploy-backups/ha-20261002"
+}

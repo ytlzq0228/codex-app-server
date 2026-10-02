@@ -13,7 +13,7 @@ from .models import ExecutionSession, ResponseBinding, Worker
 async def prune_sessions():
     async with SessionLocal() as db:
         workers = (await db.execute(select(Worker.id, Worker.endpoint).where(
-            Worker.provider == "claude", Worker.endpoint != "removed://worker"))).all()
+            Worker.provider == "claude", Worker.enabled.is_(True), Worker.endpoint != "removed://worker"))).all()
         retained = {}
         for worker_id, thread in await db.execute(select(ResponseBinding.worker_id, ResponseBinding.thread_id).where(
                 ResponseBinding.provider == "claude", ResponseBinding.status == "active")):

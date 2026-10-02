@@ -1,5 +1,16 @@
 # Operations
 
+## Current dual-active production (2026-10-02)
+
+Production now runs on `<deploy-user>@<app-1>` and `<deploy-user>@<app-2>`,
+with the canonical deployment directory `/opt/codex-app-server-ha` and Compose
+project `codex-ha`. Both systemd units select that standalone HA composition.
+Database writes go through each host’s DB Proxy to the shared Patroni cluster.
+The old local PostgreSQL container is stopped and cannot restart automatically.
+See [dual-active deployment, validation and rollback](dual-active.md) before
+changing these nodes; the historical release instructions below describe the
+previous single-node layout. Use `scripts/verify_ha.py` for the current release.
+
 ## Install
 
 1. Copy the repository to `/opt/codex-app-server` and create `.env` from `.env.example`.

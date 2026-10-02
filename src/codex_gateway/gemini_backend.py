@@ -206,6 +206,7 @@ class GeminiAdapter:
 
 class ProviderBackend:
     def __init__(self, settings):
+        self.settings = settings
         self.codex = AppServerBackend(settings)
         self.gemini = GeminiAdapter(settings)
         from .claude_backend import ClaudeAdapter
@@ -237,9 +238,23 @@ class ProviderBackend:
         raise WorkerFailure("Provider is not implemented", kind="request")
 
     async def complete(self, request, target):
+        from .cluster import owner_url, remote_stream, collect
+        url = await owner_url(target, self.settings)
+        if url:
+            from contextlib import aclosing
+            async with aclosing(remote_stream(url, request, target, self.settings)) as events:
+                return await collect(events)
         return await self.adapter(target).complete(request, target)
 
     async def stream(self, request, target):
+        from .cluster import owner_url, remote_stream
+        url = await owner_url(target, self.settings)
+        if url:
+            from contextlib import aclosing
+            async with aclosing(remote_stream(url, request, target, self.settings)) as events:
+                async for event in events:
+                    yield event
+            return
         if target.provider == "claude":
             from contextlib import aclosing
             async with aclosing(self.claude.stream(request, target)) as events:

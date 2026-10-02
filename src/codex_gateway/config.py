@@ -1,6 +1,6 @@
 from functools import lru_cache
 from typing import Literal
-from pydantic import SecretStr, field_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -46,6 +46,26 @@ class Settings(BaseSettings):
     database_pool_size: int = 20
     database_max_overflow: int = 30
     database_pool_timeout_seconds: float = 10.0
+    # Empty node_id keeps the existing single-node deployment compatible.
+    node_id: str = ""
+    node_gateway_url: str = ""
+    node_manager_url: str = ""
+    node_timeout_seconds: int = 30
+    bootstrap_worker: bool = True
+
+    @model_validator(mode="after")
+    def cluster_configuration(self):
+        if self.node_id:
+            from urllib.parse import urlsplit
+            for url in (self.node_gateway_url, self.node_manager_url):
+                parsed = urlsplit(url)
+                if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.query or parsed.fragment:
+                    raise ValueError("Cluster node URLs must be explicit HTTP(S) origins")
+            if self.bootstrap_worker:
+                raise ValueError("Cluster nodes must disable bootstrap_worker; assign existing Workers explicitly")
+            if self.node_timeout_seconds < 15:
+                raise ValueError("node_timeout_seconds must be at least 15")
+        return self
 
     @field_validator("admin_cookie_secure", mode="before")
     @classmethod

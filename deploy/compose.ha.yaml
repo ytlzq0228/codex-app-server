@@ -1,0 +1,31 @@
+# Standalone production/test cluster composition; no local database or seed Worker.
+services:
+  gateway:
+    container_name: codex-app-server-gateway-1
+    image: ${GATEWAY_IMAGE:?set GATEWAY_IMAGE}
+    env_file: .env.ha
+    command: ["uvicorn", "codex_gateway.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "192.0.2.8,192.0.2.9,203.0.113.8,203.0.113.9"]
+    ports: ["8000:8000"]
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    read_only: true
+    tmpfs: ["/tmp:size=32m,noexec,nosuid"]
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    depends_on: [worker-manager]
+  worker-manager:
+    container_name: codex-app-server-worker-manager-1
+    image: ${GATEWAY_IMAGE:?set GATEWAY_IMAGE}
+    env_file: .env.manager.ha
+    command: ["uvicorn", "codex_gateway.manager:app", "--host", "0.0.0.0", "--port", "4600"]
+    user: "0:0"
+    ports: ["${NODE_IP:?set NODE_IP}:4600:4600"]
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock"]
+    read_only: true
+    tmpfs: ["/tmp:size=16m,noexec,nosuid"]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+networks:
+  default:
+    name: codex-app-server_default
+    external: true

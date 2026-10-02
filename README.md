@@ -15,3 +15,5 @@ secret), enable secure admin cookies, and put a TLS reverse proxy in front of it
 See [PRD.md](PRD.md), [docs/architecture.md](docs/architecture.md), and [docs/operations.md](docs/operations.md).
 
 User self-service is at `/account`; Google OAuth is configured by administrators at `/admin/google`. See [user-service and billing operations](docs/self-service.md).
+
+Production dual-active topology and recovery: [dual-active deployment](docs/dual-active.md).

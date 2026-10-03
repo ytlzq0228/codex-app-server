@@ -8,3 +8,6 @@ AGENTS.md
 
 # Real environment deployment details (local only, never commit)
 docs/real-environment.md
+
+# Local development discipline notes (local only)
+DEVELOPMENT-DISCIPLINE.md

@@ -1,7 +1,7 @@
 """Enabled-key capacity. All quota mutations serialize before reading capacity."""
 from sqlalchemy import and_, or_, func, select, text
 from fastapi import HTTPException
-from .models import ApiKey, User, Worker, WorkerStatus
+from .models import ApiKey, ContributionCredit, User, Worker, WorkerStatus
 
 
 async def quota_lock(db):
@@ -29,19 +29,72 @@ def contribution_filters(username=None):
     return filters
 
 
-async def credited_workers(db, username=None):
-    rows = (await db.execute(select(Worker.id, Worker.owner_username, Worker.provider,
-        func.lower(func.trim(Worker.account_email))).where(*contribution_filters(username))
-        .order_by(Worker.created_at, Worker.id))).all()
-    seen, credited, duplicates = set(), set(), set()
-    for worker_id, owner, provider, account in rows:
-        identity = (owner, provider or "codex", account)
-        if identity in seen:
-            duplicates.add(worker_id)
+def account_identity(provider, email):
+    return (provider or "codex", (email or "").strip().lower())
+
+
+def prefers(owner, email):
+    """The account's own user: username equals the email local part."""
+    return bool(owner) and email.split("@", 1)[0] == owner.strip().lower()
+
+
+async def sync_credits(db, claimant=None):
+    """Assign each eligible upstream account's single credit; caller holds quota_lock.
+
+    A credit is released when its Worker stops qualifying (logout, deletion,
+    failure other than usage limits, account change). A free credit goes to the
+    owner whose username matches the email prefix, otherwise to the Worker that
+    claims it first (`claimant`, the Worker just reconciled). A non-matching
+    holder keeps the credit until a matching owner's Worker qualifies.
+    Returns the owners whose credited Workers changed.
+    """
+    rows = (await db.execute(select(Worker.id, Worker.owner_username, Worker.provider, Worker.account_email)
+        .where(*contribution_filters()).order_by(Worker.created_at, Worker.id))).all()
+    eligible = {row.id: (row.owner_username, account_identity(row.provider, row.account_email)) for row in rows}
+    candidates = {}
+    for worker_id, (owner, identity) in eligible.items():
+        candidates.setdefault(identity, []).append(worker_id)
+    claims = (await db.scalars(select(ContributionCredit))).all()
+    holder_owners = dict((await db.execute(select(Worker.id, Worker.owner_username)
+        .where(Worker.id.in_([claim.worker_id for claim in claims])))).all()) if claims else {}
+    changed, held = set(), {}
+    for claim in claims:
+        identity = (claim.provider, claim.account_email)
+        if eligible.get(claim.worker_id, (None, None))[1] == identity:
+            held[identity] = claim
         else:
-            seen.add(identity)
-            credited.add(worker_id)
-    return credited, duplicates
+            changed.add(holder_owners.get(claim.worker_id))
+            await db.delete(claim)
+    await db.flush()
+    claimant_id = getattr(claimant, "id", None)
+    for identity, worker_ids in candidates.items():
+        email = identity[1]
+        preferred = [worker_id for worker_id in worker_ids if prefers(eligible[worker_id][0], email)]
+        claim = held.get(identity)
+        if claim and (claim.worker_id in preferred or not preferred):
+            continue
+        pool = preferred or worker_ids
+        winner = claimant_id if claimant_id in pool else pool[0]
+        if claim:
+            changed.update({eligible[claim.worker_id][0], eligible[winner][0]})
+            claim.worker_id = winner
+        else:
+            changed.add(eligible[winner][0])
+            db.add(ContributionCredit(provider=identity[0], account_email=email, worker_id=winner))
+    await db.flush()
+    changed.discard(None)
+    return changed
+
+
+async def credited_workers(db, username=None):
+    """Credited Workers hold their account's system-wide claim; other eligible ones are duplicates."""
+    eligible = (await db.scalars(select(Worker.id).where(*contribution_filters(username))
+        .order_by(Worker.created_at, Worker.id))).all()
+    credited = set((await db.scalars(select(Worker.id).join(ContributionCredit, ContributionCredit.worker_id == Worker.id)
+        .where(*contribution_filters(username),
+               ContributionCredit.provider == func.coalesce(Worker.provider, "codex"),
+               ContributionCredit.account_email == func.lower(func.trim(Worker.account_email))))).all())
+    return credited, {worker_id for worker_id in eligible if worker_id not in credited}
 
 
 async def quota_summary(db, username):
@@ -74,6 +127,10 @@ async def ensure_capacity(db, username, exclude_key_id=None):
     user = await db.scalar(select(User).where(User.username == username).execution_options(populate_existing=True))
     if not user or not user.enabled:
         raise HTTPException(400, "请选择已存在且启用的用户")
+    # Claims normally move in reconcile_worker; re-sync here so capacity never
+    # depends on a Worker change that skipped reconciliation.
+    for owner in sorted(await sync_credits(db) - {username}):
+        await enforce_quota(db, owner)
     await enforce_quota(db, username)
     quota = await quota_summary(db, username)
     used = quota['used']
@@ -90,5 +147,6 @@ async def reconcile_worker(db, worker, previous_owner=None):
     await db.flush()
     from .subscriptions import remember_plan
     await remember_plan(db, worker.plan_type, worker.provider or "codex")
-    for owner in sorted({name for name in (worker.owner_username, previous_owner) if name}):
+    changed = await sync_credits(db, claimant=worker)
+    for owner in sorted({name for name in (worker.owner_username, previous_owner, *changed) if name}):
         await enforce_quota(db, owner)

@@ -1,3 +1,4 @@
+import hmac
 import os
 import re
 
@@ -21,8 +22,12 @@ class WorkerSpec(BaseModel):
 
 
 def authorize(authorization: str | None) -> None:
-    expected = os.environ["CODEX_MANAGER_TOKEN"]
-    if authorization != f"Bearer {expected}":
+    expected = os.environ.get("CODEX_MANAGER_TOKEN", "")
+    # The manager controls docker.sock: a missing or placeholder token must never authorize.
+    lowered = expected.strip().lower()
+    if len(lowered) < 16 or any(marker in lowered for marker in ("change-me", "change-this", "changeme")):
+        raise HTTPException(503, "manager token is not configured")
+    if not hmac.compare_digest(authorization or "", f"Bearer {expected}"):
         raise HTTPException(401, "unauthorized")
 
 

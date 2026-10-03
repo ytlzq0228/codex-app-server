@@ -13,10 +13,12 @@
     ('缓存写单价（USD / 1M Token）', record.cache_write_price|money), ('输出单价（USD / 1M Token）', record.output_price|money),
     ('错误', record.error_code or '无'), ('Previous Response', record.previous_response_id or '未提供')
   ], 'request-metadata-fields') }}
+  {% if show_worker %}
   <h3>Worker</h3>
   {{ fields([('名称', worker.name if worker else '未分配或已删除'),
              ('账号', (worker.account_email or '未记录') if worker else '未记录'),
              ('所有人', (worker.owner_username or '未记录') if worker else '未记录')]) }}
+  {% endif %}
   <h3>会话关联依据</h3>
   {{ fields([('逻辑会话', record.logical_conversation_id or '未关联'), ('后端 Thread', record.thread_id or '未记录')] + evidence_fields) }}
   <details class="request-json"><summary>查看会话关联依据原始 JSON</summary><pre>{{ correlation }}</pre></details>

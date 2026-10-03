@@ -1,6 +1,7 @@
-"""Lockout for password login, counted per account and per client address.
+"""Lockout for password login, counted per (account, address) and per address.
 
-The account counter stops guessing against one user; the address counter bounds
+The (account, address) counter stops guessing against one user without letting
+a remote party lock that account for everyone; the address counter bounds
 credential stuffing that spreads a few guesses over many accounts. A successful
 login clears both, so a legitimate user is never locked out by a noisy neighbour
 behind the same address.
@@ -27,8 +28,10 @@ def now():
 
 def scopes(request, username):
     client = request.client
-    address = client.host if client and client.host else "unknown"
-    return [f"user:{username.strip().lower()[:170]}", f"addr:{address[:170]}"]
+    address = (client.host if client and client.host else "unknown")[:45]
+    # The account counter is scoped to the caller's address: guesses from one
+    # address cannot lock the same account out for everyone else.
+    return [f"user:{username.strip().lower()[:120]}|{address}", f"addr:{address}"]
 
 
 def lock_seconds(scope, failures):

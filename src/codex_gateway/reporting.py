@@ -31,6 +31,11 @@ def usage_query(user):
     return query
 
 
+def shows_worker(user):
+    """Only administrators see which Worker (and whose account) served a request."""
+    return user.role in {"admin", "superadmin"}
+
+
 def date_boundary(value, label):
     if not value:
         return None
@@ -65,9 +70,14 @@ async def usage_requests(request: Request, conversation: str, key_id: str, endpo
     from .admin import history_json
     from .history import conversation_request_page
     from .page_data import page_number
-    return history_json(await conversation_request_page(db, conversation_id=conversation,
+    data = await conversation_request_page(db, conversation_id=conversation,
         key_id=key_id, endpoint=endpoint, page=page_number(request),
-        owner=identity.username if request.state.user.role == "user" else None))
+        owner=identity.username if request.state.user.role == "user" else None)
+    if not shows_worker(request.state.user):
+        # Pooled routing is an operator concern; users never learn which Worker served them.
+        for row in data["requests"]:
+            row.pop("worker_name", None)
+    return history_json(data)
 
 
 @data_page(router, "/user/usage/{request_id}", "account.html", "detail")
@@ -75,8 +85,9 @@ async def detail(request: Request, request_id: str, identity=Depends(require_use
     record = await db.scalar(usage_query(request.state.user).where(UsageRecord.request_id == request_id))
     if not record:
         raise HTTPException(404, "请求不存在")
-    worker = await db.get(Worker, record.worker_id) if record.worker_id else None
-    return render(request, identity, page="detail", record=record, worker=worker,
+    show_worker = shows_worker(request.state.user)
+    worker = await db.get(Worker, record.worker_id) if show_worker and record.worker_id else None
+    return render(request, identity, page="detail", record=record, worker=worker, show_worker=show_worker,
                   evidence_fields=readable_fields(record.conversation_evidence),
                   observation_fields=observation_fields(record.request_observation),
                   last_texts=await request_texts(db, record), params=json.dumps(record.request_params, ensure_ascii=False, indent=2), observation=json.dumps(record.request_observation, ensure_ascii=False, indent=2), correlation=json.dumps(record.conversation_evidence, ensure_ascii=False, indent=2))

@@ -333,6 +333,7 @@ class ChatCompletionRequest(OpenAIRequestModel):
 
 
 class BackendResult(BaseModel):
+    usage_accounting: dict[str, Any] | None = None
     text: str
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     thread_id: str
@@ -343,6 +344,7 @@ class BackendResult(BaseModel):
 
 
 class BackendStreamEvent(BaseModel):
+    usage_accounting: dict[str, Any] | None = None
     tool_call: dict[str, Any] | None = None
     delta: str = ""
     thread_id: str | None = None

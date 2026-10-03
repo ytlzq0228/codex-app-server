@@ -88,6 +88,11 @@ async def bootstrap_users(db, settings):
                         session_version=old.session_version, role="superadmin" if old.username == settings.admin_username else "admin"))
     await db.flush()
     if not await db.get(User, settings.admin_username):
+        from .config import weak_secret
+        if settings.backend != "mock" and weak_secret(settings.admin_password.get_secret_value()):
+            # Only the very first superadmin is created from this value; later
+            # password changes live in PostgreSQL, so existing installs are unaffected.
+            raise RuntimeError("拒绝启动：首次创建超级管理员时 CODEX_GATEWAY_ADMIN_PASSWORD 仍为默认值、示例占位符或过短（至少 16 位）")
         db.add(User(username=settings.admin_username, role="superadmin",
                     password_hash=hash_password(settings.admin_password.get_secret_value())))
     await db.flush()

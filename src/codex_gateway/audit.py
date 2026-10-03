@@ -76,7 +76,7 @@ class RequestAuditMiddleware:
                     from .providers import provider_for
                     with anyio.CancelScope(shield=True):
                         async with SessionLocal() as db:
-                            db.add(UsageRecord(provider=provider_for(str(params.get("model", ""))), request_id=scope.get("state", {}).get("request_id") or "req_"+uuid4().hex,
+                            record = UsageRecord(provider=provider_for(str(params.get("model", ""))), request_id=scope.get("state", {}).get("request_id") or "req_"+uuid4().hex,
                                                api_key_id=principal.key_id, owner_username=principal.owner_username,
                                                worker_id=context.get("worker_id"), thread_id=context.get("thread_id"),
                                                model=str(params.get("model", "unknown"))[:120], request_params=params,
@@ -85,7 +85,10 @@ class RequestAuditMiddleware:
                                                status_code=audit["status"] if audit["complete"] else 499,
                                                duration_ms=int((time.monotonic()-started)*1000),
                                                error_code=(audit.get("rejection") or {}).get("code", "request_rejected") if audit["complete"] else "request_interrupted",
-                                               endpoint="responses" if scope["path"].endswith("responses") else "chat.completions"))
+                                               endpoint="responses" if scope["path"].endswith("responses") else "chat.completions")
+                            from .usage_accounting import apply_usage
+                            await apply_usage(db, record, audit.get("claude_usage"))
+                            db.add(record)
                             await db.commit()
             except Exception:
                 logger.exception("Could not persist request audit")

@@ -103,6 +103,30 @@ class Settings(BaseSettings):
                 aliases[public] = upstream
         return aliases
 
+MIN_SECRET_LENGTH = 16
+PLACEHOLDER_MARKERS = ("change-me", "change-this", "changeme")
+
+
+def weak_secret(value: str) -> bool:
+    """Defaults, .env.example placeholders and short values are never production secrets."""
+    lowered = value.strip().lower()
+    return len(lowered) < MIN_SECRET_LENGTH or any(marker in lowered for marker in PLACEHOLDER_MARKERS)
+
+
+def insecure_secrets(settings: Settings) -> list[str]:
+    """Names of shared secrets that must be replaced before serving real traffic.
+
+    The mock backend stays usable for local development; any real backend or
+    cluster node refuses to start with a guessable secret.
+    """
+    if settings.backend == "mock" and not settings.node_id:
+        return []
+    secrets = {"CODEX_GATEWAY_KEY_PEPPER": settings.key_pepper,
+               "CODEX_GATEWAY_APP_SERVER_TOKEN": settings.app_server_token,
+               "CODEX_GATEWAY_MANAGER_TOKEN": settings.manager_token}
+    return [name for name, value in secrets.items() if weak_secret(value.get_secret_value())]
+
+
 @lru_cache
 def get_settings() -> Settings:
     return Settings()

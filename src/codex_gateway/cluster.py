@@ -198,6 +198,8 @@ async def remote_stream(url, request, target, settings):
                             raise AppServerCapacityError(error["message"])
                         raise WorkerFailure(error["message"], kind=error["kind"], safe_to_retry=error["safe_to_retry"])
                     event = BackendStreamEvent.model_validate(data)
+                    from .usage_accounting import observe_usage
+                    observe_usage(target, event)
                     terminal = bool(event.done or event.tool_call)
                     yield event
                 if not terminal:
@@ -217,6 +219,7 @@ async def collect(events):
     if last is None or not (last.done or calls):
         raise WorkerFailure("Execution returned no final result")
     return BackendResult(text="".join(text_parts), tool_calls=calls,
+        usage_accounting=last.usage_accounting,
         thread_id=last.thread_id, input_tokens=last.input_tokens, output_tokens=last.output_tokens,
         cache_read_tokens=last.cache_read_tokens, cache_write_tokens=last.cache_write_tokens)
 

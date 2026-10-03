@@ -19,12 +19,12 @@ def test_manager_provider_volume_and_isolation(monkeypatch, provider, image, hom
     monkeypatch.setattr(docker, "from_env", lambda: client)
     manager = importlib.import_module("codex_gateway.manager")
     monkeypatch.setattr(manager, "client", client)
-    for name, value in {"CODEX_MANAGER_TOKEN": "manager-test", "CODEX_WORKER_TOKEN": "worker-test",
+    for name, value in {"CODEX_MANAGER_TOKEN": "manager-test-token-0123456789", "CODEX_WORKER_TOKEN": "worker-test",
                         "CODEX_WORKER_IMAGE": "codex-test", "CODEX_DOCKER_NETWORK": "test-network"}.items():
         monkeypatch.setenv(name, value)
     monkeypatch.delenv("CLAUDE_WORKER_IMAGE", raising=False)
     monkeypatch.delenv("GEMINI_WORKER_IMAGE", raising=False)
-    result = manager.create_worker(manager.WorkerSpec(name="worker-test", provider=provider), "Bearer manager-test")
+    result = manager.create_worker(manager.WorkerSpec(name="worker-test", provider=provider), "Bearer manager-test-token-0123456789")
     assert result["endpoint"] == scheme + "://worker-test:4500"
     assert seen["image"] == image
     assert seen["volumes"]["worker-test-" + provider + "-home"]["bind"] == home

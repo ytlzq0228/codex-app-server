@@ -102,12 +102,27 @@ def _validate_claude(request):
         reject(next(iter(request.model_extra)), "Unrecognized Claude parameter")
 
 
+def entitlement_filters():
+    """A Worker grants its provider only while logged in and serving.
+
+    Logout, deletion, disabling or any failure revokes the grant; a usage-limit
+    pause does not, matching the contribution rule for paid accounts.
+    """
+    from sqlalchemy import and_, or_
+    from .models import Worker, WorkerStatus
+    return [Worker.enabled.is_(True), Worker.endpoint != "removed://worker",
+            Worker.auth_mode.is_not(None), Worker.account_checked_at.is_not(None),
+            or_(Worker.failure_kind.is_(None), Worker.failure_kind != "logged_out"),
+            or_(Worker.status.in_([WorkerStatus.ready, WorkerStatus.busy, WorkerStatus.draining]),
+                and_(Worker.status == WorkerStatus.error, Worker.failure_kind == "limit"))]
+
+
 async def allowed_providers(db, username):
     """Capabilities belong to the owner, shared by all their keys."""
     from sqlalchemy import select
     from .models import User, Worker
     automatic = set(await db.scalars(select(Worker.provider).where(
-        Worker.owner_username == username, Worker.endpoint != "removed://worker").distinct()))
+        Worker.owner_username == username, *entitlement_filters()).distinct()))
     grants = await db.scalar(select(User.provider_grants).where(User.username == username))
     return automatic | (set(grants or []) & CAPABILITIES.keys())
 

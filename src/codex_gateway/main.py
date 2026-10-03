@@ -50,6 +50,9 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    from .config import insecure_secrets
+    if weak := insecure_secrets(settings):
+        raise RuntimeError("拒绝启动：以下密钥仍为默认值、示例占位符或过短（至少 16 位），请改为随机值：" + ", ".join(weak))
     if settings.auto_create_schema:
         async with engine.begin() as connection:
             if connection.dialect.name == "postgresql":
@@ -98,6 +101,9 @@ async def lifespan(app: FastAPI):
             worker.endpoint = settings.app_server_url
         # Apply contribution rule changes to existing users before serving traffic.
         from .models import User
+        from .quota import quota_lock, sync_credits
+        await quota_lock(session)
+        await sync_credits(session)
         for username in (await session.scalars(select(User.username).order_by(User.username))).all():
             await enforce_quota(session, username)
         await session.commit()
@@ -655,6 +661,8 @@ async def save_usage(
             record.conversation_evidence["client_tool_call_ids"] = [c["call_id"] for c in result.tool_calls]
         # Lock before inserting FK references, avoiding concurrent lock upgrades.
         worker = await session.scalar(select(Worker).where(Worker.id == target.worker_id).with_for_update()) if target.worker_id else None
+        from .usage_accounting import apply_usage, snapshot
+        await apply_usage(session, record, snapshot(result, audit))
         session.add(record)
         generation_ok = worker is None or target.worker_generation is None or worker.execution_generation == target.worker_generation
         checkpoint_ok = await finish_execution(session, audit, result if status_code == 200 and generation_ok else None, target, response_id)
@@ -681,6 +689,7 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
     chunks: list[str] = []
     thread_id = ""
     input_tokens = output_tokens = cache_read_tokens = cache_write_tokens = 0
+    usage_accounting = None
     retried = False
     try:
         while True:
@@ -689,6 +698,10 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
                     thread_id = event.thread_id or thread_id
                     from .audit import track_backend
                     track_backend(target, thread_id)
+                    if event.usage_accounting:
+                        usage_accounting = event.usage_accounting
+                        input_tokens, output_tokens, cache_read_tokens, cache_write_tokens = (
+                            event.input_tokens, event.output_tokens, event.cache_read_tokens, event.cache_write_tokens)
                     input_tokens = event.input_tokens or input_tokens
                     output_tokens = event.output_tokens or output_tokens
                     cache_read_tokens = event.cache_read_tokens or cache_read_tokens
@@ -742,7 +755,7 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
         yield sse({"type": "response.failed", "sequence_number": sequence, "response": failed})
         return
     text = "".join(chunks).rstrip()
-    result = BackendResult(text=text, tool_calls=tool_calls, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens, cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens)
+    result = BackendResult(text=text, tool_calls=tool_calls, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens, cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens, usage_accounting=usage_accounting)
     await save_usage(response_id, principal, target, body.model, 200, started, result, persist_binding=True, previous_response_id=public_previous_id, request_params=body.model_dump(mode="json"))
     if message_started or not tool_calls:
         if not message_started:
@@ -781,6 +794,7 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
     yield chat_sse(chunk({"role": "assistant", "content": ""}))
     thread_id = ""
     input_tokens = output_tokens = cache_read_tokens = cache_write_tokens = 0
+    usage_accounting = None
     output_chunks = []
     tool_calls = []
     content_emitted = False
@@ -792,6 +806,10 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
                     thread_id = event.thread_id or thread_id
                     from .audit import track_backend
                     track_backend(target, thread_id)
+                    if event.usage_accounting:
+                        usage_accounting = event.usage_accounting
+                        input_tokens, output_tokens, cache_read_tokens, cache_write_tokens = (
+                            event.input_tokens, event.output_tokens, event.cache_read_tokens, event.cache_write_tokens)
                     input_tokens = event.input_tokens or input_tokens
                     output_tokens = event.output_tokens or output_tokens
                     cache_read_tokens = event.cache_read_tokens or cache_read_tokens
@@ -829,7 +847,7 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
         yield chat_sse({"error": {"message": error_message, "type": "invalid_request_error" if tool_failure else "server_error", "code": error_code}})
         yield chat_sse("[DONE]")
         return
-    result = BackendResult(text="".join(output_chunks), tool_calls=tool_calls, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens, cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens)
+    result = BackendResult(text="".join(output_chunks), tool_calls=tool_calls, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens, cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens, usage_accounting=usage_accounting)
     await save_usage(completion_id, principal, target, body.model, 200, started, result, request_params=body.model_dump(mode="json"))
     for index, call in enumerate(tool_calls):
         yield chat_sse(chunk({"tool_calls":[{"index":index,"id":call["call_id"],"type":"function","function":{"name":call["name"],"arguments":call["arguments"]}}]}))

@@ -169,11 +169,15 @@ class ToolSessions:
                 if isinstance(event,Exception):
                     raise event
                 boundary=bool(event.tool_call or event.done)
-                if boundary:
+                if boundary or event.usage_accounting:
                     counts=tuple(getattr(event,n,0) for n in ('input_tokens','output_tokens','cache_read_tokens','cache_write_tokens'))
                     updates={n:max(0,v-old) for n,v,old in zip(('input_tokens','output_tokens','cache_read_tokens','cache_write_tokens'),counts,run.delivered_usage) if n in type(event).model_fields}
-                    run.delivered_usage=counts
-                    event=event.model_copy(update=updates)
+                    # Claude's successful result is authoritative, including downward
+                    # corrections. Persistence replaces earlier provisional records.
+                    if not (event.usage_accounting or {}).get('final'):
+                        event=event.model_copy(update=updates)
+                    if boundary:
+                        run.delivered_usage=counts
                 if event.tool_call:
                     suspended=True
                     run.accepted_call_id=None

@@ -63,6 +63,24 @@ History totals normalize numeric strings before addition. Overview, usage,
 request details (including cached tokens) and financial reports use the same
 formatter. Raw API/debug JSON keeps its original numbers.
 
+### Claude usage settlement
+
+Claude Workers collect message usage throughout a CLI execution, merging partial
+and assistant snapshots by message ID. Tool boundaries record incremental usage;
+failed and interrupted HTTP requests retain the latest known increment. A successful
+CLI `result` supplies the authoritative total, even when lower than the provisional
+sum. In one database transaction, the final request receives that total and earlier
+records for the same internal run ID have billable tokens and cost set to zero.
+Their original observations remain in `conversation_evidence.usage_accounting`,
+with `superseded_by` pointing to the final request. Reports therefore count only
+the final total; failed runs retain their incremental totals. Thread IDs alone are
+never used to settle usage, since later turns can reuse a thread.
+
+Settlement is serialized across gateway nodes and also suppresses provisional
+records that arrive after the final record. Both gateway and Claude Worker code
+must be upgraded to collect intermediate usage. This does not backfill historical
+missing usage or recover observations lost when a process is forcibly terminated.
+
 This rollout targets test only; production deployment requires a separate request.
 
 ## Install
@@ -176,6 +194,7 @@ The app-server connection pool allows up to 10 WebSockets per API Key/Worker pai
   admin form to anonymous callers.
 - One account may contribute at most `CODEX_GATEWAY_MAX_WORKERS_PER_USER`
   Workers (10 by default), because each one runs a container.
+- With `CODEX_GATEWAY_BACKEND=app_server` (or any cluster node), the gateway refuses to start while `CODEX_GATEWAY_KEY_PEPPER`, `CODEX_GATEWAY_APP_SERVER_TOKEN` or `CODEX_GATEWAY_MANAGER_TOKEN` is a built-in default, an `.env.example` placeholder (`change-me` / `change-this`) or shorter than 16 characters. The first superadmin is likewise not created from such an `CODEX_GATEWAY_ADMIN_PASSWORD`. The Worker Manager answers 503 until `CODEX_MANAGER_TOKEN` meets the same rule. Generate values with `openssl rand -hex 32`.
 - `CODEX_GATEWAY_ADMIN_PASSWORD` initializes the database credential only when the configured administrator does not yet exist. Later password changes are made from the admin console and persist in PostgreSQL. A password change increments the session version, invalidating every older admin cookie.
 - The test deployment listens on `0.0.0.0:8000`; production should firewall that port to the reverse proxy.
 - Model outputs are never stored; only a SHA-256 digest is retained. Request bodies, including prompts, ARE stored in `usage_records.request_params` so the console can show request details, and any administrator can read every user's prompts. Treat the database accordingly.

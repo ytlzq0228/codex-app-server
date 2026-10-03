@@ -59,7 +59,7 @@ def test_usage_exhaustion_preserves_quota_and_enabled_keys(provider, auth, plan)
             worker = Worker(name=owner, container_name=owner, owner_username=owner,
                 provider=provider, endpoint="http://test", enabled=True,
                 status=WorkerStatus.ready, auth_mode=auth, plan_type=plan,
-                account_email="paid@example.test", account_checked_at=datetime.now(timezone.utc))
+                account_email="paid-"+owner+"@example.test", account_checked_at=datetime.now(timezone.utc))
             key = ApiKey(name=owner, prefix=owner, key_hash=uuid4().hex,
                          owner_username=owner, enabled=True)
             db.add_all([worker, key])
@@ -102,7 +102,8 @@ def worker_services(monkeypatch):
     import codex_gateway.admin as admin
     import codex_gateway.contributions as contributions
     original_post, original_delete = httpx.AsyncClient.post,httpx.AsyncClient.delete
-    state={'account':{'type':'chatgpt','email':'contributor@example.com','planType':'plus'},'calls':0,'deleted':[]}
+    email='contributor-'+uuid4().hex[:10]+'@example.com'
+    state={'account':{'type':'chatgpt','email':email,'planType':'plus'},'email':email,'calls':0,'deleted':[]}
     async def post(client,url,**kwargs):
         if str(url)==get_settings().manager_url+'/workers':
             name=kwargs['json']['name']
@@ -229,7 +230,7 @@ def test_worker_credit_lifecycle_and_lru(worker_services):
         assert client.portal.call(summary,name)['used']==1
         assert rendered_pages(client, '/v1/models',headers={'Authorization':'Bearer '+older['secret']}).status_code==401
         assert rendered_pages(client, '/v1/models',headers={'Authorization':'Bearer '+newer['secret']}).status_code==200
-        worker_services['account']={'type':'chatgpt','email':'contributor@example.com','planType':'pro'}
+        worker_services['account']={'type':'chatgpt','email':worker_services['email'],'planType':'pro'}
         probe(client,token,worker)
         assert client.portal.call(summary,name)['available']==1
         assert client.post('/user/account/keys/'+older['key_id']+'/toggle',data={'csrf_token':token},headers=AJAX).status_code==200
@@ -247,15 +248,15 @@ def test_owner_isolation_account_read_and_admin_transfer(worker_services):
         probe(client,token,worker)
         assert new_key(client,token).status_code == 200
         r=client.post('/user/workers/'+worker+'/account',data={'csrf_token':token},headers=AJAX)
-        assert r.json()['account']['email']=='contributor@example.com'
+        assert r.json()['account']['email']==worker_services['email']
         page=rendered_pages(client, '/user/workers')
-        assert page.status_code==200 and 'contributor@example.com' in page.text and '+1 额度' in page.text
+        assert page.status_code==200 and worker_services['email'] in page.text and '+1 额度' in page.text
         token=user_login(client,bob,bpw)
         calls=worker_services['calls']
         for action in ['login','probe','account','delete']:
             assert client.post('/user/workers/'+worker+'/'+action,data={'csrf_token':token},headers=AJAX).status_code==404
         assert worker_services['calls']==calls and not worker_services['deleted']
-        assert 'contributor@example.com' not in rendered_pages(client, '/user/workers').text
+        assert worker_services['email'] not in rendered_pages(client, '/user/workers').text
         assert client.post('/admin/workers/'+worker+'/owner',data={'csrf_token':token,'username':bob},headers=AJAX).status_code==403
         token=admin_login(client)
         admin_workers=rendered_pages(client, '/admin/workers').text
@@ -263,7 +264,7 @@ def test_owner_isolation_account_read_and_admin_transfer(worker_services):
         assert f'data-worker-owner="{alice}"' in admin_workers
         assert 'id="worker-owner-dialog"' in admin_workers
         assert '<th>归属</th><th>节点</th><th>登录账号 / 套餐</th>' in admin_workers
-        assert 'contributor@example.com' in admin_workers and '>plus</span>' in admin_workers
+        assert worker_services['email'] in admin_workers and '>plus</span>' in admin_workers
         assert client.post('/admin/workers/'+worker+'/owner',data={'csrf_token':token,'username':bob},headers=AJAX).status_code==200
         assert f'data-worker-owner="{bob}"' in rendered_pages(client, '/admin/workers').text
         assert client.portal.call(summary,alice)['total']==0
@@ -441,13 +442,13 @@ def test_duplicate_account_quota_lifecycle_and_transfer(worker_services):
         token=user_login(client,alice,pw)
         first=contribute(client,token);probe(client,token,first)
         second=contribute(client,token)
-        worker_services['account']['email']='  CONTRIBUTOR@example.com  '
+        worker_services['account']['email']='  '+worker_services['email'].upper()+'  '
         probe(client,token,second)
         assert client.portal.call(summary,alice)['contributed']==1
-        assert '重复账号，不增加额度' in rendered_pages(client, '/user/workers').text
+        assert '账号已在其他 Worker 计入额度' in rendered_pages(client, '/user/workers').text
         older=new_key(client,token).json()['key_id']
         assert new_key(client,token).status_code==409
-        worker_services['account']['email']='another@example.com'
+        worker_services['account']['email']='another-'+worker_services['email']
         probe(client,token,second)
         assert client.portal.call(summary,alice)['contributed']==2
         newer=new_key(client,token).json()['key_id']
@@ -456,7 +457,7 @@ def test_duplicate_account_quota_lifecycle_and_transfer(worker_services):
                 key=await db.get(ApiKey,UUID(newer));key.last_used_at=datetime.now(timezone.utc)
                 await db.commit()
         client.portal.call(mark_used)
-        worker_services['account']['email']='contributor@example.com'
+        worker_services['account']['email']=worker_services['email']
         probe(client,token,second)
         assert client.portal.call(summary,alice)['used']==1
         async def check_keys():
@@ -467,11 +468,13 @@ def test_duplicate_account_quota_lifecycle_and_transfer(worker_services):
         worker_services['account']=None
         probe(client,token,first)
         assert client.portal.call(summary,alice)['contributed']==1
-        worker_services['account']={'type':'chatgpt','email':'contributor@example.com','planType':'plus'}
+        worker_services['account']={'type':'chatgpt','email':worker_services['email'],'planType':'plus'}
         probe(client,token,first)
         token=admin_login(client)
         assert client.post('/admin/workers/'+second+'/owner',data={'csrf_token':token,'username':bob},headers=AJAX).status_code==200
-        assert client.portal.call(summary,alice)['contributed']==1
+        # One upstream account credits once system-wide. The claim stays with the
+        # Worker that holds it (second re-claimed it while first was logged out).
+        assert client.portal.call(summary,alice)['contributed']==0
         assert client.portal.call(summary,bob)['contributed']==1
         assert client.post('/admin/workers/'+second+'/owner',data={'csrf_token':token,'username':alice},headers=AJAX).status_code==200
         assert client.portal.call(summary,bob)['contributed']==0
@@ -529,4 +532,81 @@ def test_any_identified_non_free_plan_contributes(worker_services):
         probe(client,token,worker)
         second=contribute(client,token);probe(client,token,second)
         assert client.portal.call(summary,name)['contributed']==1
-        assert '重复账号，不增加额度' in rendered_pages(client, '/user/workers').text
+        assert '账号已在其他 Worker 计入额度' in rendered_pages(client, '/user/workers').text
+
+
+def eligible_worker(owner, email, provider="codex"):
+    ident = uuid4().hex
+    auth = {"codex": "chatgpt", "gemini": "google-subscription", "claude": "claude-subscription"}[provider]
+    return Worker(name=ident, container_name=ident, owner_username=owner, provider=provider,
+                  endpoint="ws://test", enabled=True, status=WorkerStatus.ready, auth_mode=auth,
+                  plan_type="plus", account_email=email, account_checked_at=datetime.now(timezone.utc))
+
+
+def test_shared_account_credits_once_preferring_matching_username():
+    """aaa and bbb both log into aaa@...: aaa is credited even when bbb was first."""
+    async def check():
+        async with SessionLocal() as db:
+            tag = uuid4().hex[:10]
+            aaa, bbb, ccc = "pa-" + tag, "pb-" + tag, "pc-" + tag
+            db.add_all([User(username=name, enabled=True) for name in (aaa, bbb, ccc)])
+            await db.flush()
+            first = eligible_worker(bbb, aaa + "@example.com")
+            db.add(first); await reconcile_worker(db, first)
+            assert (await quota_summary(db, bbb))["contributed"] == 1
+            preferred = eligible_worker(aaa, aaa.upper() + "@Example.com")
+            db.add(preferred); await reconcile_worker(db, preferred)
+            assert (await quota_summary(db, aaa))["contributed"] == 1
+            assert (await quota_summary(db, bbb))["contributed"] == 0
+            # Same account on another provider is a separate credit.
+            other = eligible_worker(bbb, aaa + "@example.com", "claude")
+            db.add(other); await reconcile_worker(db, other)
+            assert (await quota_summary(db, bbb))["contributed"] == 1
+            # Neither owner matches ccc@...: whoever claims first keeps it.
+            held = eligible_worker(aaa, ccc + "-x@example.com")
+            db.add(held); await reconcile_worker(db, held)
+            late = eligible_worker(bbb, ccc + "-x@example.com")
+            db.add(late); await reconcile_worker(db, late)
+            assert (await quota_summary(db, aaa))["contributed"] == 2
+            assert (await quota_summary(db, bbb))["contributed"] == 1
+            # Logout releases the claim; the remaining Worker takes it over.
+            held.auth_mode = None
+            await reconcile_worker(db, held)
+            assert (await quota_summary(db, aaa))["contributed"] == 1
+            assert (await quota_summary(db, bbb))["contributed"] == 2
+            await db.rollback()
+    with TestClient(app) as client:
+        client.portal.call(check)
+
+
+def test_provider_entitlement_requires_logged_in_worker():
+    from codex_gateway.providers import allowed_providers
+    async def check():
+        async with SessionLocal() as db:
+            owner = "ent-" + uuid4().hex[:10]
+            db.add(User(username=owner, enabled=True))
+            await db.flush()
+            ident = uuid4().hex
+            idle = Worker(name=ident, container_name=ident, owner_username=owner, provider="claude",
+                          endpoint="http://test", status=WorkerStatus.offline)
+            db.add(idle); await db.flush()
+            assert await allowed_providers(db, owner) == set()
+            idle.auth_mode = "claude-subscription"
+            idle.account_checked_at = datetime.now(timezone.utc)
+            idle.status = WorkerStatus.ready
+            await db.flush()
+            assert await allowed_providers(db, owner) == {"claude"}
+            # Usage exhaustion keeps the grant.
+            idle.status, idle.failure_kind = WorkerStatus.error, "limit"
+            await db.flush()
+            assert await allowed_providers(db, owner) == {"claude"}
+            # Other failures, logout and deletion revoke it.
+            for change in ({"failure_kind": "connection"}, {"status": WorkerStatus.ready, "failure_kind": "logged_out"},
+                           {"failure_kind": None, "endpoint": "removed://worker"}):
+                for attr, value in change.items():
+                    setattr(idle, attr, value)
+                await db.flush()
+                assert await allowed_providers(db, owner) == set(), change
+            await db.rollback()
+    with TestClient(app) as client:
+        client.portal.call(check)

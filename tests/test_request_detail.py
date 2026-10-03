@@ -79,12 +79,16 @@ def test_detail_template_escapes_text_and_collapses_raw_data_without_worker_ids(
     html = env.get_template('shared/request-detail.html').render(record=record,
         worker=SimpleNamespace(name='worker-a', account_email='a@example.com', owner_username='alice'),
         evidence_fields=[], observation_fields=[], last_texts={'input_text': '<script>alert(1)</script>'},
-        correlation='{}', observation='null', params='{}')
+        correlation='{}', observation='null', params='{}', show_worker=True)
     assert html.count('<details class="request-json">') == 3
     assert '<script>' not in html and '&lt;script&gt;' in html
     assert 'private-worker-id' not in html
     assert all(value in html for value in ('worker-a', 'a@example.com', 'Previous Response', 'prior'))
     assert 'class="request-fields request-metadata-fields"' in html
+    hidden = env.get_template('shared/request-detail.html').render(record=record, worker=None,
+        evidence_fields=[], observation_fields=[], last_texts={}, correlation='{}',
+        observation='null', params='{}', show_worker=False)
+    assert '<h3>Worker</h3>' not in hidden and 'a@example.com' not in hidden
     ordered_labels = ('输入 Token', '缓存读 Token', '缓存写 Token', '输出 Token',
                       '输入单价', '缓存读单价', '缓存写单价', '输出单价')
     positions = [html.index(label) for label in ordered_labels]

@@ -9,6 +9,10 @@ LABELS = {
     'history_observation': '历史匹配观测', 'mode': '模式', 'result': '结果',
     'candidate_request_ids': '候选请求', 'action': '动作', 'reason': '原因',
     'output_sha256': '输出摘要', 'client_tool_call_ids': '客户端工具调用',
+    'usage_accounting': '用量结算', 'run_id': '执行轮次', 'final': '最终用量',
+    'tokens': '原始观测用量', 'superseded_by': '已由此请求结算',
+    'input_tokens': '输入 Token', 'output_tokens': '输出 Token',
+    'cache_read_tokens': '缓存读取 Token', 'cache_write_tokens': '缓存写入 Token',
 }
 VALUES = {'isolated': '独立请求', 'identifier_conflict': '标识冲突',
           'explicit_client_thread': '客户端显式 Thread', 'previous_response': '上一条响应',

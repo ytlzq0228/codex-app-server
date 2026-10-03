@@ -3,6 +3,8 @@
   if (!root) return;
   const base = root.dataset.historyBase || '/admin/history';
   const pageParameter = root.dataset.historyPageParam || 'history_page';
+  // The user portal hides which Worker served each request; administrators keep it.
+  const showWorker = root.dataset.historyShowWorker !== 'false';
   const form = root.querySelector('[data-history-filters]');
   const results = root.querySelector('[data-history-results]');
   const pagination = root.querySelector('[data-history-pagination]');
@@ -36,7 +38,7 @@
       const row = document.createElement('tr'); row.className = 'history-row';
       row.innerHTML = `<td>${time(group.latest_at)}</td><td><code title="${esc(group.conversation_id)}">${esc(group.conversation_id)}</code>${group.logical?'':'<small>旧记录：以 Thread / 请求 ID 标识</small>'}<small>${group.thread_count} 个 Worker Thread</small></td><td>${esc(group.key_name || '已删除')}</td><td><span class="badge">${esc(group.endpoint || 'unknown')}</span></td><td>${group.request_count}</td><td>${badge(group.latest_status)}</td><td>${totalTokens(group.input_tokens, group.output_tokens)}</td><td>${price(group.cost_usd)}${group.unpriced_count?`<small>另有 ${group.unpriced_count} 条未定价</small>`:''}</td><td><button type="button" class="button button-small" aria-expanded="false">展开</button></td>`;
       const detail = document.createElement('tr'); detail.className = 'history-detail history-conversation-detail'; detail.hidden = true; detail.id = `history-group-${index}`;
-      detail.innerHTML = `<td colspan="9"><div class="conversation-records"><div class="conversation-summary"><span>输入 ${tokens(group.input_tokens)} Token</span><span>输出 ${tokens(group.output_tokens)} Token</span><span>累计耗时 ${group.duration_ms} ms</span><span>总价格 USD：${price(group.cost_usd)}</span></div><p data-detail-error class="alert alert-error" hidden></p><div class="table-wrap"><table><thead><tr><th>时间</th><th>请求 ID</th><th>Worker</th><th>模型</th><th>状态</th><th>Token</th><th>耗时</th><th>价格（USD）</th></tr></thead><tbody></tbody></table></div><div class="history-more"><button type="button" class="button button-small">加载请求</button></div></div></td>`;
+      detail.innerHTML = `<td colspan="9"><div class="conversation-records"><div class="conversation-summary"><span>输入 ${tokens(group.input_tokens)} Token</span><span>输出 ${tokens(group.output_tokens)} Token</span><span>累计耗时 ${group.duration_ms} ms</span><span>总价格 USD：${price(group.cost_usd)}</span></div><p data-detail-error class="alert alert-error" hidden></p><div class="table-wrap"><table><thead><tr><th>时间</th><th>请求 ID</th><th>${showWorker ? 'Worker' : 'Thread'}</th><th>模型</th><th>状态</th><th>Token</th><th>耗时</th><th>价格（USD）</th></tr></thead><tbody></tbody></table></div><div class="history-more"><button type="button" class="button button-small">加载请求</button></div></div></td>`;
       const toggle = row.querySelector('button'); toggle.setAttribute('aria-controls', detail.id);
       const more = detail.querySelector('button'); const detailError = detail.querySelector('[data-detail-error]');
       let nextPage = 1, loaded = 0, busy = false;
@@ -50,7 +52,7 @@
           const rows = detail.querySelector('tbody');
           for (const request of batch.requests) {
             const item = document.createElement('tr'); item.dataset.historyRequest = '';
-            item.innerHTML = `<td>${time(request.created_at)}</td><td><a data-request-detail href="/user/usage/${encodeURIComponent(request.request_id)}">${esc(request.request_id)}</a><small>${esc(request.owner_username || '—')}</small></td><td>${esc(request.worker_name || '—')}<small>Thread：${esc(request.thread_id || '未记录')}</small><small>关联：${esc(request.evidence || 'legacy_thread')}</small></td><td>${esc(request.model)}</td><td>${badge(request.status_code)}${request.error_code?`<small>${esc(request.error_code)}</small>`:''}</td><td>${totalTokens(request.input_tokens, request.output_tokens)}</td><td>${request.duration_ms} ms</td><td>${price(request.cost_usd)}</td>`;
+            item.innerHTML = `<td>${time(request.created_at)}</td><td><a data-request-detail href="/user/usage/${encodeURIComponent(request.request_id)}">${esc(request.request_id)}</a><small>${esc(request.owner_username || '—')}</small></td><td>${showWorker ? `${esc(request.worker_name || '—')}<small>Thread：${esc(request.thread_id || '未记录')}</small>` : esc(request.thread_id || '未记录')}<small>关联：${esc(request.evidence || 'legacy_thread')}</small></td><td>${esc(request.model)}</td><td>${badge(request.status_code)}${request.error_code?`<small>${esc(request.error_code)}</small>`:''}</td><td>${totalTokens(request.input_tokens, request.output_tokens)}</td><td>${request.duration_ms} ms</td><td>${price(request.cost_usd)}</td>`;
             rows.append(item);
           }
           loaded += batch.requests.length; nextPage = batch.page < batch.pages ? batch.page+1 : 0;

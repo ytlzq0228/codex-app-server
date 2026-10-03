@@ -115,6 +115,19 @@ class Worker(Base):
     retry_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     recovered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+class ContributionCredit(Base):
+    """One quota credit per upstream account system-wide, held by a single Worker.
+
+    The primary key is the claim: concurrent logins of the same account race for
+    this row, and whoever holds it is credited. Owners whose username equals the
+    email local part may take the row over from anyone else.
+    """
+    __tablename__ = "contribution_credits"
+    provider: Mapped[str] = mapped_column(String(16), primary_key=True)
+    account_email: Mapped[str] = mapped_column(String(320), primary_key=True)
+    worker_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("workers.id", ondelete="CASCADE"), unique=True)
+
+
 class AppNode(Base):
     __tablename__ = "app_nodes"
     id: Mapped[str] = mapped_column(String(80), primary_key=True)

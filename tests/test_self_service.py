@@ -58,14 +58,12 @@ def test_forced_password_and_role_boundaries():
 
 
 async def own_codex_worker(username):
-    # Admin capacity alone no longer grants model access. These tests exercise
-    # billing/key rotation with an owner who has a Codex Worker.
+    # Admin capacity alone no longer grants model access, and an idle Worker
+    # grants nothing either; these billing/rotation tests use an explicit grant.
     from codex_gateway.database import SessionLocal
-    from codex_gateway.models import Worker, WorkerStatus
+    from codex_gateway.models import User
     async with SessionLocal() as db:
-        name = "permission-" + uuid4().hex
-        db.add(Worker(name=name, container_name=name, owner_username=username,
-                      provider="codex", endpoint="ws://test", enabled=False, status=WorkerStatus.offline))
+        (await db.get(User, username)).provider_grants = ["codex"]
         await db.commit()
 
 

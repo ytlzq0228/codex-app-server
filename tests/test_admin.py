@@ -29,6 +29,17 @@ def login(client: TestClient) -> str:
     return match.group(1)
 
 
+async def grant_admin_codex():
+    # The mock bootstrap Worker is never logged in, so it no longer grants Codex;
+    # keep this test independent of grants left behind by other tests.
+    from codex_gateway.database import SessionLocal
+    from codex_gateway.models import User
+    async with SessionLocal() as db:
+        user = await db.get(User, get_settings().admin_username)
+        user.provider_grants = sorted(set(user.provider_grants or []) | {"codex"})
+        await db.commit()
+
+
 def test_admin_redirects_to_login_without_cookie() -> None:
     with TestClient(app) as client:
         response = rendered_pages(client, "/admin", follow_redirects=False)
@@ -123,6 +134,7 @@ def test_admin_can_change_password_and_invalidate_old_session() -> None:
 def test_key_can_be_edited_and_soft_deleted_without_losing_history() -> None:
     with TestClient(app) as client:
         csrf = login(client)
+        client.portal.call(grant_admin_codex)
         assert client.post("/admin/users/"+get_settings().admin_username+"/quota", data={"csrf_token":csrf,"amount":1}, headers={"X-Requested-With":"XMLHttpRequest"}).status_code == 200
         original_name = f"admin-lifecycle-{uuid4().hex[:8]}"
         renamed = f"admin-renamed-{uuid4().hex[:8]}"

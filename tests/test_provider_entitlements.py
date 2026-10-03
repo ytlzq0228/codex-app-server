@@ -8,7 +8,7 @@ from codex_gateway.config import get_settings
 from codex_gateway.database import SessionLocal
 from codex_gateway.models import User, Worker, WorkerStatus, ApiKey, UsageRecord
 from codex_gateway.security import generate_api_key, hash_api_key
-from codex_gateway.quota import quota_summary, credited_workers
+from codex_gateway.quota import quota_summary, credited_workers, reconcile_worker
 from codex_gateway.subscriptions import subscription_summary
 
 
@@ -29,8 +29,11 @@ def test_owner_provider_entitlements_and_cross_provider_credits(monkeypatch):
                 workers.append(ident)
                 db.add(Worker(id=ident, owner_username=owner, name=ident.hex, container_name=ident.hex,
                     provider="codex", endpoint="ws://test", enabled=True, status=WorkerStatus.ready,
-                    auth_mode="chatgpt", plan_type="plus", account_email="same@example.test",
+                    auth_mode="chatgpt", plan_type="plus", account_email="same-"+owner+"@example.test",
                     account_checked_at=datetime.now(timezone.utc)))
+            await db.flush()
+            for ident in workers:
+                await reconcile_worker(db, await db.get(Worker, ident))
             for _ in range(2):
                 raw, prefix = generate_api_key()
                 keys.append(raw)
@@ -45,6 +48,9 @@ def test_owner_provider_entitlements_and_cross_provider_credits(monkeypatch):
             w.auth_mode = "google-subscription" if provider == "gemini" else "chatgpt"
             w.plan_type = plan
             if removed: w.endpoint = "removed://worker"
+            # Move the credit claim without disabling keys, as the original check did.
+            from codex_gateway.quota import sync_credits
+            await sync_credits(db, claimant=w)
             await db.commit()
 
     async def inspect():
@@ -135,7 +141,7 @@ def test_gemini_web_logout_invalidates_credit_and_sessions(monkeypatch):
                 w=await db.get(Worker,ident)
                 w.auth_mode="google-subscription"
                 w.plan_type="gcp-ge-plus-tier"
-                w.account_email="web@example.test"
+                w.account_email="web-"+owner+"@example.test"
                 w.account_checked_at=datetime.now(timezone.utc)
                 w.status=WorkerStatus.ready
                 await db.commit()
@@ -185,7 +191,8 @@ def test_admin_manual_provider_grants_and_revocation(monkeypatch):
                           key_hash=hash_api_key(raw, settings.key_pepper.get_secret_value())))
             ident = uuid4().hex
             db.add(Worker(name=ident, container_name=ident, owner_username=owner,
-                          provider='codex', endpoint='ws://test', status=WorkerStatus.offline))
+                          provider='codex', endpoint='ws://test', status=WorkerStatus.ready,
+                          auth_mode='chatgpt', account_checked_at=datetime.now(timezone.utc)))
             await db.commit()
         return raw
     with TestClient(app) as client:

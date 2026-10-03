@@ -24,6 +24,8 @@ class ClaudeAdapter:
                       else self._turn_events(request, target))
             async with aclosing(events):
                 async for event in events:
+                    from .usage_accounting import observe_usage
+                    observe_usage(target, event)
                     yield event
         except ToolProtocolError as exc:
             raise WorkerFailure(str(exc), kind="request") from exc
@@ -41,6 +43,7 @@ class ClaudeAdapter:
                 if not worker or worker.provider != "claude" or worker.execution_generation != target.worker_generation or worker.endpoint != target.endpoint:
                     raise WorkerFailure("Worker identity changed", kind="account_changed")
         from uuid import uuid4
+        usage_run_id = uuid4().hex
         from .claude_images import content_blocks
         payload = {"model": self.settings.model_alias_map().get(request.model, request.model),
                    "session_id": request.previous_response_id or str(uuid4()),
@@ -103,11 +106,17 @@ class ClaudeAdapter:
                         if not line:
                             continue
                         data = json.loads(line)
+                        accounting = ({"run_id": usage_run_id, "final": bool(data.get("done"))}
+                                      if any(k in data for k in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")) else None)
                         if data.get("heartbeat"):
                             continue
                         if data.get("error"):
                             raise WorkerFailure(data["error"], kind=data.get("kind", "connection"))
                         thread = data.get("thread_id") or thread
+                        if data.get("event") == "usage":
+                            yield BackendStreamEvent(thread_id=thread, usage_accounting=accounting,
+                                **{name: data.get(name, 0) for name in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")})
+                            continue
                         if data.get("event") == "client_tool":
                             if tool_run is None or not thread:
                                 raise ToolProtocolError("Unexpected Claude client tool request")
@@ -143,6 +152,7 @@ class ClaudeAdapter:
                             grammar_needs_correction = False
                             await self.tool_sessions.await_result(tool_run, call)
                             yield BackendStreamEvent(thread_id=thread, tool_call=call,
+                                usage_accounting=accounting,
                                 input_tokens=data.get("input_tokens", 0), output_tokens=data.get("output_tokens", 0),
                                 cache_read_tokens=data.get("cache_read_tokens", 0),
                                 cache_write_tokens=data.get("cache_write_tokens", 0))
@@ -174,6 +184,7 @@ class ClaudeAdapter:
                                                         "structured_output_invalid") from exc
                             delta = json.dumps(parsed, ensure_ascii=False)
                         yield BackendStreamEvent(thread_id=thread, delta=delta, done=data.get("done", False),
+                            usage_accounting=accounting,
                             input_tokens=data.get("input_tokens", 0), output_tokens=data.get("output_tokens", 0),
                             cache_read_tokens=data.get("cache_read_tokens", 0),
                             cache_write_tokens=data.get("cache_write_tokens", 0))
@@ -202,6 +213,7 @@ class ClaudeAdapter:
         if not terminal.done and not calls:
             raise WorkerFailure("Claude returned no final result")
         return BackendResult(text=text, tool_calls=calls, thread_id=terminal.thread_id,
+                             usage_accounting=terminal.usage_accounting,
                              input_tokens=terminal.input_tokens, output_tokens=terminal.output_tokens,
                              cache_read_tokens=terminal.cache_read_tokens, cache_write_tokens=terminal.cache_write_tokens)
 

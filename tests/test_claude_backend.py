@@ -19,6 +19,31 @@ TARGET = BackendTarget("key:worker", "http://worker", "/workspace/key", provider
 PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZlS8AAAAASUVORK5CYII="
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("structured", [False, True])
+async def test_continuous_usage_survives_worker_failure(backend, monkeypatch, structured):
+    from codex_gateway.audit import current_audit
+    async def handler(request):
+        lines = [dict(event="usage", thread_id="thread", input_tokens=120, output_tokens=8,
+                      cache_read_tokens=20, cache_write_tokens=10),
+                 dict(error="Claude execution interrupted or timed out: TimeoutError", kind="connection")]
+        return httpx.Response(200, text="\n".join(json.dumps(line) for line in lines))
+    transport(monkeypatch, handler)
+    audit = {}
+    token = current_audit.set(audit)
+    try:
+        request = ResponseRequest(model="claude-test", input="hi",
+            text={"format": {"type": "json_schema", "name": "answer", "schema": {"type": "object"}}} if structured else None)
+        with pytest.raises(WorkerFailure):
+            await backend.complete(request, TARGET)
+        assert audit["claude_usage"]["tokens"] == dict(input_tokens=120, output_tokens=8, cache_read_tokens=20, cache_write_tokens=10)
+        assert audit["claude_usage"]["run_id"] and not audit["claude_usage"]["final"]
+        assert audit["backend_context"]["thread_id"] == "thread"
+    finally:
+        current_audit.reset(token)
+        await backend.close()
+
+
 @pytest.fixture
 def backend(monkeypatch):
     monkeypatch.setattr(get_settings(), "model_providers", "claude-test:claude")

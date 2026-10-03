@@ -307,6 +307,43 @@ def usage_counts(usage):
             "cache_read_tokens": read, "cache_write_tokens": write}
 
 
+class TurnUsage:
+    """Merge partial snapshots by message ID; assistant echoes are not new usage."""
+
+    def __init__(self):
+        self.messages = {}
+        self.active = {}
+
+    def observe(self, item):
+        parent = item.get("parent_tool_use_id")
+        event = item.get("event") if item.get("type") == "stream_event" else None
+        message = None
+        if isinstance(event, dict):
+            if event.get("type") == "message_start":
+                message = event.get("message") or {}
+                self.active[parent] = message.get("id")
+            elif event.get("type") == "message_delta":
+                message = {"id": self.active.get(parent), "usage": event.get("usage")}
+        elif item.get("type") == "assistant":
+            message = item.get("message") or {}
+        if not message or not message.get("id") or not isinstance(message.get("usage"), dict):
+            return False
+        before = self.counts()
+        usage = self.messages.setdefault(message["id"], {})
+        for key in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"):
+            value = message["usage"].get(key)
+            if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+                usage[key] = max(usage.get(key, 0), int(value))
+        return before != self.counts()
+
+    def counts(self):
+        totals = usage_counts({})
+        for usage in self.messages.values():
+            for key, value in usage_counts(usage).items():
+                totals[key] += value
+        return totals
+
+
 def admission_error(status, code, message):
     return HTTPException(status, {"code": code, "message": message})
 
@@ -374,6 +411,7 @@ async def turn(body: Turn, request: Request = None):
         produced_output = False
         thread = body.conversation or body.session_id
         hidden_blocks = set()
+        usage = TurnUsage()
         try:
             temporary = tempfile.TemporaryDirectory(prefix="gateway-turn-", dir="/tmp")
             bridge = ToolBridge(body.tools)
@@ -408,13 +446,15 @@ async def turn(body: Turn, request: Request = None):
             source = bridge.messages(process.stdout)
             async with aclosing(source):
                 async for item in source:
+                    if usage.observe(item):
+                        yield json.dumps({"event": "usage", "thread_id": thread, **usage.counts()}) + "\n"
                     # Relay events carry a string "event"; CLI stream_event lines nest a dict there.
                     kind = item["event"] if isinstance(item.get("event"), str) else item.get("type")
                     if kind == "heartbeat":
                         yield json.dumps({"heartbeat": True}) + "\n"
                     elif kind == "client_tool":
                         produced_output = True
-                        yield json.dumps({**item, "thread_id": thread}) + "\n"
+                        yield json.dumps({**item, "thread_id": thread, **usage.counts()}) + "\n"
                     elif kind == "system":
                         if item.get("subtype") == "init":
                             thread = item.get("session_id") or thread

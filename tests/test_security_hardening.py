@@ -103,6 +103,28 @@ def test_password_login_locks_out_after_repeated_failures() -> None:
         succeed_login(client)
 
 
+def test_account_lock_from_one_address_does_not_lock_other_addresses() -> None:
+    """Remote guessing must not deny the real owner, who logs in from elsewhere."""
+    username, password = admin_credentials()
+    with TestClient(app, client=("198.51.100.7", 50000)) as attacker:
+        for _ in range(ALLOWANCE["user"]):
+            attacker.post("/auth/login", data={"username": username, "password": "wrong"},
+                          follow_redirects=False)
+        locked = attacker.post("/auth/login", data={"username": username, "password": password},
+                               follow_redirects=False)
+        assert locked.status_code == 429
+    with TestClient(app, client=("203.0.113.9", 50000)) as owner:
+        succeed_login(owner)
+    with TestClient(app, client=("198.51.100.7", 50000)) as attacker:
+        # Clear the attacker-side counters so later tests start clean.
+        from codex_gateway.database import SessionLocal
+        from codex_gateway.login_throttle import clear
+        async def reset():
+            async with SessionLocal() as db:
+                await clear(db, [f"user:{username}|198.51.100.7", "addr:198.51.100.7"])
+        attacker.portal.call(reset)
+
+
 def test_worker_contribution_is_capped_per_account(monkeypatch) -> None:
     import re
 
@@ -177,3 +199,37 @@ def test_native_gemini_bearer_endpoint_accepts_origin_but_still_requires_key():
         )
         assert response.status_code == 200
         assert response.json()["candidates"][0]["content"]["parts"]
+
+
+def test_real_backend_refuses_default_or_placeholder_secrets() -> None:
+    from pydantic import SecretStr
+    from codex_gateway.config import Settings, insecure_secrets
+    strong = SecretStr("k" * 32)
+    assert insecure_secrets(Settings(backend="mock")) == []
+    weak = Settings(backend="app_server")
+    assert set(insecure_secrets(weak)) == {"CODEX_GATEWAY_KEY_PEPPER", "CODEX_GATEWAY_APP_SERVER_TOKEN",
+                                           "CODEX_GATEWAY_MANAGER_TOKEN"}
+    placeholder = Settings(backend="app_server", key_pepper=strong, app_server_token=strong,
+                           manager_token=SecretStr("change-this-manager-token"))
+    assert insecure_secrets(placeholder) == ["CODEX_GATEWAY_MANAGER_TOKEN"]
+    short = Settings(backend="app_server", key_pepper=strong, app_server_token=strong, manager_token=SecretStr("short"))
+    assert insecure_secrets(short) == ["CODEX_GATEWAY_MANAGER_TOKEN"]
+    assert insecure_secrets(Settings(backend="app_server", key_pepper=strong, app_server_token=strong, manager_token=strong)) == []
+
+
+def test_manager_rejects_missing_or_placeholder_token(monkeypatch) -> None:
+    import importlib
+    import docker
+    import pytest
+    from fastapi import HTTPException
+    monkeypatch.setattr(docker, "from_env", lambda: None)
+    manager = importlib.import_module("codex_gateway.manager")
+    for value in ("", "change-this-manager-token"):
+        monkeypatch.setenv("CODEX_MANAGER_TOKEN", value)
+        with pytest.raises(HTTPException) as error:
+            manager.authorize("Bearer " + value)
+        assert error.value.status_code == 503
+    monkeypatch.setenv("CODEX_MANAGER_TOKEN", "m" * 32)
+    with pytest.raises(HTTPException):
+        manager.authorize("Bearer wrong")
+    manager.authorize("Bearer " + "m" * 32)

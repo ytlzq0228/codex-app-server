@@ -2,6 +2,7 @@
 """Run the two requested concurrency scenarios against a remote gateway."""
 
 import argparse
+import os
 import asyncio
 import base64
 import json
@@ -115,8 +116,8 @@ async def scenario(name, base_url, keys):
 
 async def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--host", default="<deploy-user>@<test-host>")
-    parser.add_argument("--base-url", default="http://<test-host>:8000")
+    parser.add_argument("--host", default=os.environ.get("CODEX_TEST_SSH"), required="CODEX_TEST_SSH" not in os.environ, help="SSH target, e.g. user@test-host (env CODEX_TEST_SSH)")
+    parser.add_argument("--base-url", default=os.environ.get("CODEX_TEST_BASE_URL"), required="CODEX_TEST_BASE_URL" not in os.environ, help="Gateway URL (env CODEX_TEST_BASE_URL)")
     parser.add_argument("--container", default="codex-app-server-gateway-1")
     args = parser.parse_args()
     rows = json.loads(ssh_python(args.host, args.container, REMOTE_CREATE))

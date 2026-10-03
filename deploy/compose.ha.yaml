@@ -4,7 +4,7 @@ services:
     container_name: codex-app-server-gateway-1
     image: ${GATEWAY_IMAGE:?set GATEWAY_IMAGE}
     env_file: .env.ha
-    command: ["uvicorn", "codex_gateway.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "192.0.2.8,192.0.2.9,203.0.113.8,203.0.113.9"]
+    command: ["uvicorn", "codex_gateway.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "${CODEX_GATEWAY_TRUSTED_PROXY_IPS:?set CODEX_GATEWAY_TRUSTED_PROXY_IPS in .env}"]
     ports: ["8000:8000"]
     extra_hosts: ["host.docker.internal:host-gateway"]
     read_only: true

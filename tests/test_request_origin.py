@@ -8,7 +8,7 @@ from codex_gateway.main import request_limits_and_headers
 
 
 @pytest.mark.parametrize("path", ["/auth/login", "/user/account/key"])
-@pytest.mark.parametrize("base_url", ["https://gateway.example.com", "http://<test-host>:8000"])
+@pytest.mark.parametrize("base_url", ["https://gateway.example.com", "http://192.0.2.24:8000"])
 @pytest.mark.parametrize(
     "origin, fetch_site, expected_status",
     [

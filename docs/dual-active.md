@@ -44,9 +44,13 @@ checkpoint/租约均保存在 PG。进程内 WebSocket、运行任务与工具 F
 Docker 网络 `codex-app-server_default` 是已创建的 external network。
 生产 Compose project 为 `codex-ha`，gateway/manager 使用明确容器名，
 避免 Compose 把保留的旧项目回退容器当作新服务重建。
+`.env` 还必须设置 `CODEX_GATEWAY_TRUSTED_PROXY_IPS`（入口 pfSense 地址），
+未设置时 Compose 拒绝启动。真实节点地址、主机和目录只记录在本地
+`docs/real-environment.md`（已 gitignore），仓库内统一使用 `<app-1>` 等占位符。
 
 `deploy/haproxy-db.cfg` 使用 Patroni `OPTIONS /primary` 检查三台 DB：
 <db-01>、<db-02>、<db-03>；不能写死数据库 leader。
+地址通过 HAProxy 进程环境变量 `CODEX_DB_01..03` 注入。
 将 bind 改成本机私网地址。`deploy/restrict-ha-ports.sh` 限制 manager 与
 Worker 发布端口只供本机和指定应用节点访问，并限制 DB Proxy 仅本机使用。
 通过 systemd 在 Docker 启动后恢复规则。
@@ -59,7 +63,8 @@ Bearer token，以及 Worker 归属、generation、provider、endpoint、enabled
 入口 HAProxy 应将两台 APP 的 8000 端口加入同一 backend，使用
 `GET /healthz` 检查，保留 Authorization / Cookie / Origin / Fetch Metadata，
 关闭 SSE 缓冲并保留足够长的连接超时。`deploy/pfsense-codex-ha.php`
-通过 pfSense 原生配置接口仅更新现有 Codex 生产 backend，默认预览验证，
+通过 pfSense 原生配置接口仅更新现有 Codex 生产 backend，节点地址用
+`--nodes=<app-1>,<app-2>` 传入，默认预览验证，
 传入 `--apply` 才持久化并重新加载，其他服务与测试 backend 保留。
 Web 登录使用同一公共域名，
 共享数据库会话不能让浏览器自动跨 IP 共享 cookie。

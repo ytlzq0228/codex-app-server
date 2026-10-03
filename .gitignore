@@ -5,3 +5,6 @@ __pycache__/
 .venv/
 .DS_Store
 AGENTS.md
+
+# Real environment deployment details (local only, never commit)
+docs/real-environment.md

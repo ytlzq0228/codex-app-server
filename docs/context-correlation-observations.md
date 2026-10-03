@@ -19,7 +19,7 @@
 
 认证、Cookie、Key、Token、密码等已知敏感名称脱敏；JSON 请求头中的同类字段递归脱敏，URL 查询参数同样处理。请求体沿用原有记录方式。本次不改变原有请求体保存范围。未知自定义字段仍可能包含敏感业务信息，观测记录沿用请求详情的用户/管理员访问控制。
 
-观测版本 2 的 `client_ip` 只读取 `request.client.host`；`client_address` 是同一 ASGI 地址及端口，不代表原始 TCP peer。Uvicorn 在应用之前处理代理头：Compose 显式开启 `--proxy-headers`，`--forwarded-allow-ips` 默认仅信任 `192.0.2.8,192.0.2.9,203.0.113.8,203.0.113.9`，可通过 `CODEX_GATEWAY_TRUSTED_PROXY_IPS` 配置。来自这些 pfSense HAProxy 节点的请求，按 XFF 右侧非信任地址还原 IP，并按 X-Forwarded-Proto 还原 scheme；其他来源伪造代理头不会改写应用地址。经代理还原后的端口可能为 0，不能用它识别会话。
+观测版本 2 的 `client_ip` 只读取 `request.client.host`；`client_address` 是同一 ASGI 地址及端口，不代表原始 TCP peer。Uvicorn 在应用之前处理代理头：Compose 显式开启 `--proxy-headers`，`--forwarded-allow-ips` 由 `CODEX_GATEWAY_TRUSTED_PROXY_IPS` 配置（生产为四台 pfSense HAProxy 节点地址，见本地 `docs/real-environment.md`；未设置时 `compose.yaml` 仅信任 127.0.0.1，`deploy/compose.ha.yaml` 拒绝启动）。来自这些 pfSense HAProxy 节点的请求，按 XFF 右侧非信任地址还原 IP，并按 X-Forwarded-Proto 还原 scheme；其他来源伪造代理头不会改写应用地址。经代理还原后的端口可能为 0，不能用它识别会话。
 
 HAProxy 须追加真实连接来源到 XFF，并覆盖 X-Forwarded-Proto；不要将信任范围设置为 `*` 或整个 Docker 网段。原始 XFF 仍作为观测请求头保存，但不用于业务 IP 判断。这里不使用 X-Auth 共享密钥认证。Compose 之外启动 Uvicorn 时也须显式传同样的参数。现有观测记录不回填。
 

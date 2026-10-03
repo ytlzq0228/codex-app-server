@@ -2,19 +2,28 @@
 require_once('/etc/inc/config.inc');
 require_once('/usr/local/pkg/haproxy/haproxy.inc');
 $apply = in_array('--apply', $argv, true);
+// Usage: php pfsense-codex-ha.php --nodes=<app-1-ip>,<app-2-ip> [--apply]
+$nodes = [];
+foreach ($argv as $arg) {
+    if (strpos($arg, '--nodes=') === 0) $nodes = array_values(array_filter(explode(',', substr($arg, 8))));
+}
+foreach ($nodes as $address) {
+    if (!filter_var($address, FILTER_VALIDATE_IP)) { fwrite(STDERR, "Invalid node address: $address\n"); exit(1); }
+}
+if (count($nodes) !== 2) { fwrite(STDERR, "Pass --nodes=<app-1-ip>,<app-2-ip>\n"); exit(1); }
 $found = false;
 foreach ($config['installedpackages']['haproxy']['ha_pools']['item'] as &$pool) {
     if ($pool['name'] !== 'codex-app-server-backend') continue;
     $old = $pool['ha_servers']['item'];
     $new = [];
-    foreach (['<app-1>', '<app-2>'] as $i => $address) {
+    foreach ($nodes as $i => $address) {
         $existing = null;
         foreach ($old as $server) {
             if ($server['address'] === $address && $server['port'] === '8000') $existing = $server;
         }
         $server = $existing ?? ['id' => (string)(115 + $i)];
         $server['status'] = 'active';
-        $server['name'] = 'codex-app-server-' . substr($address, 7);
+        $server['name'] = 'codex-app-server-' . implode('.', array_slice(explode('.', $address), -2));
         $server['address'] = $address;
         $server['port'] = '8000';
         $new[] = $server;
@@ -42,9 +51,9 @@ if ($apply) {
         copy('/conf/config.xml', '/conf/config.xml.before-codex-ha-20261002');
         chmod('/conf/config.xml.before-codex-ha-20261002', 0600);
     }
-    write_config('Codex dual-active APP backend <app-1> + <app-2> -NoReMoTeBaCkUp');
+    write_config('Codex dual-active APP backend ' . implode(' + ', $nodes) . ' -NoReMoTeBaCkUp');
     if (!haproxy_check_and_run($messages, true)) {
         fwrite(STDERR, "HAProxy reload failed; saved configuration backup retained\n"); exit(3);
     }
 }
-echo json_encode(['mode' => $apply ? 'applied' : 'validated', 'backend' => 'codex-app-server-backend', 'nodes' => ['<app-1>:8000', '<app-2>:8000']]) . "\n";
+echo json_encode(['mode' => $apply ? 'applied' : 'validated', 'backend' => 'codex-app-server-backend', 'nodes' => array_map(fn($a) => $a . ':8000', $nodes)]) . "\n";

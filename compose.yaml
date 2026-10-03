@@ -2,7 +2,7 @@ services:
   gateway:
     build: .
     env_file: .env
-    command: ["uvicorn", "codex_gateway.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "${CODEX_GATEWAY_TRUSTED_PROXY_IPS:-192.0.2.8,192.0.2.9,203.0.113.8,203.0.113.9}"]
+    command: ["uvicorn", "codex_gateway.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "${CODEX_GATEWAY_TRUSTED_PROXY_IPS:-127.0.0.1}"]
     ports: ["0.0.0.0:8000:8000"]
     depends_on:
       db: {condition: service_healthy}

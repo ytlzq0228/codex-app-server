@@ -83,8 +83,9 @@ Web 登录使用同一公共域名，
 相同账号的副本。原迁移备份 `/opt/codex-app-server/deploy-backups/ha-20261002`
 已按后续“仅保留最近一次备份”的要求清理。当前每个正式节点的最新备份
 位于 `/opt/codex-app-server-ha/deploy-backups/release-<时间>/`。
-之后使用 `scripts/deploy_release.py` 发布：先检查数据库访问，再删除历史备份、
-创建本次备份，然后只更新 gateway 和 worker-manager。
+之后使用 `scripts/deploy_release.py` 发布：测试环境先删除历史备份并创建
+最新备份；测试验证通过后，正式环境直接更新 gateway 和 worker-manager，
+不再执行发布前备份，已保留的正式备份不主动删除。
 
 节点故障时不自动复制 Worker，也不把已有绑定迁到其他账号。保留节点
 继续提供未绑定请求与其自身 Worker 的会话，故障节点 Worker 的既有绑定

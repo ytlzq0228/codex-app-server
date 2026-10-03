@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Apply a tested gateway/manager image without recreating user Workers.
 Run as root: deploy_release.py APP_DIRECTORY ARTIFACT_DIRECTORY
-Artifacts: source.tar.gz, image.tar, release-manifest.json. Backs up first using
-backup_release.py and keeps only that latest backup on each host.
+Artifacts: source.tar.gz, image.tar, release-manifest.json. Test deployments
+back up first and keep only the latest backup. Validated production releases
+in /opt/codex-app-server-ha deploy directly without creating a backup.
 """
 import argparse
 import hashlib
@@ -43,7 +44,11 @@ def main():
         backup_cmd = ['python3', str(stage / 'scripts/backup_release.py'), str(root)]
         if root == Path('/opt/codex-app-server-ha') and historical.exists():
             backup_cmd += ['--historical-root', str(historical)]
-        subprocess.run(backup_cmd, check=True)
+        production = root == Path('/opt/codex-app-server-ha') and (root / '.env.ha').exists()
+        if not production:
+            subprocess.run(backup_cmd, check=True)
+        else:
+            print(json.dumps({'backup': 'skipped', 'reason': 'validated production release'}), flush=True)
         # Preserve environment-specific Compose files and private settings.
         for name in ('src', 'scripts', 'docs', 'deploy', 'worker'):
             if not (stage / name).exists():
@@ -90,7 +95,7 @@ def main():
                 pass
             time.sleep(2)
         else:
-            raise RuntimeError('gateway did not become healthy; latest backup retained')
+            raise RuntimeError('gateway did not become healthy; inspect deployed services before continuing')
         print(json.dumps({'release': manifest['release'], 'directory': str(root), 'health': 'ok'}))
 
 

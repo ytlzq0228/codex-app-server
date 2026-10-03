@@ -11,6 +11,26 @@ See [dual-active deployment, validation and rollback](dual-active.md) before
 changing these nodes; the historical release instructions below describe the
 previous single-node layout. Use `scripts/verify_ha.py` for the current release.
 
+## Release backup policy
+
+Validate each release in the test environment before deploying production.
+`scripts/deploy_release.py` backs up test deployments, deleting historical test
+backups before creating the latest one. For the canonical production directory
+`/opt/codex-app-server-ha` with `.env.ha`, it deploys directly without a new backup.
+Existing production backups remain available; this policy does not remove them.
+
+## Admin history data loading
+
+`/admin/history` serves the page shell and filter controls. The browser requests
+`/admin/history/data` as JSON with `history_page` (30 conversation summaries per
+page) and the existing `conversation`, `key_id`, `endpoint`, `start`, and `end`
+filters. Expanding a conversation calls `/admin/history/requests` with its exact
+conversation/Key/interface identity and `page` (20 requests per batch). Both
+endpoints require an admin session and return `Cache-Control: no-store`.
+Summary totals still cover the full matching conversations; time filters select
+conversations containing a matching request. Request pages contain display
+fields, not the stored request parameters or audit payloads.
+
 ## Install
 
 1. Copy the repository to `/opt/codex-app-server` and create `.env` from `.env.example`.
@@ -50,14 +70,15 @@ workers. Retained stopped rollback containers are not active release instances.
 For subsequent releases, synchronize the complete tracked source trees, including
 deleting obsolete source files, and reset gateway/manager build contexts to the
 application root. Do not leave build contexts pointing at an old single-file
-hotfix directory. Back up first, validate on test, then update production. Keep
+hotfix directory. Back up test, validate there, then update production directly. Keep
 existing `.env`, model overrides, account volumes, and container network identities.
-Only the latest deployment backup is retained. Use
+Only the latest test deployment backup is retained. Use
 `sudo python3 scripts/deploy_release.py <application-directory> <artifact-directory>`
 for subsequent gateway/manager releases. Artifacts must contain `image.tar`,
 `source.tar.gz` and `release-manifest.json`. The deployment script automatically
-runs `backup_release.py` before replacing application files or containers and
-clears the former production backup directory too. For a standalone backup use
+runs `backup_release.py` before replacing test application files or containers.
+The canonical production HA directory skips this step after test validation.
+For a standalone backup use
 `sudo python3 scripts/backup_release.py <application-directory>`; add
 `--historical-root /opt/codex-app-server/deploy-backups` for the former layout. The script checks database access, deletes historical backups
 **before** creating the new backup, and saves configuration, a consistent database

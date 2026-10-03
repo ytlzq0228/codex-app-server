@@ -168,9 +168,10 @@ def test_key_can_be_edited_and_soft_deleted_without_losing_history() -> None:
         )
         assert deleted.status_code == 200
         assert client.get("/v1/models", headers={"Authorization": f"Bearer {raw_key}"}).status_code == 401
-        history_page = client.get("/admin/history").text
+        history_page = client.get("/admin/history/data").text
         keys_page = client.get("/admin/api-keys").text
-        assert request_id in history_page
+        groups=client.get("/admin/history/data",params={"key_id":key_id}).json()['groups']
+        assert any(request_id in client.get("/admin/history/requests", params={"conversation":group['conversation_id'],"key_id":key_id,"endpoint":group['endpoint']}).text for group in groups)
         assert renamed in history_page
         assert f"/admin/keys/{key_id}/edit" not in keys_page
 

@@ -13,7 +13,9 @@
   const content = document.getElementById('request-detail-content');
   let controller;
   dialog.addEventListener('close', () => { controller?.abort(); content.replaceChildren(); });
-  document.querySelectorAll('[data-request-detail]').forEach(link => link.addEventListener('click', async event => {
+  document.addEventListener('click', async event => {
+    const link = event.target.closest('[data-request-detail]');
+    if (!link) return;
     if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     controller?.abort();
@@ -31,5 +33,5 @@
     } catch (error) {
       if (!active.signal.aborted) content.textContent = error.message;
     }
-  }));
+  });
 })();

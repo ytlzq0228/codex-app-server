@@ -48,7 +48,7 @@
 
     {% if page == 'history' %}
     <section id="history" class="panel">
-      <div class="section-head"><div><p class="eyebrow">AUDIT LOG</p><h2>请求历史</h2><p class="muted">共 {{ history_total }} 条请求，聚合为 {{ history_session_total }} 个会话；每页 30 个会话，点击请求 ID 查看请求参数和计费详情。</p></div></div>
+      <div class="section-head"><div><p class="eyebrow">AUDIT LOG</p><h2>请求历史</h2><p class="muted"><span data-history-summary>正在加载请求历史…</span>；每页 30 个会话，点击请求 ID 查看请求参数和计费详情。</p></div></div>
       <form method="get" class="history-filters" data-history-filters>
         <label>逻辑会话 ID<input name="conversation" value="{{ request.query_params.get('conversation','') }}" placeholder="完整逻辑会话 ID / 旧 Thread ID"></label>
         <div class="history-key-field"><label for="history-key">Key</label><select id="history-key" name="key_id" data-key-select>
@@ -62,8 +62,10 @@
         <div class="history-filter-actions"><button class="button button-primary">查询</button><a class="button" href="/admin/history">查看全部</a></div>
         <p class="history-filter-hint muted">时间按浏览器时区 <span data-browser-timezone></span> 显示和筛选，包含开始时间、不包含结束时间；显示含匹配请求的完整会话。</p>
       </form>
-      {% include 'shared/conversation-history.html' %}
-      {% if history_pages > 1 %}<div class="pagination">{% if history_page > 1 %}<a class="button button-small" href="{{ request.url.include_query_params(history_page=history_page-1) }}">上一页</a>{% endif %}<span>第 {{ history_page }} / {{ history_pages }} 页</span>{% if history_page < history_pages %}<a class="button button-small" href="{{ request.url.include_query_params(history_page=history_page+1) }}">下一页</a>{% endif %}</div>{% endif %}
+      <p data-history-error class="alert alert-error" role="alert" hidden></p>
+      <div data-history-results aria-live="polite"></div>
+      <div class="pagination" data-history-pagination></div>
+      <script defer src="/static/admin-history.js"></script>
     </section>
     {% endif %}
 

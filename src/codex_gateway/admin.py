@@ -3,7 +3,8 @@ from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi import Query, APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,7 +20,7 @@ from .app_server import AppServerError, open_app_server
 from .backend import WorkerFailure, classify_worker_failure, run_healthcheck_turn
 from .config import Settings, get_settings
 from .database import get_session
-from .history import conversation_history, active_conversation_groups, history_time_filters
+from .history import conversation_history, conversation_request_page, active_conversation_groups, history_time_filters
 from .models import GoogleAuthConfig, User, UserSession, ApiKey, ResponseBinding, SubscriptionPlan, UsageRecord, Worker, WorkerStatus
 from .quota import quota_lock, ensure_capacity, reconcile_worker
 from .subscriptions import DEFAULT_PLAN_COLOR, plan_pill_style
@@ -128,6 +129,10 @@ def manager_delete_succeeded(status_code: int) -> bool:
 
 async def render_admin_page(request: Request, page: str, history_page: int, admin: AdminSession, session: AsyncSession, *, conversation: str = "", key_id: str = "", endpoint: str = "", start: str = "", end: str = ""):
     date_filters = history_time_filters(start, end)
+    if page == "history":
+        history_keys = (await session.scalars(select(ApiKey).order_by(ApiKey.name, ApiKey.id))).all()
+        return templates(request).TemplateResponse(request, "admin/dashboard.html",
+            {"page": page, "history_keys": history_keys, "csrf_token": admin.csrf_token})
     if page == "overview":
         stats = {
             "requests": await session.scalar(select(func.count()).select_from(UsageRecord)) or 0,
@@ -213,6 +218,29 @@ async def sessions_page(request: Request, conversation: str = "", key_id: str = 
 @router.get("/history", response_class=HTMLResponse)
 async def history_page(request: Request, start: str = "", end: str = "", history_page: int = 1, conversation: str = "", key_id: str = "", endpoint: str = "", admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     return await render_admin_page(request, "history", history_page, admin, session, conversation=conversation, key_id=key_id, endpoint=endpoint, start=start, end=end)
+
+
+def history_json(data):
+    # Keep decimal prices exact on the wire; datetime/UUID use JSON strings.
+    from decimal import Decimal
+    return JSONResponse(jsonable_encoder(data, custom_encoder={Decimal: lambda value: format(value, '.4f')}),
+                        headers={"Cache-Control": "no-store"})
+
+
+@router.get("/history/data")
+async def history_data(start: str = "", end: str = "", history_page: int = Query(1, ge=1),
+    conversation: str = "", key_id: str = "", endpoint: str = "",
+    admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    return history_json(await conversation_history(session, filters=history_time_filters(start, end),
+        page=history_page, conversation_id=conversation, key_id=key_id, endpoint=endpoint, summaries_only=True))
+
+
+@router.get("/history/requests")
+async def history_requests(conversation: str = Query(..., min_length=1), key_id: str = Query(..., min_length=1),
+    endpoint: str = Query(..., min_length=1), page: int = Query(1, ge=1),
+    admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    return history_json(await conversation_request_page(session, conversation_id=conversation,
+        key_id=key_id, endpoint=endpoint, page=page))
 
 
 @router.post("/keys")

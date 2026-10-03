@@ -129,8 +129,8 @@ def test_two_hour_display_does_not_delete_old_bindings_or_history():
         page=client.get('/admin/sessions');assert page.status_code==200,page.text
         assert prefix+'-recent' in page.text and prefix+'-old' not in page.text
         assert 'TTL 到期' not in page.text and '最近 2 小时' in page.text
-        history=client.get('/admin/history',params={'conversation':'conv_'+prefix+'-old'})
-        assert prefix+'-old' in history.text
+        history=client.get('/admin/history/data',params={'conversation':'conv_'+prefix+'-old'})
+        assert history.json()['groups'][0]['conversation_id']=='conv_'+prefix+'-old'
         client.portal.call(verify)
 
 

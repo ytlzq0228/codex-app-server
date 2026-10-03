@@ -1,12 +1,12 @@
 """Shared, owner-scoped conversation pagination for admin and user history."""
 from decimal import Decimal
 
-from sqlalchemy import String, cast, func, literal, or_, select
+from sqlalchemy import case, String, cast, func, literal, or_, select
 
 from .models import ApiKey, ResponseBinding, UsageRecord, Worker
 
 
-async def conversation_history(db, *, owner=None, page=1, page_size=30, filters=(), status='', conversation_id='', key_id='', endpoint=''):
+async def conversation_history(db, *, owner=None, page=1, page_size=30, filters=(), status='', conversation_id='', key_id='', endpoint='', summaries_only=False):
     # Owner scope is applied before ranking AND when fetching detail rows.
     scope = [UsageRecord.owner_username == owner] if owner is not None else []
     conversation = func.coalesce(UsageRecord.logical_conversation_id, UsageRecord.thread_id,
@@ -49,6 +49,28 @@ async def conversation_history(db, *, owner=None, page=1, page_size=30, filters=
     page = max(1, min(page, pages))
     selected = select(eligible).order_by(eligible.c.latest_at.desc(), eligible.c.group_key).offset(
         (page - 1) * page_size).limit(page_size).subquery()
+    if summaries_only:
+        # Aggregate in SQL; never materialize hidden request rows or audit bodies.
+        rows = (await db.execute(select(
+            selected.c.group_key.label('identity'), ranked.c.conversation.label('conversation_id'),
+            UsageRecord.api_key_id.label('key_id'), UsageRecord.endpoint.label('endpoint'),
+            ApiKey.name.label('key_name'), selected.c.latest_at.label('latest_at'),
+            func.bool_or(UsageRecord.logical_conversation_id.is_not(None)).label('logical'),
+            func.count().label('request_count'), func.count(func.distinct(ranked.c.worker_thread)).label('thread_count'),
+            func.max(case((ranked.c.position == 1, UsageRecord.status_code))).label('latest_status'),
+            func.sum(UsageRecord.input_tokens).label('input_tokens'),
+            func.sum(UsageRecord.output_tokens).label('output_tokens'),
+            func.sum(UsageRecord.duration_ms).label('duration_ms'),
+            func.coalesce(func.sum(UsageRecord.cost_usd), 0).label('cost_usd'),
+            func.count().filter(UsageRecord.cost_usd.is_(None)).label('unpriced_count'),
+        ).select_from(UsageRecord).join(ranked, UsageRecord.id == ranked.c.id)
+        .join(selected, ranked.c.group_key == selected.c.group_key)
+        .outerjoin(ApiKey, UsageRecord.api_key_id == ApiKey.id)
+        .group_by(selected.c.group_key, ranked.c.conversation, UsageRecord.api_key_id,
+                  UsageRecord.endpoint, ApiKey.name, selected.c.latest_at)
+        .order_by(selected.c.latest_at.desc(), selected.c.group_key))).mappings().all()
+        return {'groups': [dict(row) for row in rows], 'total': total,
+                'request_total': request_total, 'page': page, 'pages': pages, 'page_size': page_size}
     rows = (await db.execute(select(UsageRecord, ApiKey.name, Worker.name,
         ranked.c.conversation, selected.c.latest_at, selected.c.group_key, ranked.c.worker_thread)
         .select_from(UsageRecord).join(ranked, UsageRecord.id == ranked.c.id)
@@ -141,3 +163,29 @@ def history_time_filters(start='', end=''):
     if end_at:
         filters.append(UsageRecord.created_at < end_at)
     return filters
+
+
+async def conversation_request_page(db, *, conversation_id, key_id, endpoint, page=1, page_size=20):
+    """Fetch only one displayed request page, without large request/response bodies."""
+    conversation = func.coalesce(UsageRecord.logical_conversation_id, UsageRecord.thread_id,
+                                 ResponseBinding.thread_id, UsageRecord.request_id)
+    scope = [conversation == conversation_id,
+             func.coalesce(cast(UsageRecord.api_key_id, String), literal('development')) == key_id,
+             func.coalesce(UsageRecord.endpoint, literal('unknown')) == endpoint]
+    base = select(UsageRecord.id).outerjoin(ResponseBinding, UsageRecord.request_id == ResponseBinding.response_id).where(*scope)
+    total = await db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    pages = max(1, (total + page_size - 1) // page_size)
+    page = max(1, min(page, pages))
+    rows = (await db.execute(select(
+        UsageRecord.request_id, UsageRecord.created_at, UsageRecord.owner_username,
+        UsageRecord.model, UsageRecord.status_code, UsageRecord.error_code,
+        UsageRecord.input_tokens, UsageRecord.output_tokens, UsageRecord.duration_ms, UsageRecord.cost_usd,
+        func.coalesce(UsageRecord.thread_id, ResponseBinding.thread_id).label('thread_id'),
+        UsageRecord.conversation_evidence['method'].as_string().label('evidence'),
+        Worker.name.label('worker_name'),
+    ).select_from(UsageRecord).outerjoin(ResponseBinding, UsageRecord.request_id == ResponseBinding.response_id)
+    .outerjoin(Worker, UsageRecord.worker_id == Worker.id).where(*scope)
+    .order_by(UsageRecord.created_at.desc(), UsageRecord.id.desc())
+    .offset((page - 1) * page_size).limit(page_size))).mappings().all()
+    return {'requests': [dict(row) for row in rows], 'total': total, 'page': page,
+            'pages': pages, 'page_size': page_size}

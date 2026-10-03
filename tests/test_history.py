@@ -89,12 +89,12 @@ def test_conversation_pagination_latest_status_filters_and_owner_scope():
             assert '共 0 个会话' in client.get('/user/usage',params={'q':prefix+'-standalone','status':'error'}).text
         finally:app.dependency_overrides.pop(require_user,None)
         settings=get_settings()
-        assert client.post('/auth/login',data={'username':settings.admin_username,'password':settings.admin_password.get_secret_value()},follow_redirects=False).status_code==302
+        assert client.post('/auth/login',data={'username':settings.admin_username,'password':settings.admin_password.get_secret_value()},follow_redirects=False).status_code in {302,303}
         admin=client.get('/admin/history')
         assert admin.status_code==200,admin.text
         assert '含失败请求' not in admin.text
-        assert '最近请求状态' in admin.text
-        assert '总价格（USD）' in admin.text and '价格（USD）' in admin.text
+        assert '/static/admin-history.js' in admin.text
+        assert 'data-history-results' in admin.text
         assert '<body data-csrf-token=' in admin.text and 'class="admin-page ' in admin.text
         assert 'class="admin-page ' in client.get('/admin/users').text
 
@@ -144,7 +144,7 @@ def test_active_and_historical_pages_share_logical_id_and_keep_thread_actions():
     with TestClient(app) as client:
         key_id=client.portal.call(seed)
         s=get_settings()
-        assert client.post('/auth/login',data={'username':s.admin_username,'password':s.admin_password.get_secret_value()},follow_redirects=False).status_code==302
+        assert client.post('/auth/login',data={'username':s.admin_username,'password':s.admin_password.get_secret_value()},follow_redirects=False).status_code in {302,303}
         active=client.get('/admin/sessions');assert active.status_code==200,active.text
         assert conv in active.text and '1 个逻辑会话 · 2 个 Thread' in active.text
         assert '释放 Thread' in active.text
@@ -153,19 +153,24 @@ def test_active_and_historical_pages_share_logical_id_and_keep_thread_actions():
         assert '<details' not in focused.text
         history=client.get('/admin/history',params={'conversation':conv,'key_id':key_id,'endpoint':'responses'})
         assert history.status_code==200,history.text
-        assert '共 25 条请求，聚合为 1 个会话' in history.text
-        assert '2 个 Worker Thread' in history.text
-        assert 'unrelated-thread' not in history.text
-        assert history.text.count('data-history-request') == 25
-        assert history.text.count('data-history-request hidden') == 5
-        assert 'data-history-more' in history.text and '更多（剩余 5 条）' in history.text
-        assert history.text.index(prefix+'-24') < history.text.index(prefix+'-23')
+        assert prefix+'-24' not in history.text
+        params={'conversation':conv,'key_id':key_id,'endpoint':'responses'}
+        summary=client.get('/admin/history/data',params=params).json()
+        assert summary['request_total']==25 and summary['total']==1
+        assert summary['groups'][0]['thread_count']==2
+        assert 'requests' not in summary['groups'][0]
+        first=client.get('/admin/history/requests',params=params).json()
+        second=client.get('/admin/history/requests',params={**params,'page':2}).json()
+        assert len(first['requests'])==20 and len(second['requests'])==5
+        assert first['requests'][0]['request_id']==prefix+'-24'
+        assert second['requests'][-1]['request_id']==prefix+'-0'
+        assert 'unrelated-thread' not in str(first)+str(second)
         token=re.search(r'name="csrf_token" value="([^"]+)"',active.text)[1]
         deleted=client.post('/admin/sessions/'+prefix+'-0/delete',data={'csrf_token':token},headers={'X-Requested-With':'XMLHttpRequest'})
         assert deleted.status_code==200,deleted.text
         active=client.get('/admin/sessions')
         assert '1 个逻辑会话 · 1 个 Thread' in active.text
-        assert '共 25 条请求，聚合为 1 个会话' in client.get('/admin/history',params={'conversation':conv,'key_id':key_id}).text
+        assert client.get('/admin/history/data',params={'conversation':conv,'key_id':key_id}).json()['request_total']==25
 
 
 def test_history_time_bounds_require_timezone_and_normalize_to_utc():
@@ -212,10 +217,58 @@ def test_admin_history_time_filter_preserves_full_conversation():
             'start':'2026-09-27T08:00:01+08:00','end':'2026-09-27T00:00:02Z'}
         result=client.get('/admin/history',params=params)
         assert result.status_code==200
-        assert '共 3 条请求，聚合为 1 个会话' in result.text
+        data=client.get('/admin/history/data',params=params).json()
+        assert data['request_total']==3 and data['total']==1
         assert 'data-key-select' in result.text and 'data-time-bound="start"' in result.text
-        assert 'datetime="2026-09-27T00:00:00+00:00"' in result.text
+        requests=client.get('/admin/history/requests',params={'conversation':prefix,'key_id':key_id,'endpoint':'responses'}).json()
+        assert requests['requests'][-1]['created_at']=='2026-09-27T00:00:00+00:00'
         params['start']='2026-09-27T00:00:03Z'
         params.pop('end')
-        assert '共 0 条请求' in client.get('/admin/history',params=params).text
+        assert client.get('/admin/history/data',params=params).json()['request_total']==0
         assert client.get('/admin/history',params={'start':'2026-09-27T00:00:00'}).status_code==400
+
+
+def test_admin_json_pagination_is_bounded_and_does_not_transmit_audit_bodies():
+    prefix=uuid4().hex
+    now=datetime.now(timezone.utc)
+    async def seed():
+        async with SessionLocal() as db:
+            key=ApiKey(name=prefix,prefix=prefix[:20],key_hash=prefix*2)
+            db.add(key);await db.flush()
+            for i in range(31):
+                db.add(UsageRecord(request_id=prefix+'-group-'+str(i),api_key_id=key.id,
+                    logical_conversation_id=prefix+'-'+str(i),model='<script>alert(1)</script>',
+                    status_code=200,endpoint='responses',created_at=now+timedelta(seconds=i),
+                    request_params={'private':'large-hidden-audit-body'},cost_usd=Decimal('0.0001')))
+            for i in range(40):
+                db.add(UsageRecord(request_id=prefix+'-detail-'+str(i),api_key_id=key.id,
+                    logical_conversation_id=prefix+'-30',model='test',status_code=200,
+                    endpoint='responses',created_at=now+timedelta(minutes=1,seconds=i),
+                    request_params={'private':'large-hidden-audit-body'}))
+            await db.commit();return str(key.id)
+    with TestClient(app) as client:
+        assert client.get('/admin/history/data',follow_redirects=False).status_code in {302,303}
+        assert client.get('/admin/history/requests',params={'conversation':'x','key_id':'development','endpoint':'responses'},follow_redirects=False).status_code in {302,303}
+        key_id=client.portal.call(seed)
+        s=get_settings();client.post('/auth/login',data={'username':s.admin_username,'password':s.admin_password.get_secret_value()})
+        shell=client.get('/admin/history',params={'key_id':key_id})
+        assert prefix+'-group-' not in shell.text and prefix+'-detail-' not in shell.text
+        first=client.get('/admin/history/data',params={'key_id':key_id})
+        second=client.get('/admin/history/data',params={'key_id':key_id,'history_page':2}).json()
+        data=first.json()
+        assert first.headers['content-type'].startswith('application/json')
+        assert first.headers['cache-control']=='no-store'
+        assert len(data['groups'])==30 and len(second['groups'])==1
+        assert data['request_total']==71 and data['total']==31
+        assert not set(g['identity'] for g in data['groups']) & set(g['identity'] for g in second['groups'])
+        assert data['groups'][0]['request_count']==41
+        assert all('requests' not in group for group in data['groups'])
+        params={'conversation':prefix+'-30','key_id':key_id,'endpoint':'responses'}
+        pages=[client.get('/admin/history/requests',params={**params,'page':page}) for page in range(1,4)]
+        assert [len(page.json()['requests']) for page in pages]==[20,20,1]
+        assert len({row['request_id'] for page in pages for row in page.json()['requests']})==41
+        assert 'large-hidden-audit-body' not in first.text+''.join(p.text for p in pages)
+        assert data['groups'][-1]['cost_usd']=='0.0001'
+        assert client.get('/admin/history/data',params={'history_page':0}).status_code==400
+        assert client.get('/admin/history/requests',params={**params,'page':0}).status_code==400
+        assert client.get('/admin/history/data',params={'start':'invalid'}).status_code==400

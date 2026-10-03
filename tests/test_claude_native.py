@@ -156,3 +156,33 @@ def test_stream_failure_is_not_followed_by_success():
     assert state.translate(event)[0]["error"]["type"] == "rate_limit_error"
     assert state.translate({"type": "response.failed", "response": {"error": event}}) == []
     assert state.translate({"type": "response.completed", "response": result()}) == []
+
+
+def test_agent_identity_uses_headers_not_prompt():
+    uid = str(uuid4())
+    params = translate_request(prompt() | {'metadata': {'user_id': json.dumps({'session_id': uid.upper()})}})
+    def identify(agent=None, session=uid, key='k', endpoint='responses', body=params):
+        headers = [{'name': 'x-claude-code-session-id', 'value': session}]
+        if agent is not None:
+            headers.append({'name': 'x-claude-code-agent-id', 'value': agent})
+        return explicit_identity(body, {'headers': headers}, key, endpoint, '')
+    main, evidence = identify()
+    assert evidence['client_thread_ids'] == [uid]
+    branches = [identify(f'agent-{i}')[0] for i in range(4)]
+    assert len(set([main, *branches, identify('main')[0]])) == 6
+    assert identify('agent-0', body=params | {'input': [{'role': 'user', 'content': 'compacted'}],
+                                             'instructions': 'changed', 'tools': []})[0] == branches[0]
+    assert identify('agent-0', key='other')[0] != branches[0]
+    assert identify('agent-0', endpoint='chat.completions')[0] != branches[0]
+    assert identify('agent-0', session=str(uuid4()))[1]['method'] == 'identifier_conflict'
+    headers = {'headers': [{'name': 'x-claude-code-agent-id', 'value': a} for a in ['a', 'b']]}
+    assert explicit_identity(params, headers, 'k', 'responses', '')[0] is None
+    helper = params | {'text': {'format': {'type': 'json_schema', 'schema': {'type': 'object'}}}}
+    assert identify(body=helper)[1]['category'] == 'claude_auxiliary'
+    assert identify('agent-0', body=helper)[0] == branches[0]
+
+
+@pytest.mark.parametrize('user_id', ['plain-sdk-id', '{invalid-json', '{"session_id":123}', '{"session_id":"invalid"}'])
+def test_sdk_user_id_fallback(user_id):
+    _, evidence = explicit_identity({'model': 'claude-test', 'metadata': {'user_id': user_id}}, {}, 'k', 'responses', '')
+    assert evidence['client_thread_ids'] == [user_id]

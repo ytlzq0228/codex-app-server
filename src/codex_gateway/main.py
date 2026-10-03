@@ -908,7 +908,7 @@ async def retrieve_model(model_id: str, principal: ApiPrincipal = Depends(requir
 
 
 @app.post("/v1/chat/completions")
-async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrincipal = Depends(require_api_key), backend: CompletionBackend = Depends(get_backend), session: AsyncSession = Depends(get_session), response: Response = None):
+async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrincipal = Depends(require_api_key), backend: CompletionBackend = Depends(get_backend), session: AsyncSession = Depends(get_session), response: Response = None, http_request: Request = None):
     if response is not None and provider_for(body.model) == "claude":
         response.headers["x-gateway-generation-policy"] = "worker-defaults"
     settings = get_settings()
@@ -928,7 +928,9 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
     if pending_target:
         from .audit import track_backend
         track_backend(pending_target, pending_thread, source="authenticated_tool_call")
-    request, execution_binding = await prepare_execution(request, principal, "chat.completions", current_audit.get(), pending_thread=pending_thread, tool_sessions=getattr(backend,"tool_sessions",None))
+    await release_request_session(session)
+    request, execution_binding = await prepare_execution(request, principal, "chat.completions", current_audit.get(), pending_thread=pending_thread, tool_sessions=getattr(backend,"tool_sessions",None), is_disconnected=http_request.is_disconnected if http_request else None)
+    await validate_pending_worker(backend, pending_target, session)
     target = pending_target or await choose_execution_target(principal, session, execution_binding, request)
     if not pending_target:
         from .audit import track_backend
@@ -953,7 +955,7 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
 
 
 @app.post("/v1/responses")
-async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depends(require_api_key), backend: CompletionBackend = Depends(get_backend), session: AsyncSession = Depends(get_session), response: Response = None):
+async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depends(require_api_key), backend: CompletionBackend = Depends(get_backend), session: AsyncSession = Depends(get_session), response: Response = None, http_request: Request = None):
     if response is not None and provider_for(body.model) == "claude":
         response.headers["x-gateway-generation-policy"] = "worker-defaults"
     settings = get_settings()
@@ -990,7 +992,9 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
     if pending_target:
         from .audit import track_backend
         track_backend(pending_target, pending_thread, source="authenticated_tool_call")
-    body, binding = await prepare_execution(body, principal, "responses", current_audit.get(), pending_thread=pending_thread, binding=binding, tool_sessions=getattr(backend,"tool_sessions",None))
+    await release_request_session(session)
+    body, binding = await prepare_execution(body, principal, "responses", current_audit.get(), pending_thread=pending_thread, binding=binding, tool_sessions=getattr(backend,"tool_sessions",None), is_disconnected=http_request.is_disconnected if http_request else None)
+    await validate_pending_worker(backend, pending_target, session)
     target = pending_target or await choose_execution_target(principal, session, binding, body)
     if not pending_target:
         from .audit import track_backend

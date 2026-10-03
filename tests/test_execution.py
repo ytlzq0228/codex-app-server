@@ -29,6 +29,103 @@ def audit_for(request, thread='client-thread'):
             'transport':{'headers':[]},'body_hash':hashlib.sha256(), 'body_bytes_received':1,'body_complete':True}
 
 
+def test_claude_agents_isolate_leases_and_authenticated_tools(monkeypatch):
+    from codex_gateway.config import get_settings
+    monkeypatch.setattr(get_settings(), 'model_providers', 'claude-test:claude')
+    async def run():
+        async with SessionLocal() as db:
+            key = ApiKey(name='claude-agents', prefix=uuid4().hex[:20], key_hash=uuid4().hex*2)
+            db.add(key)
+            await db.commit()
+        principal = ApiPrincipal(key.id, 'test')
+        session = str(uuid4())
+        request = ResponseRequest(model='claude-test', input=[{'role': 'user', 'content': 'same task'}])
+        def audit(agent=None, body=request):
+            a = audit_for(body, session)
+            a['transport']['headers'] = [{'name': 'x-claude-code-session-id', 'value': session}]
+            if agent is not None:
+                a['transport']['headers'].append({'name': 'x-claude-code-agent-id', 'value': agent})
+            return a
+        claims = []
+        try:
+            main = audit()
+            await ex.prepare(request, principal, 'responses', main)
+            claims.append(main)
+            agents = [audit(str(i)) for i in range(4)]
+            await asyncio.gather(*(ex.prepare(request, principal, 'responses', a) for a in agents))
+            claims.extend(agents)
+            assert len({a['execution']['logical_id'] for a in claims}) == 5
+            with pytest.raises(HTTPException) as busy:
+                await ex.prepare(request, principal, 'responses', audit('0'))
+            assert busy.value.detail['error']['code'] == 'conversation_busy'
+            # Main waits for a tool; a fifth independent agent can still start.
+            async with SessionLocal() as db:
+                for index, a in enumerate([main, agents[0]]):
+                    row = await db.get(ExecutionSession, a['execution']['logical_id'])
+                    row.state, row.lease_token, row.lease_until = 'waiting_tool', None, None
+                    row.thread_id = f'tool-{session}-{index}'
+                    row.expires_at = ex.now() + timedelta(minutes=5)
+                await db.commit()
+            extra = audit('4')
+            await ex.prepare(request, principal, 'responses', extra)
+            claims.append(extra)
+            output = ResponseRequest(model='claude-test', input=[{'type': 'function_call_output', 'call_id': 'call', 'output': 'ok'}])
+            follow = audit('0', output)
+            await ex.prepare(output, principal, 'responses', follow, pending_thread=f'tool-{session}-1')
+            claims.append(follow)
+            assert follow['execution_decision']['action'] == 'tool_continuation'
+            assert follow['execution']['logical_id'] == agents[0]['execution']['logical_id']
+            with pytest.raises(HTTPException) as mismatch:
+                await ex.prepare(output, principal, 'responses', audit('1', output), pending_thread=f'tool-{session}-1')
+            assert mismatch.value.detail['error']['code'] == 'tool_conversation_mismatch'
+            helper = request.model_copy(update={'text': {'format': {'type': 'json_schema', 'schema': {'type': 'object'}}}})
+            for _ in range(2):
+                a = audit(None, helper)
+                await ex.prepare(helper, principal, 'responses', a)
+                assert a['execution_decision']['action'] == 'untracked'
+        finally:
+            for a in claims:
+                await ex.cleanup(a)
+    with TestClient(app) as client:
+        client.portal.call(run)
+
+
+@pytest.mark.parametrize('provider,tail,allowed', [
+    ('claude', [{'role': 'user', 'content': 'new turn'}], True),
+    ('claude', [{'role': 'user', 'content': 'compacted history'}, {'role': 'developer', 'content': 'environment'}], True),
+    ('claude', [{'role': 'assistant', 'content': 'done'}, {'role': 'developer', 'content': 'environment'}], False),
+    ('claude', [{'type': 'function_call_output', 'call_id': 'c', 'output': 'ok'}], False),
+    ('claude', [{'type': 'function_call_output', 'call_id': 'c', 'output': 'ok'}, {'role': 'developer', 'content': 'reminder'}], False),
+    ('gemini', [{'role': 'user', 'content': 'new turn'}], False),
+])
+def test_provider_rebuild_requires_user_history(monkeypatch, provider, tail, allowed):
+    from codex_gateway.config import get_settings
+    monkeypatch.setattr(get_settings(), 'model_providers', f'{provider}-test:{provider}')
+    async def run():
+        async with SessionLocal() as db:
+            key = ApiKey(name='rebuild', prefix=uuid4().hex[:20], key_hash=uuid4().hex*2)
+            db.add(key)
+            await db.commit()
+        p = ApiPrincipal(key.id, 'test')
+        r = ResponseRequest(model=f'{provider}-test', input=[{'role': 'user', 'content': 'first'}])
+        session = str(uuid4())
+        a = audit_for(r, session)
+        await ex.prepare(r, p, 'responses', a)
+        await ex.cleanup(a)
+        follow = r.model_copy(update={'input': [*r.input, *tail]})
+        b = audit_for(follow, session)
+        if allowed:
+            await ex.prepare(follow, p, 'responses', b)
+            assert b['execution_decision']['action'] == 'new_thread'
+            await ex.cleanup(b)
+        else:
+            with pytest.raises(HTTPException) as error:
+                await ex.prepare(follow, p, 'responses', b)
+            assert error.value.detail['error']['code'] == 'conversation_resume_unavailable'
+    with TestClient(app) as client:
+        client.portal.call(run)
+
+
 def test_append_only_canonicalisation_and_private_override():
     first=req()
     expected=ex.hashes(ex.history_items(first))+[ex.digest({'role':'assistant','text':'answer'})]
@@ -96,22 +193,39 @@ def test_persistent_lease_checkpoint_and_isolation():
     ('edit','history_not_append_only'),('tools','configuration_changed'),
     ('released','binding_invalidated'),('worker','worker_unavailable'),
 ])
-def test_safe_rollovers(change,reason):
+@pytest.mark.parametrize('provider', ['codex', 'claude'])
+def test_safe_rollovers(change,reason,provider,monkeypatch):
+    from codex_gateway.config import get_settings
+    monkeypatch.setattr(get_settings(), 'model_providers', f'claude-test:claude')
     async def run():
         async with SessionLocal() as db:
             k=ApiKey(name='rollover',prefix=uuid4().hex[:20],key_hash=uuid4().hex*2)
-            w=Worker(name='resume-'+uuid4().hex,container_name='test-'+uuid4().hex,endpoint='ws://test',enabled=True,status='ready')
+            w=Worker(name='resume-'+uuid4().hex,container_name='test-'+uuid4().hex,endpoint='ws://test',enabled=True,status='ready',provider=provider)
             db.add_all([k,w]);await db.commit()
-        p=ApiPrincipal(k.id,'test');t=BackendTarget(str(k.id)+':'+str(w.id),w.endpoint,'/tmp',w.id)
-        r=req();thread=str(uuid4());a=audit_for(r,thread)
+        p=ApiPrincipal(k.id,'test');t=BackendTarget(str(k.id)+':'+str(w.id),w.endpoint,'/tmp',w.id,provider=provider)
+        r=req()
+        if provider == 'claude':r.model = 'claude-test'
+        thread=str(uuid4());a=audit_for(r,thread)
         await ex.prepare(r,p,'responses',a)
         rid='resp_'+uuid4().hex
         async with SessionLocal() as db:
-            db.add(ResponseBinding(response_id=rid,api_key_id=k.id,worker_id=w.id,thread_id='t',expires_at=ex.now()+timedelta(hours=1)))
+            db.add(ResponseBinding(response_id=rid,api_key_id=k.id,worker_id=w.id,thread_id='t',provider=provider,expires_at=ex.now()+timedelta(hours=1)))
             await ex.finish(db,a,BackendResult(text='answer',thread_id='t'),t,rid)
             await db.commit()
         await ex.cleanup(a)
         follow=req([*r.input,{'role':'assistant','content':'answer'},{'role':'user','content':'next'}])
+        follow.model = r.model
+        # Verified history must resume before any of the rollover triggers.
+        resume_a = audit_for(follow, thread)
+        prepared, binding = await ex.prepare(follow, p, 'responses', resume_a)
+        assert binding is not None and resume_a['execution_decision']['action'] == 'resume'
+        async with SessionLocal() as db:
+            await ex.finish(db, resume_a, BackendResult(text='next answer', thread_id='t'), t, rid)
+            # Restore the original completed checkpoint for each trigger below.
+            row = await db.get(ExecutionSession, a['execution']['logical_id'])
+            row.history_hashes = ex.hashes(r.input) + [ex.digest({'role':'assistant','text':'answer'})]
+            await db.commit()
+        await ex.cleanup(resume_a)
         if change=='edit':follow.input[0]={'role':'user','content':'edited'}
         if change=='tools':follow.tools=[{'type':'function','name':'new','parameters':{'type':'object'}}]
         async with SessionLocal() as db:

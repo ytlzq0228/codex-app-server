@@ -4,6 +4,7 @@ Only a verified append to a completed checkpoint resumes a Thread. The DB lease
 covers HTTP execution (including streaming), not a long-lived DB connection.
 """
 import asyncio
+import time
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -11,7 +12,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 
-from .client_tools import definitions, ToolProtocolError
+from .client_tools import definitions, tool_outputs, ToolProtocolError
 from .config import get_settings
 from .conversations import digest, explicit_identity, durable_write
 from .database import SessionLocal
@@ -103,9 +104,67 @@ async def heartbeat(claim):
         pass
 
 
-async def prepare(request, principal, endpoint, audit, *, pending_thread=None, binding=None, tool_sessions=None):
+# Bounds apply per gateway process; database leases remain the cross-node arbiter.
+_waiters = {}
+
+
+async def prepare(request, principal, endpoint, audit, *, pending_thread=None, binding=None,
+                  tool_sessions=None, is_disconnected=None):
+    from .providers import provider_for
+    settings = get_settings()
+    timeout = settings.claude_execution_wait_seconds if provider_for(request.model) == "claude" and binding is None else 0
+    started = time.monotonic()
+    scope = None
+    attempts = 0
+    try:
+        while True:
+            if attempts:
+                if is_disconnected and await is_disconnected():
+                    raise HTTPException(499, detail="Client disconnected while waiting for conversation")
+                # A pending call may have been consumed or cancelled during the wait.
+                if pending_thread and tool_sessions:
+                    remote = False
+                    if settings.node_id:
+                        from .models import PendingToolRoute
+                        outputs = tool_outputs(request)
+                        async with SessionLocal() as db:
+                            route = await db.get(PendingToolRoute, (str(principal.key_id), outputs[0][0])) if len(outputs) == 1 else None
+                            remote = bool(route and route.node_id != settings.node_id and
+                                          route.thread_id == pending_thread and route.expires_at > now())
+                    if not remote:
+                        run = tool_sessions.find(request, principal.key_id)
+                        if not run or run.thread_id != pending_thread:
+                            raise conflict("Tool output belongs to a superseded execution", "tool_conversation_mismatch")
+            try:
+                result = await _prepare(request, principal, endpoint, audit, pending_thread=pending_thread,
+                                        binding=binding, tool_sessions=tool_sessions)
+                if scope and audit:
+                    audit["execution_decision"]["wait_ms"] = int((time.monotonic() - started) * 1000)
+                return result
+            except HTTPException as exc:
+                logical = getattr(exc, "execution_logical_id", None)
+                remaining = timeout - (time.monotonic() - started)
+                if not logical or remaining <= 0:
+                    raise
+                if scope is None:
+                    scope = (id(asyncio.get_running_loop()), logical)
+                    if _waiters.get(scope, 0) >= settings.claude_execution_max_waiters or sum(_waiters.values()) >= 128:
+                        scope = None
+                        raise
+                    _waiters[scope] = _waiters.get(scope, 0) + 1
+                # _prepare has exited its DB context: no transaction/row lock spans this wait.
+                await asyncio.sleep(min(0.1, remaining))
+                attempts += 1
+    finally:
+        if scope:
+            _waiters[scope] -= 1
+            if not _waiters[scope]:
+                del _waiters[scope]
+
+
+async def _prepare(request, principal, endpoint, audit, *, pending_thread=None, binding=None, tool_sessions=None):
     """Claim identity and return an optional active binding; public previous wins."""
-    if not audit or not principal.key_id or not get_settings().execution_resume_enabled:
+    if not audit or not principal.key_id:
         return request, binding
     from .providers import provider_for
     provider = provider_for(request.model)
@@ -117,7 +176,13 @@ async def prepare(request, principal, endpoint, audit, *, pending_thread=None, b
         return request, binding
     logical, evidence = explicit_identity(request_params(audit), observation,
                                           principal.key_id, endpoint, "")
-    if evidence.get("category") == "thread_title":
+    if evidence.get("auxiliary_kind") and not pending_thread and not binding and not request.previous_response_id and not tool_outputs(request):
+        audit["execution_decision"] = {"action": "auxiliary", "reason": evidence["auxiliary_kind"],
+                                       "rule": evidence["auxiliary_rule"], "tools_disabled": True}
+        return request.model_copy(update={"tools": [], "tool_choice": "none"}), None
+    if not get_settings().execution_resume_enabled:
+        return request, binding
+    if evidence.get("category") in {"thread_title", "claude_auxiliary"}:
         logical = None
     # Tool continuations sometimes omit client metadata. Recover only from a
     # call_id already authenticated by ToolSessions, never from user input alone.
@@ -141,7 +206,9 @@ async def prepare(request, principal, endpoint, audit, *, pending_thread=None, b
             raise conflict("Continuation cannot change provider", "provider_mismatch")
         instant = now()
         if row.lease_token and row.lease_until and row.lease_until > instant:
-            raise conflict("Another request is executing in this conversation; retry after it completes")
+            error = conflict("Another request is executing in this conversation; retry after it completes")
+            error.execution_logical_id = logical
+            raise error
         if row.state == "invalid" and tool_sessions and row.thread_id:
             await tool_sessions.cancel_thread(principal.key_id, row.thread_id)
         if pending_thread and row.state == "invalid":
@@ -224,7 +291,15 @@ async def prepare(request, principal, endpoint, audit, *, pending_thread=None, b
                     request._execution_auto_resume = True
                     action, reason = "resume", "explicit_identity_and_history_prefix"
         if provider != "codex" and row.state != "new" and action == "new_thread":
-            raise conflict("Provider conversation cannot be safely resumed; start a new conversation", "conversation_resume_unavailable")
+            # Claude can rebuild flattened history on a fresh CLI session, but
+            # a tool reply must go through its authenticated suspended run.
+            # Gemini retains its existing resume restriction.
+            from .claude_helpers import dialogue_tail
+            tail = dialogue_tail(items)
+            rebuild = (provider == "claude" and tail and tail.get("role") == "user"
+                       and not tool_outputs(request))
+            if not rebuild:
+                raise conflict("Provider conversation cannot be safely resumed; start a new conversation", "conversation_resume_unavailable")
         token = str(uuid4())
         claim = {"logical_id": logical, "token": token, "history": checkpoint,
                  "config": (row.config_hash if pending_thread and row.config_hash else configuration(request)),

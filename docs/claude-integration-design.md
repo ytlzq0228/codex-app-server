@@ -238,6 +238,8 @@ Responses 管线在工具调用时先完成文本块、再按 item 顺序输出 
 
 ### 6.4 会话续接与 Claude Code 客户端
 
+2026-10-02 更新：当前 `metadata.user_id` 是含 `device_id/account_uuid/session_id` 的 JSON 字符串，兼容下述旧格式。`x-claude-code-session-id` 与 metadata 共同确认 session，`x-claude-code-agent-id` 明确区分子代理。主线程使用独立标记；无 agent 的无工具结构化辅助请求不占用执行会话。详见 [多代理修复](claude-subagent-409-fix.md)。
+
 `/v1/messages` 无状态：每轮全量 `messages`。现有 `execution.prepare()` 需要"显式会话标识 + 历史前缀"才会 `--resume`，否则每轮都新建会话并把全量历史扁平化为首条用户消息（Codex/Gemini 的 Chat 路径亦如此）。
 
 - Claude Code 客户端的 `metadata.user_id` 形如 `user_<hash>_account_<id>_session_<uuid>`，每个会话稳定。建议在 `conversations.explicit_identity()` 增加来源：`params.metadata.user_id` 中的 `session_<uuid>` → `client_thread_ids`（与 `x-codex-turn-metadata.thread_id` 同级）。Anthropic SDK 用户可自行传 `metadata.user_id`。

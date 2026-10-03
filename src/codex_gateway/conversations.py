@@ -1,6 +1,8 @@
 """Scoped client identity shared by audit grouping and guarded execution resume."""
 import hashlib
 import json
+import re
+from uuid import UUID
 from functools import wraps
 import anyio
 from sqlalchemy import select
@@ -20,6 +22,18 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ':')).encode()).hexdigest()
 
 
+def claude_session_id(user_id):
+    """Accept current JSON metadata, legacy Claude Code IDs, and SDK IDs."""
+    try:
+        value = json.loads(user_id)
+        if isinstance(value, dict) and isinstance(value.get('session_id'), str):
+            return str(UUID(value['session_id']))
+    except (ValueError, TypeError):
+        pass
+    match = re.search(r'(?:^|_)session_([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:$|_)', user_id)
+    return match.group(1).lower() if match else user_id
+
+
 def explicit_identity(params, observation, key, endpoint, request_id):
     params = params or {}
     cm = params.get('client_metadata') or {}
@@ -27,7 +41,7 @@ def explicit_identity(params, observation, key, endpoint, request_id):
         cm = {}
     headers = {}
     for h in (observation or {}).get('headers', []):
-        headers.setdefault(h['name'], []).append(h['value'])
+        headers.setdefault(h['name'].lower(), []).append(h['value'])
     metadata = []
     for raw in [cm.get('x-codex-turn-metadata'), *headers.get('x-codex-turn-metadata', [])]:
         try:
@@ -45,10 +59,15 @@ def explicit_identity(params, observation, key, endpoint, request_id):
     threads = values('thread_id', 'thread-id')
     user_id = (params.get("metadata") or {}).get("user_id")
     from .providers import provider_for
-    if provider_for(params.get("model", "")) == "claude" and isinstance(user_id, str) and user_id and len(user_id) <= 512:
-        import re
-        match = re.search(r"(?:^|_)session_([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?:$|_)", user_id)
-        threads = sorted(set(threads + [match.group(1).lower() if match else user_id]))
+    claude = provider_for(params.get("model", "")) == "claude"
+    agents = []
+    if claude:
+        sessions = values('x-claude-code-session-id', 'x-claude-code-session-id')
+        sessions = [claude_session_id(s) for s in sessions]
+        agents = values('x-claude-code-agent-id', 'x-claude-code-agent-id')
+        if isinstance(user_id, str) and user_id and len(user_id) <= 512:
+            sessions.append(claude_session_id(user_id))
+        threads = sorted(set(threads + sessions))
 
     installations = values('installation_id', 'x-codex-installation-id')
     if isinstance(cm.get('x-codex-installation-id'), str):
@@ -59,14 +78,33 @@ def explicit_identity(params, observation, key, endpoint, request_id):
                 'installation_ids': installations, 'client_sources': sources,
                 'thread_sources': kinds, 'turn_ids': values('turn_id'),
                 'session_ids': values('session_id', 'session-id'), 'auto_resume': False}
-    if any(len(v) > 1 for v in (threads, installations, sources, kinds)):
+    if claude:
+        evidence['client_agent_ids'] = agents
+    if any(len(v) > 1 for v in (threads, installations, sources, kinds, agents)):
         evidence['method'] = 'identifier_conflict'
     elif threads and key is not None:
         evidence['method'] = 'explicit_client_thread'
         # Title generation must not share the conversational group.
         category = 'thread_title' if kinds == ['thread_title'] else 'conversation'
+        # Claude Code's no-tool structured helper calls share the main session.
+        # Give them an audit group, but no execution checkpoint/lease (prepare).
+        if claude and not agents and not params.get('tools') and (params.get('text') or {}).get('format'):
+            category = 'claude_auxiliary'
+        if claude:
+            from .claude_helpers import auxiliary_kind, RULE_VERSION
+            helper = auxiliary_kind(params, headers)
+            if helper:
+                category = 'claude_auxiliary'
+                evidence.update(auxiliary_kind=helper, auxiliary_rule=RULE_VERSION)
         evidence['category'] = category
-        return 'conv_' + digest([str(key), endpoint, sources, installations, threads[0], category]), evidence
+        identity = [str(key), endpoint, sources, installations, threads[0], category]
+        if evidence.get('auxiliary_kind'):
+            identity.append(evidence['auxiliary_kind'])
+        if claude:
+            # Tagged tuple avoids collisions between the main branch and an
+            # agent literally named "main". Prompt/tool changes cannot move it.
+            identity.append(['claude_agent', agents[0]] if agents else ['claude_main'])
+        return 'conv_' + digest(identity), evidence
     return None, evidence
 
 

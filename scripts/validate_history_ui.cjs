@@ -27,7 +27,7 @@ print(e.get_template('admin/dashboard.html').render(page='history',history_keys=
   if(url.pathname==='/admin/history/data'){
    if(failNext){failNext=false;return route.fulfill({status:500,json:{detail:'测试加载失败'}});}
    const number=Number(url.searchParams.get('history_page') || 1);
-   return route.fulfill({json:{total:31,request_total:55,page:number,pages:2,page_size:30,groups:[{identity:'key:responses:conversation-'+number,conversation_id:'conversation-'+number,key_id:'key',key_name:'<img src=x onerror="window.pwned=1">',endpoint:'responses',latest_at:'2026-10-02T15:00:00Z',logical:true,thread_count:2,request_count:25,latest_status:200,input_tokens:'1100000',output_tokens:'150000',duration_ms:30,cost_usd:'0.1000',unpriced_count:0}]}});
+   return route.fulfill({json:{total:31,request_total:55,page:number,pages:2,page_size:30,groups:[{identity:'key:responses:conversation-'+number,conversation_id:'conversation-'+number,key_id:'key',key_name:'<img src=x onerror="window.pwned=1">',endpoint:'responses',latest_at:'2026-10-02T15:00:00Z',logical:true,thread_count:2,request_count:25,latest_status:200,latest_model:'<img src=x onerror="window.pwned=1">',input_tokens:'1100000',output_tokens:'150000',duration_ms:30,cost_usd:'0.1000',unpriced_count:0}]}});
   }
   if(url.pathname==='/admin/history/requests'){
    const number=Number(url.searchParams.get('page') || 1);
@@ -41,6 +41,7 @@ print(e.get_template('admin/dashboard.html').render(page='history',history_keys=
  assert.equal(calls.filter(u=>u.pathname==='/admin/history/requests').length,0);
  assert.equal(await page.locator('[data-history-request]').count(),0);
  assert.equal(await page.locator('.history-row').getByText('1.2500 million',{exact:true}).count(),1);
+ assert.equal(await page.locator('.history-row td').nth(4).innerText(), '<img src=x onerror="window.pwned=1">');
  await page.getByRole('button',{name:'展开',exact:true}).click();
  await page.locator('[data-history-request]').nth(19).waitFor();
  assert.equal(await page.locator('[data-history-request]').count(),20);

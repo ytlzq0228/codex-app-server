@@ -73,3 +73,28 @@ def test_json_owner_scope_and_initial_password():
         assert client.get("/user/usage/requests",params=params).json()["total"] == 0
         assert client.get("/user/usage/"+request_id+"/data").status_code == 404
         assert client.get("/admin/options/users").status_code == 403
+
+
+def test_static_layout_is_in_initial_html():
+    pages = {
+        "/admin": "运行控制台", "/admin/api-keys": "API Keys",
+        "/admin/workers": "Worker 管理", "/admin/sessions": "Key 活动会话",
+        "/admin/users": "用户管理", "/admin/finance": "价格配置",
+        "/admin/reports": "财务报表", "/admin/google": "Google 登录配置",
+        "/user/overview": "自助服务概览", "/user/account": "我的账户",
+        "/user/workers": "贡献 Worker", "/user/usage": "用量详单",
+        "/user/debug": "查询与调试", "/user/usage/shell-placeholder": "请求详情",
+    }
+    with TestClient(app) as client:
+        admin_login(client)
+        for path, heading in pages.items():
+            response = client.get(path)
+            assert response.status_code == 200, path
+            assert f"<h1>{heading}</h1>" in response.text, path
+            assert 'data-page-loading' in response.text
+            assert '<section' in response.text
+            assert '正在加载页面数据' not in response.text
+            assert 'data-page-retry hidden>重试' in response.text
+            # Data-dependent interactions initialize only after JSON rendering.
+            assert '<script defer src="/static/portal.js">' not in response.text
+            assert '<script defer src="/static/admin.js">' not in response.text

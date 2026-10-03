@@ -6,10 +6,21 @@ from types import SimpleNamespace as S
 from urllib.parse import urlparse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from playwright.sync_api import sync_playwright
+from codex_gateway.page_data import shell_context
+from codex_gateway.display import money, tokens
 ROOT=Path(__file__).resolve().parents[1] / "src/codex_gateway"
 def run(fixtures):
     env=Environment(loader=FileSystemLoader(ROOT / "templates"), autoescape=select_autoescape())
+    env.filters.update(money=money, tokens=tokens)
     errors=[]
+    fixtures["/user/usage/fixture-request"] = {
+        "page": "detail", "identity": fixtures["/user/account"]["identity"],
+        "csrf_token": "fixture", "record": {"request_id": "fixture-request",
+        "model": "fixture-model", "created_at": "2026-10-03T00:00:00Z",
+        "input_tokens": 1250000, "output_tokens": 5, "duration_ms": 3},
+        "evidence_fields": [], "observation_fields": [], "last_texts": {},
+        "show_worker": True,
+    }
     fixtures["/admin"]["stats"]["input_tokens"]=1250000
     fixtures["/admin/reports"]["total"]["input_tokens"]=1250000
     for group in fixtures["/user/usage"]["history"]["groups"]:
@@ -21,10 +32,11 @@ def run(fixtures):
             page=browser.new_page(viewport={"width":1440,"height":1000})
             current=[]
             page.on("pageerror", lambda error: current.append(str(error)))
-            request=S(url=S(path=path), state=S(user=S(**data["identity"])))
-            shell=env.get_template("data-page.html").render(request=request, page=data["page"],
+            request=S(url=S(path=path), query_params={}, base_url="https://gateway.test/", state=S(user=S(**data["identity"])))
+            shell=env.get_template("data-page.html").render(request=request, **shell_context(data["page"]),
                 page_template="admin/dashboard.html" if data["page"] in ["overview","keys","admin_workers","sessions"] else "account.html",
                 identity=S(**data["identity"]), csrf_token=data["csrf_token"])
+            pending=[]
             def route(r):
                 url=urlparse(r.request.url)
                 if url.path.startswith("/static/"):
@@ -32,10 +44,24 @@ def run(fixtures):
                     kind="application/json" if file.suffix==".json" else "text/javascript" if file.suffix==".js" else "text/css"
                     return r.fulfill(body=file.read_bytes(),content_type=kind)
                 if url.path==path: return r.fulfill(body=shell,content_type="text/html")
-                if url.path==path+"/data": return r.fulfill(json=data)
+                if url.path==path+"/data":
+                    pending.append(r)
+                    return
                 return r.fulfill(status=503,json={"detail":"offline fixture"})
             page.route("https://gateway.test/**", route)
-            page.goto("https://gateway.test"+path)
+            page.goto("https://gateway.test"+path, wait_until="domcontentloaded")
+            page.wait_for_function("document.querySelector('main[data-page-loading]')")
+            assert page.locator("main h1").is_visible(), path
+            assert "正在加载页面数据" not in page.locator("main").inner_text()
+            assert page.locator("main section").count(), path
+            # Fail the first data fetch: the layout must stay visible and retry work.
+            while not pending: page.wait_for_timeout(20)
+            pending.pop().fulfill(status=503, json={"detail":"测试加载失败"})
+            page.locator("[data-page-error]:visible").wait_for()
+            assert page.locator("main h1").is_visible()
+            page.locator("[data-page-retry]").click()
+            while not pending: page.wait_for_timeout(20)
+            pending.pop().fulfill(json=data)
             page.wait_for_function("!document.querySelector('main').hasAttribute('aria-busy')")
             page.wait_for_timeout(150)
             assert page.evaluate("TokenFormat.tokens(999999)") == "999999"

@@ -66,6 +66,25 @@ class ToolSessions:
                 matches.append(item)
         return len(matches) == 1
 
+    async def supersede_with_user_turn(self, request, key, thread_id, checkpoint_length):
+        # No await between validation and claiming: a concurrent tool reply must
+        # never be accepted once cancellation has started.
+        if not self.can_supersede_with_user_turn(request, key, thread_id, checkpoint_length):
+            return False
+        items = [i for i in request.input if i.get("type") != "additional_tools"]
+        from .execution import recovery_call_id
+        call_id = recovery_call_id(items, checkpoint_length)
+        run = self.pending.get((str(key), call_id))
+        if run is None:
+            return False
+        if request.model != run.request.model or definitions(request) != definitions(run.request):
+            raise ToolProtocolError("Cannot change model or tools while cancelling a pending tool")
+        run.claimed = True
+        self.retire((str(key), call_id), "client_tool_call_unavailable")
+        run.task.cancel()
+        await asyncio.gather(run.task, return_exceptions=True)
+        return True
+
     async def cancel_thread(self, key, thread_id):
         tasks=[r.task for r in self.runs if r.thread_id==thread_id and r.target.connection_key.split(':',1)[0]==str(key)]
         for task in tasks:task.cancel()

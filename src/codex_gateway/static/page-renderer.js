@@ -107,7 +107,7 @@
     error.hidden=true;retry.hidden=true;main.setAttribute('aria-busy','true');
     try {
       const url=new URL(location.href);url.pathname+='/data';
-      const data=await json(url);
+      const [data]=await Promise.all([json(url), templates()]);
       const html=await render(body.dataset.pageTemplate,data);
       const parsed=new DOMParser().parseFromString(html,'text/html');
       const content=parsed.querySelector('main.content');
@@ -116,6 +116,7 @@
         if(!document.querySelector('link[href="'+link.getAttribute('href')+'"]')) document.head.append(document.importNode(link,true));
       }
       body.dataset.csrfToken=data.csrf_token;
+      for(const dialog of document.querySelectorAll('body > dialog')) dialog.remove();
       main.replaceWith(document.importNode(content,true));
       for(const dialog of parsed.querySelectorAll('body > dialog')) body.append(document.importNode(dialog,true));
       if(data.pagination) document.querySelector('main.content > section.panel')?.append(pager(data.pagination,'列表分页'));

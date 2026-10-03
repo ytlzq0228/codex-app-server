@@ -1,7 +1,7 @@
 <link rel="stylesheet" href="/static/monitoring.css">
-<script defer src="/static/monitoring.js"></script>
+{% if not loading %}<script defer src="/static/monitoring.js"></script>{% endif %}
 <div id="monitoring">
-  <div class="section-head"><label>历史范围 <select id="monitor-days"><option value="1">最近 24 小时</option><option value="7" selected>最近 7 天</option><option value="30">最近 30 天</option><option value="90">最近 90 天</option></select></label><span id="monitor-status" role="status">正在读取监控数据…</span></div>
+  <div class="section-head"><label>历史范围 <select {% if loading %}disabled{% endif %} id="monitor-days"><option value="1">最近 24 小时</option><option value="7" selected>最近 7 天</option><option value="30">最近 30 天</option><option value="90">最近 90 天</option></select></label><span id="monitor-status" role="status">正在读取监控数据…</span></div>
   <section class="panel">
     <div class="section-head"><div><p class="eyebrow">SUBSCRIPTION POOL</p><h2>当前订阅池总用量</h2></div><a href="/admin/finance">配置套餐权重</a></div>
     <p class="muted">Codex 与 Gemini 独立计算。各 Provider 内按套餐权重加权，显示已用比例及剩余可用比例。</p>

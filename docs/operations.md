@@ -32,6 +32,7 @@ page) and the existing `conversation`, `key_id`, `endpoint`, `start`, and `end`
 filters. Expanding a conversation calls `/admin/history/requests` with its exact
 conversation/Key/interface identity and `page` (20 requests per batch). Both
 endpoints require an admin session and return `Cache-Control: no-store`.
+Conversation rows display the latest request model (ordered by created_at, then ID).
 Summary totals still cover the full matching conversations; time filters select
 conversations containing a matching request. Request pages contain display
 fields, not the stored request parameters or audit payloads.
@@ -39,7 +40,11 @@ fields, not the stored request parameters or audit payloads.
 ## JSON page rendering (test rollout)
 
 Management and user data pages now serve an authenticated shell and load their
-display data from the matching `/data` endpoint. List responses use 30 rows per
+display data from the matching `/data` endpoint. The initial HTML reuses the page
+template with layout-only placeholders: headings, table headers, help text and
+fixed controls appear before data arrives. Data-dependent controls stay disabled
+until rendering finishes; failed requests retain the layout and expose retry.
+List responses use 30 rows per
 page; account lists, workers, users, prices, report groups and subscription plans
 carry page metadata. Owner/Worker pickers use searched, paginated
 `/admin/options/{users|workers}` endpoints. User usage loads 30 conversation

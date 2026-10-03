@@ -57,6 +57,24 @@ def page_response(request, template, context):
     return request.app.state.templates.TemplateResponse(request, template, context)
 
 
+def shell_context(page):
+    """Layout-only values: no page data queries are needed to paint the shell."""
+    from datetime import timezone
+    month = datetime.now(timezone.utc).strftime("%Y-%m")
+    return {
+        "loading": True, "page": page,
+        "stats": {"requests": "—", "input_tokens": None, "output_tokens": None},
+        "quota": dict.fromkeys(("total", "granted", "contributed", "used", "available"), "—"),
+        "total": {"requests": "—", "unpriced": "—", **dict.fromkeys(("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "amount"))},
+        "subscriptions": {"count": "—", "total": None, "rows": []},
+        "cost_amount": None, "savings": None, "cost_missing": "—",
+        "month": month, "current_month": month, "config": None,
+        "record": dict.fromkeys(FIELDS[models.UsageRecord].split()),
+        "evidence_fields": [], "observation_fields": [],
+        "last_texts": {"input_text": "—", "output_text": "—"},
+    }
+
+
 def data_page(router, path, template, page):
     """Register identical auth/query dependencies for the shell and /data route."""
     def decorate(handler):
@@ -68,8 +86,9 @@ def data_page(router, path, template, page):
                 request.state.json_page = True
                 return await handler(*args, **kwargs)
             return request.app.state.templates.TemplateResponse(request, "data-page.html", {
-                "page": page, "page_template": template,
+                **shell_context(page), "page_template": template,
                 "identity": request.state.user, "csrf_token": identity.csrf_token,
+                "show_worker": request.state.user.role in ("admin", "superadmin"),
             }, headers={"Cache-Control": "no-store"})
         router.get(path + "/data")(endpoint)
         router.get(path)(endpoint)

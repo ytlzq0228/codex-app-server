@@ -1,11 +1,11 @@
 {% macro fields(rows, extra_class='') -%}
-<dl class="request-fields{{ ' ' ~ extra_class if extra_class else '' }}">{% for label, value in rows %}<div><dt>{{ label }}</dt><dd>{{ value if value is not none else '未记录' }}</dd></div>{% endfor %}</dl>
+<dl class="request-fields{{ ' ' ~ extra_class if extra_class else '' }}">{% for label, value in rows %}<div><dt>{{ label }}</dt><dd>{{ '—' if loading else (value if value is not none else '未记录') }}</dd></div>{% endfor %}</dl>
 {%- endmacro %}
 <section class="panel request-detail">
   <h2>请求元数据</h2>
   {{ fields([
     ('请求 ID', record.request_id), ('模型', record.model), ('接口', record.endpoint), ('HTTP 状态', record.status_code),
-    ('请求时间', record.created_at.isoformat()), ('耗时', (record.duration_ms|string) ~ ' ms'),
+    ('请求时间', record.created_at.isoformat() if not loading else ''), ('耗时', (record.duration_ms|string) ~ ' ms'),
     ('请求所有人', record.owner_username or '未记录'), ('金额（USD）', record.cost_usd|money if record.cost_usd is not none else '未定价'),
     ('输入 Token', record.input_tokens|tokens), ('缓存读 Token', record.cache_read_tokens|tokens),
     ('缓存写 Token', record.cache_write_tokens|tokens), ('输出 Token', record.output_tokens|tokens),
@@ -24,7 +24,7 @@
   <details class="request-json"><summary>查看会话关联依据原始 JSON</summary><pre>{{ correlation }}</pre></details>
   <h3>请求观测信息</h3>
   <p class="muted">认证字段已脱敏；代理相关请求头仅作为客户端提供的线索。</p>
-  {% if observation_fields %}{{ fields(observation_fields) }}{% else %}<p class="muted">历史请求未记录观测信息。</p>{% endif %}
+  {% if observation_fields %}{{ fields(observation_fields) }}{% elif not loading %}<p class="muted">历史请求未记录观测信息。</p>{% endif %}
   <details class="request-json"><summary>查看请求观测信息原始 JSON</summary><pre>{{ observation }}</pre></details>
   <h3>本轮对话</h3>
   <p class="muted">显示截至本次请求的最近一次用户输入，以及本次实际输出。</p>

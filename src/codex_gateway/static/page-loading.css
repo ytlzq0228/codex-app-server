@@ -1,0 +1,6 @@
+/* Reserve data areas while keeping headings, column labels and controls visible. */
+[data-page-loading] tbody { visibility: hidden; }
+[data-page-loading] .table-wrap { min-height: 8rem; }
+[data-page-loading] .page-pending-value { visibility: hidden; }
+[data-page-loading] .stat strong { min-height: 1.5em; }
+[data-page-loading] button:disabled { cursor: wait; }

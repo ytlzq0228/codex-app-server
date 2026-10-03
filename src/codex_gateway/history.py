@@ -58,6 +58,7 @@ async def conversation_history(db, *, owner=None, page=1, page_size=30, filters=
             func.bool_or(UsageRecord.logical_conversation_id.is_not(None)).label('logical'),
             func.count().label('request_count'), func.count(func.distinct(ranked.c.worker_thread)).label('thread_count'),
             func.max(case((ranked.c.position == 1, UsageRecord.status_code))).label('latest_status'),
+            func.max(case((ranked.c.position == 1, UsageRecord.model))).label('latest_model'),
             func.sum(UsageRecord.input_tokens).label('input_tokens'),
             func.sum(UsageRecord.output_tokens).label('output_tokens'),
             func.sum(UsageRecord.duration_ms).label('duration_ms'),
@@ -85,7 +86,7 @@ async def conversation_history(db, *, owner=None, page=1, page_size=30, filters=
             'identity': identity, 'thread_id': conversation_id, 'conversation_id': conversation_id,
             'logical': bool(usage.logical_conversation_id), 'thread_ids': [],
             'active_url': history_link(conversation_id, usage.api_key_id, usage.endpoint or 'unknown').replace('/admin/history?', '/admin/sessions?'), 'endpoint': usage.endpoint or 'unknown',
-            'key_name': key_name or '已删除', 'latest_at': latest_at, 'requests': [],
+            'key_name': key_name or '已删除', 'latest_at': latest_at, 'latest_model': usage.model, 'requests': [],
             'input_tokens': 0, 'output_tokens': 0, 'duration_ms': 0,
             'cost_usd': Decimal(0), 'unpriced_count': 0,
         })

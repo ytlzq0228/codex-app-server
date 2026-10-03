@@ -29,7 +29,7 @@ def test_conversation_pagination_latest_status_filters_and_owner_scope():
             def record(name,conv,status,age,owner=alice,**extra):
                 return UsageRecord(request_id=prefix+'-'+name,owner_username=owner,
                     logical_conversation_id=conv,status_code=status,created_at=now+timedelta(seconds=age),
-                    endpoint='responses',model='test-model',input_tokens=10,output_tokens=2,
+                    endpoint='responses',model='model-'+name,input_tokens=10,output_tokens=2,
                     duration_ms=5,cost_usd=Decimal('0.1'),**extra)
             db.add_all([
                 record('old','recovered',502,0),record('new','recovered',200,1),
@@ -49,12 +49,15 @@ def test_conversation_pagination_latest_status_filters_and_owner_scope():
             assert result['total']==6 and result['request_total']==9
             groups=result['groups']
             recovered=next(g for g in groups if g['thread_id']=='recovered' and len(g['requests'])==2)
+            assert recovered['latest_model']=='model-new'
             assert recovered['latest_status']==200
             assert recovered['input_tokens']==20 and recovered['cost_usd']==Decimal('0.2')
             assert recovered['unpriced_count']==0
             assert [r['usage'].status_code for r in recovered['requests']]==[200,502]
             assert next(g for g in groups if g['thread_id']=='tie')['latest_status']==504
             assert groups[0]['thread_id']=='legacy-thread'
+            summaries=await conversation_history(db,owner=alice,summaries_only=True)
+            assert next(g for g in summaries['groups'] if g['conversation_id']=='tie')['latest_model']=='model-tie-high'
             assert all(r['usage'].owner_username==alice for g in groups for r in g['requests'])
             filtered=await conversation_history(db,owner=alice,filters=[UsageRecord.request_id==prefix+'-old'])
             assert filtered['total']==1 and filtered['groups'][0]['latest_status']==200
@@ -78,6 +81,7 @@ def test_conversation_pagination_latest_status_filters_and_owner_scope():
             history=response.json()['history']
             assert history['total']==1 and history['request_total']==2
             group=history['groups'][0]
+            assert group['latest_model']=='model-new'
             assert group['latest_status']==200 and 'requests' not in group
             assert Decimal(group['cost_usd'])==Decimal('0.2')
             batch=client.get('/user/usage/requests',params={'conversation':group['conversation_id'],

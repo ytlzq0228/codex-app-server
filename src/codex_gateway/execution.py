@@ -4,6 +4,7 @@ Only a verified append to a completed checkpoint resumes a Thread. The DB lease
 covers HTTP execution (including streaming), not a long-lived DB connection.
 """
 import asyncio
+import json
 import time
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
@@ -25,7 +26,7 @@ def now():
     return datetime.now(timezone.utc)
 
 
-def normal_item(item):
+def normal_item(item, *, legacy=False):
     """Ignore transport IDs/annotations, preserve text, images and tool identity."""
     from .multimodal import content_parts
     def semantic_content(content):
@@ -41,13 +42,92 @@ def normal_item(item):
     if kind == "message" and item.get("role") in {"user", "assistant", "developer", "system"}:
         return {"role": item["role"], "text": semantic_content(item.get("content"))}
     if kind in {"function_call", "custom_tool_call"}:
+        arguments = item.get("arguments", item.get("input"))
+        if kind == "function_call" and not legacy:
+            arguments = canonical_arguments(arguments)
         return {"type": kind, "call_id": item.get("call_id"), "name": item.get("name"),
-                "namespace": item.get("namespace"), "input": item.get("arguments", item.get("input"))}
+                "namespace": item.get("namespace"), "input": arguments}
     if kind in {"function_call_output", "custom_tool_call_output"}:
         output = item.get("output")
         return {"type": kind, "call_id": item.get("call_id"),
                 "output": semantic_content(output), **({"is_error": True} if item.get("is_error") is True else {})}
     return None
+
+
+
+def parsed_arguments(value):
+    # Duplicate keys/non-finite numbers are ambiguous; preserve their exact text.
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise ValueError("duplicate JSON key")
+            result[key] = value
+        return result
+    def invalid(value):
+        raise ValueError("non-finite JSON number")
+    if not isinstance(value, str):
+        raise ValueError("arguments must be a JSON string")
+    return json.loads(value, object_pairs_hook=pairs, parse_constant=invalid)
+
+
+def canonical_arguments(value):
+    try:
+        return json.dumps(parsed_arguments(value), sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    except (ValueError, TypeError, RecursionError):
+        return value
+
+
+def checkpoint_matches(items, expected):
+    """Verify every saved digest, including bounded legacy JSON representations.
+
+    Legacy digests cannot be inverted. Accept a formatting variant only when
+    its complete old-format item hashes to the saved digest; this proves the
+    original tool name, call ID and argument values without trusting new input.
+    Unknown legacy encodings fail closed.
+    """
+    if not expected or items is None or len(items) < len(expected):
+        return False
+    for item, saved in zip(items, expected):
+        if digest(normal_item(item)) == saved:
+            continue
+        if item.get("type") != "function_call":
+            return False
+        original = normal_item(item, legacy=True)
+        if digest(original) == saved:
+            continue
+        try:
+            arguments = parsed_arguments(original["input"])
+            variants = (
+                json.dumps(arguments, sort_keys=sort, separators=separators,
+                           ensure_ascii=ascii, allow_nan=False)
+                for sort in (False, True) for ascii in (False, True)
+                for separators in ((",", ":"), (", ", ": "))
+            )
+            if not any(digest({**original, "input": value}) == saved for value in variants):
+                return False
+        except (ValueError, TypeError, RecursionError):
+            return False
+    return True
+
+
+def recovery_call_id(items, checkpoint_length):
+    """A verified checkpoint plus exactly its tool result and a new user turn."""
+    if not items or not checkpoint_length or len(items) <= checkpoint_length or items[-1].get("role") != "user":
+        return None
+    pending = items[checkpoint_length - 1]
+    if pending.get("type") not in {"function_call", "custom_tool_call"}:
+        return None
+    tail = items[checkpoint_length:]
+    outputs = [i for i in tail if i.get("type") in {"function_call_output", "custom_tool_call_output"}]
+    if len(outputs) != 1 or outputs[0].get("call_id") != pending.get("call_id"):
+        return None
+    expected_type = "function_call_output" if pending["type"] == "function_call" else "custom_tool_call_output"
+    if outputs[0].get("type") != expected_type or tail[0] is not outputs[0]:
+        return None
+    if any(i.get("role") not in {"user", "assistant", "developer", "system"} for i in tail[1:]):
+        return None
+    return pending.get("call_id")
 
 
 def history_items(request):
@@ -71,8 +151,7 @@ def configuration(request):
 
 def appended_items(request, expected):
     items = history_items(request)
-    actual = hashes(items)
-    if not expected or actual is None or actual[:len(expected)] != expected:
+    if not checkpoint_matches(items, expected):
         return None
     delta = items[len(expected):]
     # New user turns only. Replays and edited/compacted histories start separately.
@@ -228,18 +307,19 @@ async def _prepare(request, principal, endpoint, audit, *, pending_thread=None, 
             # Only a full history followed by a new user turn can rebuild. Never
             # reinterpret an orphaned tool result as permission to rerun tools.
             items = history_items(request)
-            full_prefix = (hashes(items) or [])[:len(row.history_hashes or [])]
-            full_history = full_prefix == row.history_hashes if row.history_hashes else bool(items and len(items)>1)
-            can_supersede = getattr(tool_sessions, "can_supersede_with_user_turn", None) if tool_sessions else None
-            superseded = bool(live and full_history and items and items[-1].get("role") == "user"
-                              and can_supersede and can_supersede(
-                                  request, principal.key_id, row.thread_id, len(row.history_hashes or [])))
-            if live and row.expires_at and row.expires_at > instant and not superseded:
-                raise conflict("This conversation is waiting for a client tool result; return its call_id first", "conversation_waiting_tool")
-            if not items or items[-1].get("role") != "user" or not full_history:
-                raise conflict("The pending tool call was lost; send full history with a new user message", "conversation_history_required")
+            full_history = checkpoint_matches(items, row.history_hashes)
+            call_id = recovery_call_id(items, len(row.history_hashes or [])) if full_history else None
+            if live and call_id:
+                from .cluster import supersede_tool
+                superseded = await supersede_tool(db, row, request, tool_sessions)
+                if superseded:
+                    live = False
             if live:
-                await tool_sessions.cancel_thread(principal.key_id, row.thread_id)
+                # A remote pending task must be cancelled by its owner even if
+                # the execution checkpoint TTL elapsed slightly earlier.
+                raise conflict("This conversation is waiting for a client tool result; return its call_id first", "conversation_waiting_tool")
+            if not call_id:
+                raise conflict("The pending tool call was lost; send full history with its result and a new user message", "conversation_history_required")
             orphaned = True
         expected = row.history_hashes
         items = history_items(request)
@@ -248,7 +328,7 @@ async def _prepare(request, principal, endpoint, audit, *, pending_thread=None, 
         chosen = binding
         if pending_thread:
             action, reason = "tool_continuation", "authenticated_call_id"
-            if expected and checkpoint and checkpoint[:len(expected)] == expected:
+            if checkpoint_matches(items, expected):
                 pass
             elif expected and items and all(i.get("type") in {"function_call_output", "custom_tool_call_output"} for i in items):
                 checkpoint = expected + checkpoint

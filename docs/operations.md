@@ -1,5 +1,10 @@
 # Operations
 
+Real hosts, addresses, users and server paths are kept out of the repository.
+This document uses placeholders such as `<deploy-user>`, `<test-host>`, `<app-1>`
+and `<app-2>`; the actual values live in the local, gitignored
+`docs/real-environment.md`.
+
 ## Current dual-active production (2026-10-02)
 
 Production now runs on `<deploy-user>@<app-1>` and `<deploy-user>@<app-2>`,

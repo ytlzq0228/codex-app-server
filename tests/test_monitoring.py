@@ -1,3 +1,4 @@
+from page_helpers import rendered_pages
 import asyncio
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -74,16 +75,16 @@ def test_snapshots_api_weights_and_history(monkeypatch):
                 assert len(rows) == 1
                 assert rows[0].payload['version'] == (2 if metric == 'worker_states' else 4)
     with TestClient(app) as client:
-        assert client.get('/admin/monitoring', headers=AJAX).status_code in (401, 303)
+        assert rendered_pages(client, '/admin/monitoring', headers=AJAX).status_code in (401, 303)
         token = admin_login(client)
         client.portal.call(sample)
-        page = client.get('/admin').text
+        page = rendered_pages(client, '/admin').text
         assert 'id="monitoring"' in page and 'id="keys"' not in page and 'id="workers"' not in page
-        response = client.get('/admin/monitoring?days=7')
+        response = rendered_pages(client, '/admin/monitoring?days=7')
         assert response.status_code == 200 and response.headers['cache-control'] == 'no-store'
         assert any(r['at'].startswith(now.strftime('%Y-%m-%d')) for r in response.json()['history']['worker_states'])
-        assert not any(r['at'].startswith(now.strftime('%Y-%m-%d')) for r in client.get('/admin/monitoring?days=1').json()['history']['worker_states'])
-        assert client.get('/admin/monitoring?days=100').status_code == 400
+        assert not any(r['at'].startswith(now.strftime('%Y-%m-%d')) for r in rendered_pages(client, '/admin/monitoring?days=1').json()['history']['worker_states'])
+        assert rendered_pages(client, '/admin/monitoring?days=100').status_code == 400
         plan = 'monitor-' + uuid4().hex
         for weight in ['0', '-1', 'NaN', 'Infinity', '0.0000001', '1000000000']:
             assert client.post('/admin/subscription-plans', data={'csrf_token':token,'name':plan,'monthly_price':'20','weight':weight},headers=AJAX).status_code in (400,422)
@@ -94,7 +95,7 @@ def test_snapshots_api_weights_and_history(monkeypatch):
         client.portal.call(saved)
         name, pw = create_person(client)
         user_login(client,name,pw)
-        assert client.get('/admin/monitoring',headers=AJAX).status_code == 403
+        assert rendered_pages(client, '/admin/monitoring',headers=AJAX).status_code == 403
 
 
 @pytest.mark.asyncio

@@ -91,13 +91,13 @@ Worker 设计完全基于以下实测行为（本机 + 测试环境均复现）�
 - 非 root `claude`(10001)，只读根文件系统，`cap_drop ALL`，`/tmp` tmpfs。**整个 `/home/claude` 是 Worker 卷**（凭证 `~/.claude/.credentials.json`、状态 `~/.claude.json`、会话 transcript 都在其中）。
 - 环境：`DISABLE_AUTOUPDATER=1 DISABLE_TELEMETRY=1 DISABLE_ERROR_REPORTING=1 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`。
 - 每轮固定参数（`BASE_ARGS`）：`--tools "" --strict-mcp-config --permission-mode dontAsk --permission-prompts none --disable-slash-commands --setting-sources user --settings '{"permissions":{"defaultMode":"dontAsk","deny":[Bash,Read,Edit,...]}}'`。双重围栏：`--tools ""` 移除内置工具，deny 列表兜底。
-- 并发：`MAX_TURNS=4` 个 CLI 进程；登录/探测期间拒绝执行（409）；同一会话同时只允许一轮（409）。
+- 并发：`MAX_TURNS=8` 个 CLI 进程；额外最多 32 个请求按 FIFO 排队，最长等待 30 秒，断连或取消时释放队列位置。登录/探测期间及同一会话重复执行立即返回执行冲突（409）。
 
 ### 4.2 私有 HTTP 协议（Bearer `CODEX_WORKER_TOKEN`）
 
 | 端点 | 请求 | 响应 |
 |---|---|---|
-| `POST /capabilities` | — | `{"provider":"claude","client_tools":1,"image_input":1,"tool_result_types":["text","image"],"native_stream":1,"structured_output":1,"effort":1,"system_prompt":1,"max_turns":4}` |
+| `POST /capabilities` | — | `{"provider":"claude","client_tools":1,"image_input":1,"tool_result_types":["text","image"],"native_stream":1,"structured_output":1,"effort":1,"system_prompt":1,"max_turns":8}` |
 | `POST /account` | — | `{"account":{"type":"claude-subscription","email","planType","project"(=orgName),"authMethod"},"available":true}` 或 `{"account":null,"kind":"logged_out"}` |
 | `POST /probe` | `{"model"}` | account + 一次真实最小轮（"Reply with OK only."）；失败 `{"available":false,"kind":"limit|logged_out|request|connection"}`；成功附 `rate_limits` |
 | `POST /rate-limits` | `{"model"}` | **Codex 形状**：`{"rateLimits":{"primary":{"windowDurationMins":300,"usedPercent","resetsAt"},"secondary":{"windowDurationMins":10080,...}},"available":true,"status":"allowed","checked_at"}`；缓存最近一次 `rate_limit_event`，超过 1 小时才用真实轮刷新 |

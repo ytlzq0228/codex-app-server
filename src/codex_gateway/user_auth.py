@@ -49,7 +49,7 @@ async def require_user(request: Request, db: AsyncSession = Depends(get_session)
         if request.method != "GET" or request.headers.get("x-requested-with") == "XMLHttpRequest":
             raise HTTPException(401, "登录已过期")
         raise HTTPException(303, headers={"Location": "/auth/login?next=" + quote(request.url.path, safe="/")})
-    if user.must_change_password and request.url.path not in {"/user/account", "/user/account/password", "/auth/logout", "/user/logout"}:
+    if user.must_change_password and request.url.path not in {"/user/account", "/user/account/data", "/user/account/password", "/auth/logout", "/user/logout"}:
         raise HTTPException(403 if request.method != "GET" else 303, "请先修改初始密码", headers={"Location": "/user/account"})
     request.state.user = user
     return AdminSession(user.username, stored.csrf_token, stored.session_version)

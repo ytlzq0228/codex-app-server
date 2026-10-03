@@ -1,3 +1,4 @@
+from .page_data import data_page, page_response, paginate, paginate_list
 """Owner-scoped worker management; Docker credentials never reach the browser."""
 import re
 from datetime import datetime, timezone
@@ -68,15 +69,16 @@ async def next_worker_suffix(db, username):
     return f"{number:02d}" if number <= 99 else ""
 
 
-@router.get("/user/workers")
+@data_page(router, "/user/workers", "account.html", "workers")
 async def workers_page(request: Request, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     query = select(Worker).where(Worker.endpoint != "removed://worker", Worker.owner_username == identity.username)
-    workers = (await db.scalars(query.order_by(Worker.created_at))).all()
+    all_workers = (await db.scalars(query.order_by(Worker.created_at, Worker.id))).all()
+    workers, pagination = paginate_list(all_workers, request)
     credited, duplicates = await credited_workers(db, identity.username)
-    blocked = any(awaiting_login(worker) for worker in workers)
+    blocked = any(awaiting_login(worker) for worker in all_workers)
     suffix = await next_worker_suffix(db, identity.username)
     return render(request, identity, page="workers", workers=workers, users=[], credited=credited, duplicates=duplicates,
-                  creation_blocked=blocked, next_suffix=suffix)
+                  creation_blocked=blocked, next_suffix=suffix, pagination=pagination)
 
 
 @router.post("/user/workers")

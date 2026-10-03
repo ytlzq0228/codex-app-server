@@ -579,6 +579,10 @@ async def complete_with_failover(body: ResponseRequest, backend: CompletionBacke
     try:
         return await backend.complete(body, target), target
     except WorkerFailure as exc:
+        if exc.code and exc.status:
+            if exc.kind == "connection" and target.worker_id:
+                await quarantine_worker(target.worker_id, str(exc), exc.kind)
+            raise HTTPException(exc.status, detail={"error": {"message": str(exc), "type": "server_error", "code": exc.code, "param": None}}) from exc
         if exc.kind == "request":
             raise HTTPException(400, detail={"error": {"message": worker_failure_message(exc), "type": "invalid_request_error", "code": exc.__cause__.code if isinstance(exc.__cause__, ToolProtocolError) else "invalid_request", "param": "tools" if isinstance(exc.__cause__, ToolProtocolError) else "model"}}) from exc
         if exc.kind == "session":
@@ -596,7 +600,7 @@ async def complete_with_failover(body: ResponseRequest, backend: CompletionBacke
         try:
             return await backend.complete(body, replacement), replacement
         except WorkerFailure as retry_exc:
-            if retry_exc.kind not in {"request", "session", "capacity", "account_changed"} and replacement.worker_id:
+            if retry_exc.kind not in {"request", "session", "capacity", "execution_conflict", "account_changed"} and replacement.worker_id:
                 await quarantine_worker(replacement.worker_id, str(retry_exc), retry_exc.kind)
             raise
 
@@ -700,7 +704,7 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
                         yield sse({"type": "response.output_text.delta", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "delta": event.delta}); sequence += 1
                 break
             except WorkerFailure as exc:
-                if exc.kind not in {"request", "session", "capacity", "account_changed"} and target.worker_id:
+                if exc.kind not in {"request", "session", "capacity", "execution_conflict", "account_changed"} and target.worker_id:
                     await quarantine_worker(target.worker_id, str(exc), exc.kind)
                 # Retry once only when Codex confirms the turn could not have begun and
                 # no model content has reached the client.
@@ -729,8 +733,10 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
             error = {"code": "provider_quota_exhausted" if isinstance(exc, WorkerFailure) and exc.kind == "limit" else error["code"], "message": f"{target.provider.title()} subscription quota is exhausted" if isinstance(exc, WorkerFailure) and exc.kind == "limit" else str(exc.__cause__) if tool_failure else f"Timed out waiting for an available {target.provider.title()} worker connection" if capacity_failure else f"{target.provider.title()} could not complete the request"}
         if request_failure and not tool_failure:
             error = {"code": "invalid_request", "message": worker_failure_message(exc)}
+        if isinstance(exc, WorkerFailure) and exc.code:
+            error = {"code": exc.code, "message": str(exc)}
         if audit := current_audit.get(): audit["rejection"] = error
-        await save_usage(response_id, principal, target, body.model, 429 if target.provider == "claude" and error["code"] == "provider_quota_exhausted" else 400 if request_failure else 404 if session_failure else 503 if capacity_failure else 502, started, error_code=error["code"], previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))
+        await save_usage(response_id, principal, target, body.model, exc.status if isinstance(exc, WorkerFailure) and exc.status else 429 if target.provider == "claude" and error["code"] == "provider_quota_exhausted" else 400 if request_failure else 404 if session_failure else 503 if capacity_failure else 502, started, error_code=error["code"], previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))
         yield sse({"type": "error", "sequence_number": sequence, **error, "param": None}); sequence += 1
         failed = {**created, "status": "failed", "error": error}
         yield sse({"type": "response.failed", "sequence_number": sequence, "response": failed})
@@ -798,7 +804,7 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
                         yield chat_sse(chunk({"content": event.delta}))
                 break
             except WorkerFailure as exc:
-                if exc.kind not in {"request", "session", "capacity", "account_changed"} and target.worker_id:
+                if exc.kind not in {"request", "session", "capacity", "execution_conflict", "account_changed"} and target.worker_id:
                     await quarantine_worker(target.worker_id, str(exc), exc.kind)
                 if retried or content_emitted or not allow_retry or not exc.safe_to_retry:
                     raise
@@ -816,8 +822,10 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
             error_message = f"{target.provider.title()} subscription quota is exhausted" if error_code == "provider_quota_exhausted" else str(exc.__cause__) if tool_failure else f"Timed out waiting for an available {target.provider.title()} worker connection" if capacity_failure else f"{target.provider.title()} could not complete the request"
         if request_failure and not tool_failure:
             error_code, error_message = "invalid_request", worker_failure_message(exc)
+        if isinstance(exc, WorkerFailure) and exc.code:
+            error_code, error_message = exc.code, str(exc)
         if audit := current_audit.get(): audit["rejection"] = {"code": error_code, "message": error_message}
-        await save_usage(completion_id, principal, target, body.model, 429 if target.provider == "claude" and error_code == "provider_quota_exhausted" else 400 if request_failure else 503 if capacity_failure else 502, started, error_code=error_code, request_params=body.model_dump(mode="json"))
+        await save_usage(completion_id, principal, target, body.model, exc.status if isinstance(exc, WorkerFailure) and exc.status else 429 if target.provider == "claude" and error_code == "provider_quota_exhausted" else 400 if request_failure else 503 if capacity_failure else 502, started, error_code=error_code, request_params=body.model_dump(mode="json"))
         yield chat_sse({"error": {"message": error_message, "type": "invalid_request_error" if tool_failure else "server_error", "code": error_code}})
         yield chat_sse("[DONE]")
         return

@@ -1,32 +1,9 @@
-{% for key in keys %}
-{% set key_sessions = sessions_by_key.get(key.id, []) %}
-{% if key_sessions %}
-{% set routes = namespace(rows=[]) %}
-{% for group in key_sessions %}{% for item in group.threads %}
-{% set routes.rows = routes.rows + [{'group': group, 'item': item}] %}
-{% endfor %}{% endfor %}
-<div class="session-group">
-  <div class="session-group-head">
-    <div><strong>{{ key.name }}</strong><small>cag_{{ key.prefix }}_… · {{ key_sessions|length }} 个逻辑会话 · {{ routes.rows|length }} 个 Thread</small></div>
-    <form data-ajax data-reload data-confirm="确定释放这个 Key 下的全部 Thread 绑定（含两小时前的会话）吗？请求历史会保留。" method="post" action="/admin/keys/{{ key.id }}/sessions/clear"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-small button-danger">清空全部</button></form>
-  </div>
-  <div class="table-wrap"><table>
-    <thead><tr><th>会话 Thread</th><th>当前 Worker</th><th>最近 Response</th><th>最近使用</th><th>绑定策略</th><th></th></tr></thead>
-    <tbody>{% for route in routes.rows|sort(attribute='item.binding.last_used_at', reverse=true) %}
-      {% set item = route.item %}{% set group = route.group %}
-      <tr>
-        <td><code>{{ item.binding.thread_id }}</code>
-          <small>{{ item.binding_count }} 条活动响应绑定 · {{ group.endpoint }}</small>
-          <small><a href="{{ group.history_url }}" title="{{ group.conversation_id }}">{{ '逻辑会话' if group.logical else '历史会话' }}：{{ group.conversation_id[:24] }}{{ '…' if group.conversation_id|length > 24 else '' }}</a></small>
-        </td>
-        <td>{{ item.worker.name }}</td>
-        <td><a data-request-detail href="/user/usage/{{ item.binding.response_id }}"><code>{{ item.binding.response_id }}</code></a></td>
-        <td><time data-local-time datetime="{{ item.binding.last_used_at.isoformat() }}">{{ item.binding.last_used_at.isoformat() }}</time></td>
-        <td>按需恢复</td>
-        <td><form data-ajax data-reload data-confirm="确定释放这个 Worker Thread 的全部响应绑定吗？同一 Thread 上的绑定都会释放，请求历史会保留。" method="post" action="/admin/sessions/{{ item.binding.response_id }}/delete"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-small button-danger">释放 Thread</button></form></td>
-      </tr>
-    {% endfor %}</tbody>
-  </table></div>
-</div>
-{% endif %}
-{% else %}<p class="empty">还没有 Key</p>{% endfor %}
+<div class="table-wrap"><table><thead><tr><th>Key</th><th>会话 Thread</th><th>当前 Worker</th><th>最近 Response</th><th>最近使用</th><th>操作</th></tr></thead><tbody>
+{% for route in session_routes %}{% set item = route.item %}{% set group = route.group %}<tr>
+<td>{{ group.key.name }}<small>cag_{{ group.key.prefix }}_…</small></td>
+<td><code>{{ item.binding.thread_id }}</code><small>{{ item.binding_count }} 条活动响应绑定 · {{ group.endpoint }}</small><a href="{{ group.history_url }}">{{ group.conversation_id }}</a></td>
+<td>{{ item.worker.name }}</td><td><a data-request-detail href="/user/usage/{{ item.binding.response_id }}">{{ item.binding.response_id }}</a></td>
+<td><time data-local-time datetime="{{ item.binding.last_used_at.isoformat() }}">{{ item.binding.last_used_at.isoformat() }}</time></td>
+<td><form data-ajax data-reload data-confirm="确定释放这个 Worker Thread 的全部响应绑定吗？请求历史会保留。" method="post" action="/admin/sessions/{{ item.binding.response_id }}/delete"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-small button-danger">释放 Thread</button></form>
+<form data-ajax data-reload data-confirm="确定释放这个 Key 下的全部 Thread 绑定（含两小时前的会话）吗？请求历史会保留。" method="post" action="/admin/keys/{{ group.key.id }}/sessions/clear"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="button button-small button-danger">清空此 Key 全部绑定</button></form></td>
+</tr>{% else %}<tr><td colspan="6" class="empty">最近 2 小时没有活动会话绑定</td></tr>{% endfor %}</tbody></table></div>

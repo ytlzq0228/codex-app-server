@@ -55,3 +55,10 @@
 - 设置：`CODEX_GATEWAY_CLAUDE_EXECUTION_WAIT_SECONDS`（默认 5，0 禁用，最大 30）；`CODEX_GATEWAY_CLAUDE_EXECUTION_MAX_WAITERS`（默认 8，0 禁用，最大 64）。执行审计记录成功等待的 wait_ms。
 - 169 项相关测试通过（150 项会话/Claude/工具测试，19 项 API/cluster 测试），包含真实模板、误分类、运行/等待工具/ready 检查点不变、尾部提醒、等待成功/超时/取消/断连/限额和状态重检。仅有已有 Starlette 测试客户端弃用警告。
 - 发布名：`claude-helper-409-20261002-r2`。部署目标仅测试环境；部署验收记录单独保存在测试服务器应用目录。
+
+## 2026-10-03：Worker 排队和 2.1.288 兼容
+
+- Worker 执行上限从 4 调整为 8；每个 Worker 最多 32 个 FIFO 等待请求，30 秒超时。排队期间不启动 CLI；断连、取消和超时释放等待位置。重复的执行中或排队会话立即拒绝。维护操作视排队为忙，会话清理保留排队会话。
+- 队列满使用 `worker_capacity_exceeded`，排队超时使用 `worker_queue_timeout`（内部 503、Claude 原生 529）；重复执行或维护冲突使用 `worker_execution_conflict`（409）。连接超时使用 `worker_connection_timeout`，读写传输超时使用 `worker_transport_timeout`（504），不自动重放可能已接受的请求。
+- 正式日志中的 2.1.288 状态摘要完整指纹与旧版相同，启用该版本的 `status_summary`。2.1.288 压缩模板尚未验证，不启用其辅助旁路。未知版本和未知模板仍按普通请求处理。
+- 以上为代码变更记录；运行中的 Worker 需要更新镜像才会生效。

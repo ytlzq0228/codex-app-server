@@ -165,13 +165,15 @@ def history_time_filters(start='', end=''):
     return filters
 
 
-async def conversation_request_page(db, *, conversation_id, key_id, endpoint, page=1, page_size=20):
+async def conversation_request_page(db, *, conversation_id, key_id, endpoint, page=1, page_size=20, owner=None):
     """Fetch only one displayed request page, without large request/response bodies."""
     conversation = func.coalesce(UsageRecord.logical_conversation_id, UsageRecord.thread_id,
                                  ResponseBinding.thread_id, UsageRecord.request_id)
     scope = [conversation == conversation_id,
              func.coalesce(cast(UsageRecord.api_key_id, String), literal('development')) == key_id,
              func.coalesce(UsageRecord.endpoint, literal('unknown')) == endpoint]
+    if owner is not None:
+        scope.append(UsageRecord.owner_username == owner)
     base = select(UsageRecord.id).outerjoin(ResponseBinding, UsageRecord.request_id == ResponseBinding.response_id).where(*scope)
     total = await db.scalar(select(func.count()).select_from(base.subquery())) or 0
     pages = max(1, (total + page_size - 1) // page_size)

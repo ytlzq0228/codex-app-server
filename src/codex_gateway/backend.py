@@ -29,10 +29,12 @@ class BackendTarget:
 class WorkerFailure(RuntimeError):
     """A worker-scoped failure with enough state for safe failover decisions."""
 
-    def __init__(self, message: str, *, kind: str = "connection", safe_to_retry: bool = False) -> None:
+    def __init__(self, message: str, *, kind: str = "connection", safe_to_retry: bool = False, code: str | None = None, status: int | None = None) -> None:
         super().__init__(message)
         self.kind = kind
         self.safe_to_retry = safe_to_retry
+        self.code = code
+        self.status = status
 
 
 def classify_worker_failure(message: str) -> str:

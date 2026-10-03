@@ -1,3 +1,4 @@
+from page_helpers import rendered_pages
 from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
@@ -89,16 +90,16 @@ def test_report_recalculates_live_subscription_cost(monkeypatch):
         client.portal.call(old_manual_cost)
         for price in ['60','75']:
             live['total'] = Decimal(price)
-            response = client.get('/admin/reports?month='+current)
+            response = rendered_pages(client, '/admin/reports?month='+current)
             assert response.status_code == 200
             assert f'<strong>{price}.0000 / ' in response.text
             assert '本月按当前已登录 Worker' in response.text
             assert 'action="/admin/subscription-cost"' not in response.text
-        response = client.get('/admin/reports?month=all')
+        response = rendered_pages(client, '/admin/reports?month=all')
         assert '历史已录入成本 + 本月实时成本' in response.text
         live['unpriced'] = 1
         for month in [current, 'all']:
-            assert '<strong>套餐未定价 / —</strong>' in client.get('/admin/reports?month='+month).text
+            assert '<strong>套餐未定价 / —</strong>' in rendered_pages(client, '/admin/reports?month='+month).text
         live.update(total=Decimal(0), unpriced=0, count=0)
-        assert '<strong>0.0000 / ' in client.get('/admin/reports?month='+current).text
-        assert 'action="/admin/subscription-cost"' in client.get('/admin/reports?month=2000-01').text
+        assert '<strong>0.0000 / ' in rendered_pages(client, '/admin/reports?month='+current).text
+        assert 'action="/admin/subscription-cost"' in rendered_pages(client, '/admin/reports?month=2000-01').text

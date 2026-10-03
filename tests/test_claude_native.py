@@ -74,6 +74,10 @@ def test_cache_usage_and_tool_ids():
     (404, "", 404, "not_found_error"), (422, "", 400, "invalid_request_error"),
     (502, "", 500, "api_error"), (503, "worker_capacity_exceeded", 529, "overloaded_error"),
     (502, "provider_quota_exhausted", 429, "rate_limit_error"),
+    (503, "worker_queue_timeout", 529, "overloaded_error"),
+    (502, "worker_execution_conflict", 409, "api_error"),
+    (502, "worker_connection_timeout", 504, "api_error"),
+    (502, "worker_transport_timeout", 504, "api_error"),
 ])
 def test_error_mapping(status, code, expected, kind):
     actual, obj = native_error({"error": {"message": "failed", "code": code}}, status)

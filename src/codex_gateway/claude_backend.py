@@ -82,6 +82,22 @@ class ClaudeAdapter:
                 async with client.stream("POST", target.endpoint + "/turn", json=payload,
                         headers={"Authorization": "Bearer " + self.settings.app_server_token.get_secret_value()}) as response:
                     if response.status_code != 200:
+                        await response.aread()
+                        try:
+                            detail = response.json().get("detail", {})
+                        except (ValueError, AttributeError):
+                            detail = {}
+                        errors = {
+                            "worker_capacity_exceeded": ("capacity", 503, "Claude worker admission queue is full"),
+                            "worker_queue_timeout": ("capacity", 503, "Claude worker admission queue wait timed out"),
+                            "worker_execution_conflict": ("execution_conflict", 409, "Claude worker session or maintenance execution conflict"),
+                        }
+                        code = detail.get("code") if isinstance(detail, dict) else None
+                        if code in errors:
+                            kind, status, message = errors[code]
+                            raise WorkerFailure(message, kind=kind, code=code, status=status)
+                        if response.status_code == 409 and detail != "Worker capacity exhausted":
+                            raise WorkerFailure("Claude worker execution conflict", kind="execution_conflict", code="worker_execution_conflict", status=409)
                         raise WorkerFailure("Claude worker rejected execution", kind={409: "capacity", 400: "request", 422: "request", 401: "logged_out", 429: "limit"}.get(response.status_code, "connection"))
                     async for line in response.aiter_lines():
                         if not line:
@@ -164,6 +180,9 @@ class ClaudeAdapter:
                         if data.get("done"):
                             return
             raise WorkerFailure("Claude stream ended without a final result")
+        except httpx.TimeoutException as exc:
+            code = "worker_connection_timeout" if isinstance(exc, (httpx.ConnectTimeout, httpx.PoolTimeout)) else "worker_transport_timeout"
+            raise WorkerFailure("Claude worker connection timed out" if code == "worker_connection_timeout" else "Claude worker transport timed out", code=code, status=504) from exc
         except httpx.HTTPError as exc:
             raise WorkerFailure("Claude worker connection failed") from exc
         except (ValueError, KeyError, TypeError) as exc:

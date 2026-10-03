@@ -1,13 +1,15 @@
 (() => {
   const root = document.querySelector('#history');
   if (!root) return;
+  const base = root.dataset.historyBase || '/admin/history';
+  const pageParameter = root.dataset.historyPageParam || 'history_page';
   const form = root.querySelector('[data-history-filters]');
   const results = root.querySelector('[data-history-results]');
   const pagination = root.querySelector('[data-history-pagination]');
   const error = root.querySelector('[data-history-error]');
   const summary = root.querySelector('[data-history-summary]');
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  const tokens = n => Number(n) > 1000000 ? `${(Number(n)/1000000).toFixed(4)} million` : String(n ?? 0);
+  const {tokens, total: totalTokens} = window.TokenFormat;
   const price = n => n == null ? '未定价' : esc(n);
   const time = value => esc(new Date(value).toLocaleString());
   const badge = status => `<span class="badge ${status >= 400 && status !== 499 ? 'badge-error' : 'badge-ok'}">${esc(status)}</span>`;
@@ -32,7 +34,7 @@
     if (!data.groups.length) body.innerHTML = '<tr><td colspan="9" class="empty">暂无请求历史</td></tr>';
     data.groups.forEach((group,index) => {
       const row = document.createElement('tr'); row.className = 'history-row';
-      row.innerHTML = `<td>${time(group.latest_at)}</td><td><code title="${esc(group.conversation_id)}">${esc(group.conversation_id)}</code>${group.logical?'':'<small>旧记录：以 Thread / 请求 ID 标识</small>'}<small>${group.thread_count} 个 Worker Thread</small></td><td>${esc(group.key_name || '已删除')}</td><td><span class="badge">${esc(group.endpoint || 'unknown')}</span></td><td>${group.request_count}</td><td>${badge(group.latest_status)}</td><td>${tokens(group.input_tokens + group.output_tokens)}</td><td>${price(group.cost_usd)}${group.unpriced_count?`<small>另有 ${group.unpriced_count} 条未定价</small>`:''}</td><td><button type="button" class="button button-small" aria-expanded="false">展开</button></td>`;
+      row.innerHTML = `<td>${time(group.latest_at)}</td><td><code title="${esc(group.conversation_id)}">${esc(group.conversation_id)}</code>${group.logical?'':'<small>旧记录：以 Thread / 请求 ID 标识</small>'}<small>${group.thread_count} 个 Worker Thread</small></td><td>${esc(group.key_name || '已删除')}</td><td><span class="badge">${esc(group.endpoint || 'unknown')}</span></td><td>${group.request_count}</td><td>${badge(group.latest_status)}</td><td>${totalTokens(group.input_tokens, group.output_tokens)}</td><td>${price(group.cost_usd)}${group.unpriced_count?`<small>另有 ${group.unpriced_count} 条未定价</small>`:''}</td><td><button type="button" class="button button-small" aria-expanded="false">展开</button></td>`;
       const detail = document.createElement('tr'); detail.className = 'history-detail history-conversation-detail'; detail.hidden = true; detail.id = `history-group-${index}`;
       detail.innerHTML = `<td colspan="9"><div class="conversation-records"><div class="conversation-summary"><span>输入 ${tokens(group.input_tokens)} Token</span><span>输出 ${tokens(group.output_tokens)} Token</span><span>累计耗时 ${group.duration_ms} ms</span><span>总价格 USD：${price(group.cost_usd)}</span></div><p data-detail-error class="alert alert-error" hidden></p><div class="table-wrap"><table><thead><tr><th>时间</th><th>请求 ID</th><th>Worker</th><th>模型</th><th>状态</th><th>Token</th><th>耗时</th><th>价格（USD）</th></tr></thead><tbody></tbody></table></div><div class="history-more"><button type="button" class="button button-small">加载请求</button></div></div></td>`;
       const toggle = row.querySelector('button'); toggle.setAttribute('aria-controls', detail.id);
@@ -43,12 +45,12 @@
         busy = true; more.disabled = true; more.textContent = '正在加载…'; detailError.hidden = true;
         try {
           const params = new URLSearchParams({conversation:group.conversation_id,key_id:group.key_id || 'development',endpoint:group.endpoint || 'unknown',page:nextPage});
-          const batch = await json('/admin/history/requests?'+params, signal);
+          const batch = await json(base+'/requests?'+params, signal);
           if (version !== generation) return;
           const rows = detail.querySelector('tbody');
           for (const request of batch.requests) {
             const item = document.createElement('tr'); item.dataset.historyRequest = '';
-            item.innerHTML = `<td>${time(request.created_at)}</td><td><a data-request-detail href="/user/usage/${encodeURIComponent(request.request_id)}">${esc(request.request_id)}</a><small>${esc(request.owner_username || '—')}</small></td><td>${esc(request.worker_name || '—')}<small>Thread：${esc(request.thread_id || '未记录')}</small><small>关联：${esc(request.evidence || 'legacy_thread')}</small></td><td>${esc(request.model)}</td><td>${badge(request.status_code)}${request.error_code?`<small>${esc(request.error_code)}</small>`:''}</td><td>${tokens(request.input_tokens + request.output_tokens)}</td><td>${request.duration_ms} ms</td><td>${price(request.cost_usd)}</td>`;
+            item.innerHTML = `<td>${time(request.created_at)}</td><td><a data-request-detail href="/user/usage/${encodeURIComponent(request.request_id)}">${esc(request.request_id)}</a><small>${esc(request.owner_username || '—')}</small></td><td>${esc(request.worker_name || '—')}<small>Thread：${esc(request.thread_id || '未记录')}</small><small>关联：${esc(request.evidence || 'legacy_thread')}</small></td><td>${esc(request.model)}</td><td>${badge(request.status_code)}${request.error_code?`<small>${esc(request.error_code)}</small>`:''}</td><td>${totalTokens(request.input_tokens, request.output_tokens)}</td><td>${request.duration_ms} ms</td><td>${price(request.cost_usd)}</td>`;
             rows.append(item);
           }
           loaded += batch.requests.length; nextPage = batch.page < batch.pages ? batch.page+1 : 0;
@@ -75,18 +77,20 @@
   }
   async function load(page, push=true) {
     controller?.abort();controller = new AbortController();const version = ++generation;
-    const signal = controller.signal;const params = parameters();params.set('history_page',page);
+    const signal = controller.signal;const params = parameters();params.set(pageParameter,page);
     error.hidden = true;summary.textContent = '正在加载请求历史…';results.replaceChildren();pagination.replaceChildren();results.setAttribute('aria-busy','true');
     try {
-      const data = await json('/admin/history/data?'+params,signal);
+      const responseData = window.initialPageHistory || await json(base+'/data?'+params,signal);
+      delete window.initialPageHistory;
+      const data = responseData.history || responseData;
       if (version !== generation) return;
-      render(data,signal,version);params.set('history_page',data.page);
-      if(push) history.pushState(null,'','/admin/history?'+params);else history.replaceState(null,'','/admin/history?'+params);
+      render(data,signal,version);params.set(pageParameter,data.page);
+      if(push) history.pushState(null,'',base+'?'+params);else history.replaceState(null,'',base+'?'+params);
     } catch(e) {if(e.name!=='AbortError'){summary.textContent='请求历史加载失败';error.textContent=e.message;error.hidden=false;}}
     finally {if(version===generation) results.removeAttribute('aria-busy');}
   }
   form.addEventListener('submit', event => {event.preventDefault();if(form.checkValidity()) load(1);});
   // Back/forward restores filter controls and the searchable Key picker together.
   window.addEventListener('popstate', () => location.reload());
-  load(Math.max(1,Number(new URLSearchParams(location.search).get('history_page')) || 1),false);
+  load(Math.max(1,Number(new URLSearchParams(location.search).get(pageParameter)) || 1),false);
 })();

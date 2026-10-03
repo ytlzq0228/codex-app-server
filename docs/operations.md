@@ -31,6 +31,35 @@ Summary totals still cover the full matching conversations; time filters select
 conversations containing a matching request. Request pages contain display
 fields, not the stored request parameters or audit payloads.
 
+## JSON page rendering (test rollout)
+
+Management and user data pages now serve an authenticated shell and load their
+display data from the matching `/data` endpoint. List responses use 30 rows per
+page; account lists, workers, users, prices, report groups and subscription plans
+carry page metadata. Owner/Worker pickers use searched, paginated
+`/admin/options/{users|workers}` endpoints. User usage loads 30 conversation
+summaries, then 20 request rows per expansion through `/user/usage/requests`.
+Both summary and request queries apply the signed-in user's ownership scope.
+
+Data responses use explicit display-field allowlists and `Cache-Control: no-store`.
+Request bodies remain available only in the authorized request-detail response.
+Google configuration exposes only whether a client secret exists. Initial-password
+accounts may fetch `/user/account/data` to render the required password form.
+
+The browser uses the vendored Nunjucks 3.2.4 runtime to reuse the shared page
+layouts. After changing templates, run `python3 scripts/build_page_templates.py`
+and commit the resulting `static/page-templates.json` alongside the source.
+`scripts/validate_json_pages.py` checks endpoints against an isolated mock
+database; `scripts/validate_json_pages_ui.py` verifies browser rendering.
+
+All formatted Token displays share `static/token-format.js`: values strictly
+greater than 1,000,000 display with four decimal places and the unit `million`.
+History totals normalize numeric strings before addition. Overview, usage,
+request details (including cached tokens) and financial reports use the same
+formatter. Raw API/debug JSON keeps its original numbers.
+
+This rollout targets test only; production deployment requires a separate request.
+
 ## Install
 
 1. Copy the repository to `/opt/codex-app-server` and create `.env` from `.env.example`.

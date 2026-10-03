@@ -1,12 +1,13 @@
 """Narrow compatibility rules for Claude Code helper requests.
 
 Fingerprints cover the entire final text (whitespace normalized), observed in
-Claude Code 2.1.287. Client headers select compatibility behavior, not trust.
+Claude Code 2.1.287, plus the verified 2.1.288 status template.
+Client headers select compatibility behavior, not trust.
 Changing templates fail closed to ordinary conversation handling.
 """
 import hashlib
 
-RULE_VERSION = "claude-code-2.1.287-v1"
+RULE_VERSION = "claude-code-2.1.287-288-v2"
 TEMPLATES = {
     "9da3d633ac95c3b2cc58994dd7db87ca77bc47dec10f8255c50327b8f79b1f43": "status_summary",
     "b5667154236ffbd7191ea1eb33247c064e8cb15787a596b6ef9d724cbeb87745": "context_compaction",
@@ -25,7 +26,7 @@ def auxiliary_kind(params, headers):
     if params.get("previous_response_id"):
         return None
     if headers.get("x-app") != ["cli"] or not any(
-        value.startswith("claude-cli/2.1.287 ") for value in headers.get("user-agent", [])
+        value.startswith(("claude-cli/2.1.287 ", "claude-cli/2.1.288 ")) for value in headers.get("user-agent", [])
     ):
         return None
     items = params.get("input")
@@ -44,4 +45,8 @@ def auxiliary_kind(params, headers):
         text = "\n".join(p["text"] for p in content)
     else:
         return None
-    return TEMPLATES.get(hashlib.sha256(" ".join(text.split()).encode()).hexdigest())
+    kind = TEMPLATES.get(hashlib.sha256(" ".join(text.split()).encode()).hexdigest())
+    # Only the status template has been verified from 2.1.288 production traffic.
+    if kind == "context_compaction" and not any(v.startswith("claude-cli/2.1.287 ") for v in headers.get("user-agent", [])):
+        return None
+    return kind

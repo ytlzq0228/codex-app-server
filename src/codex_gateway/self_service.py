@@ -1,3 +1,4 @@
+from .page_data import data_page, page_response, paginate, paginate_list
 import base64
 import hashlib
 import re
@@ -9,7 +10,7 @@ from uuid import UUID
 import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -31,17 +32,17 @@ async def lock_available_owner(db, username, key_id=None):
 
 
 def render(request, identity, **context):
-    return request.app.state.templates.TemplateResponse(request, "account.html", {
+    return page_response(request, "account.html", {
         "identity": request.state.user, "csrf_token": identity.csrf_token, **context})
 
 
-@router.get("/user/overview")
+@data_page(router, "/user/overview", "account.html", "self_overview")
 async def overview(request: Request, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     from .quota import quota_summary
     workers = (await db.scalars(select(Worker).where(Worker.owner_username == identity.username,
         Worker.endpoint != "removed://worker").order_by(Worker.created_at))).all()
-    keys = (await db.scalars(select(ApiKey).where(ApiKey.owner_username == identity.username,
-        ApiKey.deleted_at.is_(None)))).all()
+    key_count, enabled_key_count = (await db.execute(select(func.count(), func.count().filter(ApiKey.enabled.is_(True))).where(
+        ApiKey.owner_username == identity.username, ApiKey.deleted_at.is_(None)))).one()
     logged = [w for w in workers if w.auth_mode and w.account_checked_at and w.failure_kind != "logged_out"]
     attention = []
     for worker in workers:
@@ -57,19 +58,20 @@ async def overview(request: Request, identity=Depends(require_user), db: AsyncSe
             continue
         attention.append({"name": worker.name, "reason": reason})
     healthy = bool(workers) and not attention
-    completed = int(bool(logged)) + int(bool(keys)) + int(healthy)
+    completed = int(bool(logged)) + int(bool(key_count)) + int(healthy)
     return render(request, identity, page="self_overview", workers=workers, logged_count=len(logged),
-                  key_count=len(keys), enabled_key_count=sum(k.enabled for k in keys),
+                  key_count=key_count, enabled_key_count=enabled_key_count,
                   attention=attention, healthy=healthy, completed=completed,
                   quota=await quota_summary(db, identity.username))
 
 
-@router.get("/user/account")
+@data_page(router, "/user/account", "account.html", "account")
 async def account(request: Request, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
-    keys = (await db.scalars(select(ApiKey).where(ApiKey.owner_username == identity.username, ApiKey.deleted_at.is_(None)))).all()
+    keys, pagination = await paginate(db, select(ApiKey).where(ApiKey.owner_username == identity.username,
+        ApiKey.deleted_at.is_(None)).order_by(ApiKey.created_at.desc(), ApiKey.id), request)
     from .quota import quota_summary
     from .providers import allowed_providers
-    return render(request, identity, page="account", keys=keys, quota=await quota_summary(db, identity.username),
+    return render(request, identity, page="account", keys=keys, pagination=pagination, quota=await quota_summary(db, identity.username),
                   account_providers=sorted(await allowed_providers(db, identity.username)))
 
 
@@ -116,13 +118,14 @@ async def transfer_key(request: Request, key_id: UUID, username: str = Form(...)
     return {"message": "Key 归属已更新"}
 
 
-@router.get("/admin/users")
+@data_page(router, "/admin/users", "account.html", "users")
 async def users(request: Request, identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
-    users = (await db.scalars(select(User).order_by(User.username))).all()
-    keys = (await db.scalars(select(ApiKey).where(ApiKey.deleted_at.is_(None)))).all()
+    users, pagination = await paginate(db, select(User).order_by(User.username), request)
+    key_counts = dict((await db.execute(select(ApiKey.owner_username, func.count()).where(
+        ApiKey.deleted_at.is_(None), ApiKey.owner_username.in_([u.username for u in users])).group_by(ApiKey.owner_username))).all())
     from .quota import quota_summary
     quotas = {user.username: await quota_summary(db, user.username) for user in users}
-    return render(request, identity, page="users", users=users, keys=keys, quotas=quotas)
+    return render(request, identity, page="users", users=users, key_counts=key_counts, quotas=quotas, pagination=pagination)
 
 
 def authorize_role(actor, target_role, new_role):
@@ -256,7 +259,7 @@ async def google_config(db):
     return config
 
 
-@router.get("/admin/google")
+@data_page(router, "/admin/google", "account.html", "google")
 async def google_settings(request: Request, identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
     config = await db.get(GoogleAuthConfig, 1)
     return render(request, identity, page="google", config=config)

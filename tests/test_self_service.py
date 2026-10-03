@@ -1,3 +1,4 @@
+from page_helpers import rendered_pages
 import re
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import parse_qs, urlparse
@@ -50,8 +51,8 @@ def test_forced_password_and_role_boundaries():
         user_csrf = csrf(client)
         assert client.post("/user/account/key",data={"csrf_token":user_csrf},headers=AJAX).status_code == 403
         token = user_login(client,username,password)
-        assert client.get("/admin/users",headers=AJAX).status_code == 403
-        assert client.get("/admin/finance",headers=AJAX).status_code == 403
+        assert rendered_pages(client, "/admin/users",headers=AJAX).status_code == 403
+        assert rendered_pages(client, "/admin/finance",headers=AJAX).status_code == 403
         assert client.post("/user/account/key",data={"csrf_token":"wrong"},headers=AJAX).status_code == 403
         assert client.post("/admin/users",data={"csrf_token":token,"username":"hacker"},headers=AJAX).status_code == 403
 
@@ -81,16 +82,16 @@ def test_one_key_concurrency_rotation_and_request_details():
         before = key["secret"]
         rotated = client.post(f'/user/account/keys/{key["key_id"]}/rotate',data={"csrf_token":token},headers=AJAX).json()["secret"]
         assert before.split('_')[1] == rotated.split('_')[1]
-        assert client.get('/v1/models',headers={'Authorization':'Bearer '+before}).status_code == 401
+        assert rendered_pages(client, '/v1/models',headers={'Authorization':'Bearer '+before}).status_code == 401
         response = client.post('/v1/responses',headers={'Authorization':'Bearer '+rotated},json={'model':'gpt-6-sol','input':'private request <script>alert(1)</script>'})
         assert response.status_code == 200, response.text
-        detail = client.get('/user/usage/'+response.json()['id'])
+        detail = rendered_pages(client, '/user/usage/'+response.json()['id'])
         assert 'private request' in detail.text and '&lt;script&gt;' in detail.text
         other,other_password = None,None
         admin_token = admin_login(client)
         other,other_password = new_user(client,admin_token)
         user_login(client,other,other_password)
-        assert client.get('/user/usage/'+response.json()['id']).status_code == 404
+        assert rendered_pages(client, '/user/usage/'+response.json()['id']).status_code == 404
         assert client.post(f'/user/account/keys/{key["key_id"]}/rotate',data={"csrf_token":csrf(client)},headers=AJAX).status_code == 404
 
 
@@ -103,7 +104,7 @@ def test_session_restart_logout_revocation():
         token = csrf(client)
         assert client.post('/auth/logout',data={'csrf_token':token},follow_redirects=False).status_code == 302
         client.cookies.set(SESSION_COOKIE,cookie)
-        assert client.get('/user/account',follow_redirects=False).status_code == 303
+        assert rendered_pages(client, '/user/account',follow_redirects=False).status_code == 303
 
 
 def test_finance_snapshot_and_transfer_keeps_history():
@@ -117,16 +118,16 @@ def test_finance_snapshot_and_transfer_keeps_history():
         key = client.post('/user/account/key',data={'csrf_token':user_token},headers=AJAX).json()
         response = client.post('/v1/responses',headers={'Authorization':'Bearer '+key['secret']},json={'model':'gpt-6-sol','input':'hello world'}).json()
         request_id = response['id']
-        assert '0.0028' in client.get('/user/usage/'+request_id).text
+        assert '0.0028' in rendered_pages(client, '/user/usage/'+request_id).text
         token = admin_login(client)
         assert client.post('/admin/prices',data={'csrf_token':token,'model':'gpt-6-sol','input_price':'20000','output_price':'80000'},headers=AJAX).status_code == 200
-        assert '0.0028' in client.get('/user/usage/'+request_id).text
+        assert '0.0028' in rendered_pages(client, '/user/usage/'+request_id).text
         assert client.post('/admin/keys/'+key['key_id']+'/owner',data={'csrf_token':token,'username':second},headers=AJAX).status_code == 200
-        assert client.get('/admin/finance').status_code == 200
-        assert client.get('/admin/users').status_code == 200
-        assert client.get('/user/debug').status_code == 200
+        assert rendered_pages(client, '/admin/finance').status_code == 200
+        assert rendered_pages(client, '/admin/users').status_code == 200
+        assert rendered_pages(client, '/user/debug').status_code == 200
         client.post('/auth/login',data={'username':first,'password':'changed-'+pw})
-        assert client.get('/user/usage/'+request_id).status_code == 200
+        assert rendered_pages(client, '/user/usage/'+request_id).status_code == 200
 
 
 def test_admin_cannot_promote_or_edit_superadmin():
@@ -156,19 +157,19 @@ def test_google_state_verified_identity_and_replay(monkeypatch):
         token = admin_login(client)
         saved = client.post('/admin/google',data={'csrf_token':token,'enabled':'true','client_id':'test-client','client_secret':'test-secret','redirect_uri':'http://testserver/auth/google/callback'},headers=AJAX)
         assert saved.status_code == 200, saved.text
-        assert 'test-secret' not in client.get('/admin/google').text
-        response = client.get('/auth/google',follow_redirects=False)
+        assert 'test-secret' not in rendered_pages(client, '/admin/google').text
+        response = rendered_pages(client, '/auth/google',follow_redirects=False)
         params = parse_qs(urlparse(response.headers['location']).query)
         assert params['code_challenge_method'] == ['S256']
         state = params['state'][0]
-        assert client.get('/auth/google/callback?state=wrong&code=test').status_code == 400
+        assert rendered_pages(client, '/auth/google/callback?state=wrong&code=test').status_code == 400
         callback = '/auth/google/callback?state='+state+'&code=test'
-        callback_response = client.get(callback,follow_redirects=False)
+        callback_response = rendered_pages(client, callback,follow_redirects=False)
         assert callback_response.status_code == 302
         assert callback_response.headers['location'] == '/user/overview'
-        assert client.get('/user/account').status_code == 200
-        assert client.get('/admin/users',headers=AJAX).status_code == 403
-        assert client.get(callback,follow_redirects=False).status_code == 400
+        assert rendered_pages(client, '/user/account').status_code == 200
+        assert rendered_pages(client, '/admin/users',headers=AJAX).status_code == 403
+        assert rendered_pages(client, callback,follow_redirects=False).status_code == 400
         from codex_gateway.database import SessionLocal
         from codex_gateway.models import User
         async def verify_username():
@@ -177,9 +178,9 @@ def test_google_state_verified_identity_and_replay(monkeypatch):
                 assert user and user.google_sub==subject and user.email==email
         client.portal.call(verify_username)
         subject=uuid4().hex
-        response=client.get('/auth/google',follow_redirects=False)
+        response=rendered_pages(client, '/auth/google',follow_redirects=False)
         state=parse_qs(urlparse(response.headers['location']).query)['state'][0]
-        assert client.get('/auth/google/callback?state='+state+'&code=test',follow_redirects=False).status_code==409
+        assert rendered_pages(client, '/auth/google/callback?state='+state+'&code=test',follow_redirects=False).status_code==409
 
 
 def test_rejected_requests_are_audited_with_original_params():
@@ -190,7 +191,7 @@ def test_rejected_requests_are_audited_with_original_params():
         key = client.post('/user/account/key',data={'csrf_token':token},headers=AJAX).json()['secret']
         response = client.post('/v1/responses',headers={'Authorization':'Bearer '+key},json={'model':'missing-model','input':'rejected request'})
         assert response.status_code == 400
-        detail = client.get('/user/usage/'+response.headers['x-request-id'])
+        detail = rendered_pages(client, '/user/usage/'+response.headers['x-request-id'])
         assert detail.status_code == 200
         assert 'rejected request' in detail.text
 
@@ -202,15 +203,15 @@ def test_google_config_database_update_preserves_secret_and_permissions():
         assert client.post('/admin/google',data=data,headers=AJAX).status_code == 200
         data.update(client_id='updated-client',client_secret='')
         assert client.post('/admin/google',data=data,headers=AJAX).status_code == 200
-        page = client.get('/admin/google').text
+        page = rendered_pages(client, '/admin/google').text
         assert 'updated-client' in page and 'private-test-value' not in page and '已配置，留空保留' in page
-        assert 'client_id=updated-client' in client.get('/auth/google',follow_redirects=False).headers['location']
+        assert 'client_id=updated-client' in rendered_pages(client, '/auth/google',follow_redirects=False).headers['location']
         data['enabled'] = 'false'
         assert client.post('/admin/google',data=data,headers=AJAX).status_code == 200
-        assert client.get('/auth/google',follow_redirects=False).status_code == 503
+        assert rendered_pages(client, '/auth/google',follow_redirects=False).status_code == 503
         user,password = new_user(client,token)
         user_login(client,user,password)
-        assert client.get('/admin/google',headers=AJAX).status_code == 403
+        assert rendered_pages(client, '/admin/google',headers=AJAX).status_code == 403
 
 
 def test_disable_user_revokes_cookie_and_key():
@@ -223,6 +224,6 @@ def test_disable_user_revokes_cookie_and_key():
         token = admin_login(client)
         response = client.post('/admin/users/'+username,data={'csrf_token':token,'role':'user'},headers=AJAX)
         assert response.status_code == 200
-        assert client.get('/v1/models',headers={'Authorization':'Bearer '+key}).status_code == 401
-        assert client.get('/user/account',headers={'cookie':SESSION_COOKIE+'='+cookie},follow_redirects=False).status_code == 303
+        assert rendered_pages(client, '/v1/models',headers={'Authorization':'Bearer '+key}).status_code == 401
+        assert rendered_pages(client, '/user/account',headers={'cookie':SESSION_COOKIE+'='+cookie},follow_redirects=False).status_code == 303
         assert client.post('/auth/login',data={'username':username,'password':'changed-'+pw},follow_redirects=False).status_code == 401

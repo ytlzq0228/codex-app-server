@@ -1,3 +1,4 @@
+from page_helpers import rendered_pages
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from types import SimpleNamespace
@@ -72,31 +73,31 @@ def test_conversation_pagination_latest_status_filters_and_owner_scope():
         client.portal.call(seed_and_check)
         app.dependency_overrides[require_user]=signed_in
         try:
-            response=client.get('/user/usage',params={'q':prefix+'-old'})
+            response=client.get('/user/usage/data',params={'q':prefix+'-old'})
             assert response.status_code==200,response.text
-            assert '共 1 个会话、2 条请求' in response.text
-            top=re.search(r'<tr class="history-row".*?</tr>',response.text,re.S)[0]
-            assert 'badge-ok' in top and '>200</span>' in top and '502' not in top
-            assert prefix+'-old' in response.text and prefix+'-new' in response.text
-            assert '总价格（USD）' in response.text and '价格（USD）' in response.text
-            assert '0.2000' in response.text and response.text.count('0.1000') >= 2
-            assert prefix+'-other-owner' not in response.text
-            assert client.get('/user/usage/'+prefix+'-other-owner').status_code==404
-            assert '共 0 个会话' in client.get('/user/usage',params={'q':prefix+'-old','status':'error'}).text
-            assert 'data-toggle-history' in response.text and '/static/history.js' in response.text
-            cancelled=client.get('/user/usage',params={'q':prefix+'-standalone'})
-            assert 'badge-ok' in cancelled.text and '>499</span>' in cancelled.text
-            assert '共 0 个会话' in client.get('/user/usage',params={'q':prefix+'-standalone','status':'error'}).text
+            history=response.json()['history']
+            assert history['total']==1 and history['request_total']==2
+            group=history['groups'][0]
+            assert group['latest_status']==200 and 'requests' not in group
+            assert Decimal(group['cost_usd'])==Decimal('0.2')
+            batch=client.get('/user/usage/requests',params={'conversation':group['conversation_id'],
+                'key_id':group['key_id'] or 'development','endpoint':group['endpoint']}).json()
+            assert {r['request_id'] for r in batch['requests']}=={prefix+'-old',prefix+'-new'}
+            assert client.get('/user/usage/'+prefix+'-other-owner'+'/data').status_code==404
+            assert client.get('/user/usage/data',params={'q':prefix+'-old','status':'error'}).json()['history']['total']==0
+            cancelled=client.get('/user/usage/data',params={'q':prefix+'-standalone'}).json()['history']
+            assert cancelled['groups'][0]['latest_status']==499
+            assert client.get('/user/usage/data',params={'q':prefix+'-standalone','status':'error'}).json()['history']['total']==0
         finally:app.dependency_overrides.pop(require_user,None)
         settings=get_settings()
         assert client.post('/auth/login',data={'username':settings.admin_username,'password':settings.admin_password.get_secret_value()},follow_redirects=False).status_code in {302,303}
-        admin=client.get('/admin/history')
+        admin=rendered_pages(client, '/admin/history')
         assert admin.status_code==200,admin.text
         assert '含失败请求' not in admin.text
         assert '/static/admin-history.js' in admin.text
         assert 'data-history-results' in admin.text
         assert '<body data-csrf-token=' in admin.text and 'class="admin-page ' in admin.text
-        assert 'class="admin-page ' in client.get('/admin/users').text
+        assert 'class="admin-page ' in rendered_pages(client, '/admin/users').text
 
 
 def test_active_conversation_grouping_does_not_cross_keys_or_interfaces():
@@ -145,22 +146,22 @@ def test_active_and_historical_pages_share_logical_id_and_keep_thread_actions():
         key_id=client.portal.call(seed)
         s=get_settings()
         assert client.post('/auth/login',data={'username':s.admin_username,'password':s.admin_password.get_secret_value()},follow_redirects=False).status_code in {302,303}
-        active=client.get('/admin/sessions');assert active.status_code==200,active.text
-        assert conv in active.text and '1 个逻辑会话 · 2 个 Thread' in active.text
+        active=rendered_pages(client, '/admin/sessions');assert active.status_code==200,active.text
+        assert conv in active.text and 'thread-'+prefix+'-a' in active.text and 'thread-'+prefix+'-b' in active.text
         assert '释放 Thread' in active.text
-        focused=client.get('/admin/sessions',params={'conversation':conv,'key_id':key_id,'endpoint':'responses'})
-        assert focused.status_code==200 and '1 个逻辑会话 · 2 个 Thread' in focused.text
+        focused=rendered_pages(client, '/admin/sessions',params={'conversation':conv,'key_id':key_id,'endpoint':'responses'})
+        assert focused.status_code==200 and focused.text.count('>释放 Thread</button>')==2
         assert '<details' not in focused.text
-        history=client.get('/admin/history',params={'conversation':conv,'key_id':key_id,'endpoint':'responses'})
+        history=rendered_pages(client, '/admin/history',params={'conversation':conv,'key_id':key_id,'endpoint':'responses'})
         assert history.status_code==200,history.text
         assert prefix+'-24' not in history.text
         params={'conversation':conv,'key_id':key_id,'endpoint':'responses'}
-        summary=client.get('/admin/history/data',params=params).json()
+        summary=rendered_pages(client, '/admin/history/data',params=params).json()
         assert summary['request_total']==25 and summary['total']==1
         assert summary['groups'][0]['thread_count']==2
         assert 'requests' not in summary['groups'][0]
-        first=client.get('/admin/history/requests',params=params).json()
-        second=client.get('/admin/history/requests',params={**params,'page':2}).json()
+        first=rendered_pages(client, '/admin/history/requests',params=params).json()
+        second=rendered_pages(client, '/admin/history/requests',params={**params,'page':2}).json()
         assert len(first['requests'])==20 and len(second['requests'])==5
         assert first['requests'][0]['request_id']==prefix+'-24'
         assert second['requests'][-1]['request_id']==prefix+'-0'
@@ -168,9 +169,9 @@ def test_active_and_historical_pages_share_logical_id_and_keep_thread_actions():
         token=re.search(r'name="csrf_token" value="([^"]+)"',active.text)[1]
         deleted=client.post('/admin/sessions/'+prefix+'-0/delete',data={'csrf_token':token},headers={'X-Requested-With':'XMLHttpRequest'})
         assert deleted.status_code==200,deleted.text
-        active=client.get('/admin/sessions')
-        assert '1 个逻辑会话 · 1 个 Thread' in active.text
-        assert client.get('/admin/history/data',params={'conversation':conv,'key_id':key_id}).json()['request_total']==25
+        active=rendered_pages(client, '/admin/sessions')
+        assert 'thread-'+prefix+'-b' in active.text and 'thread-'+prefix+'-a' not in active.text
+        assert rendered_pages(client, '/admin/history/data',params={'conversation':conv,'key_id':key_id}).json()['request_total']==25
 
 
 def test_history_time_bounds_require_timezone_and_normalize_to_utc():
@@ -215,17 +216,17 @@ def test_admin_history_time_filter_preserves_full_conversation():
             'password':settings.admin_password.get_secret_value()})
         params={'conversation':prefix,'key_id':key_id,
             'start':'2026-09-27T08:00:01+08:00','end':'2026-09-27T00:00:02Z'}
-        result=client.get('/admin/history',params=params)
+        result=rendered_pages(client, '/admin/history',params=params)
         assert result.status_code==200
-        data=client.get('/admin/history/data',params=params).json()
+        data=rendered_pages(client, '/admin/history/data',params=params).json()
         assert data['request_total']==3 and data['total']==1
         assert 'data-key-select' in result.text and 'data-time-bound="start"' in result.text
-        requests=client.get('/admin/history/requests',params={'conversation':prefix,'key_id':key_id,'endpoint':'responses'}).json()
+        requests=rendered_pages(client, '/admin/history/requests',params={'conversation':prefix,'key_id':key_id,'endpoint':'responses'}).json()
         assert requests['requests'][-1]['created_at']=='2026-09-27T00:00:00+00:00'
         params['start']='2026-09-27T00:00:03Z'
         params.pop('end')
-        assert client.get('/admin/history/data',params=params).json()['request_total']==0
-        assert client.get('/admin/history',params={'start':'2026-09-27T00:00:00'}).status_code==400
+        assert rendered_pages(client, '/admin/history/data',params=params).json()['request_total']==0
+        assert rendered_pages(client, '/admin/history',params={'start':'2026-09-27T00:00:00'}).status_code==400
 
 
 def test_admin_json_pagination_is_bounded_and_does_not_transmit_audit_bodies():
@@ -247,14 +248,14 @@ def test_admin_json_pagination_is_bounded_and_does_not_transmit_audit_bodies():
                     request_params={'private':'large-hidden-audit-body'}))
             await db.commit();return str(key.id)
     with TestClient(app) as client:
-        assert client.get('/admin/history/data',follow_redirects=False).status_code in {302,303}
-        assert client.get('/admin/history/requests',params={'conversation':'x','key_id':'development','endpoint':'responses'},follow_redirects=False).status_code in {302,303}
+        assert rendered_pages(client, '/admin/history/data',follow_redirects=False).status_code in {302,303}
+        assert rendered_pages(client, '/admin/history/requests',params={'conversation':'x','key_id':'development','endpoint':'responses'},follow_redirects=False).status_code in {302,303}
         key_id=client.portal.call(seed)
         s=get_settings();client.post('/auth/login',data={'username':s.admin_username,'password':s.admin_password.get_secret_value()})
-        shell=client.get('/admin/history',params={'key_id':key_id})
+        shell=rendered_pages(client, '/admin/history',params={'key_id':key_id})
         assert prefix+'-group-' not in shell.text and prefix+'-detail-' not in shell.text
-        first=client.get('/admin/history/data',params={'key_id':key_id})
-        second=client.get('/admin/history/data',params={'key_id':key_id,'history_page':2}).json()
+        first=rendered_pages(client, '/admin/history/data',params={'key_id':key_id})
+        second=rendered_pages(client, '/admin/history/data',params={'key_id':key_id,'history_page':2}).json()
         data=first.json()
         assert first.headers['content-type'].startswith('application/json')
         assert first.headers['cache-control']=='no-store'
@@ -264,11 +265,11 @@ def test_admin_json_pagination_is_bounded_and_does_not_transmit_audit_bodies():
         assert data['groups'][0]['request_count']==41
         assert all('requests' not in group for group in data['groups'])
         params={'conversation':prefix+'-30','key_id':key_id,'endpoint':'responses'}
-        pages=[client.get('/admin/history/requests',params={**params,'page':page}) for page in range(1,4)]
+        pages=[rendered_pages(client, '/admin/history/requests',params={**params,'page':page}) for page in range(1,4)]
         assert [len(page.json()['requests']) for page in pages]==[20,20,1]
         assert len({row['request_id'] for page in pages for row in page.json()['requests']})==41
         assert 'large-hidden-audit-body' not in first.text+''.join(p.text for p in pages)
         assert data['groups'][-1]['cost_usd']=='0.0001'
-        assert client.get('/admin/history/data',params={'history_page':0}).status_code==400
-        assert client.get('/admin/history/requests',params={**params,'page':0}).status_code==400
-        assert client.get('/admin/history/data',params={'start':'invalid'}).status_code==400
+        assert rendered_pages(client, '/admin/history/data',params={'history_page':0}).status_code==400
+        assert rendered_pages(client, '/admin/history/requests',params={**params,'page':0}).status_code==400
+        assert rendered_pages(client, '/admin/history/data',params={'start':'invalid'}).status_code==400

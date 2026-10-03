@@ -21,7 +21,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import anyio
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
@@ -34,7 +34,10 @@ SESSION_ROOT = Path.home() / ".claude" / "projects"
 lock = asyncio.Lock()  # Login, account and probe runs are exclusive with turns.
 login = None
 active_turns = {}
-MAX_TURNS = 4
+MAX_TURNS = 8
+MAX_WAITERS = 32
+QUEUE_TIMEOUT = 30.0
+waiting_turns = {}  # Insertion order is the admission order.
 rate_limit = {"info": None, "at": 0.0}
 
 MODEL = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._\-\[\]]{0,119}$")
@@ -52,7 +55,7 @@ BASE_ARGS = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--t
 
 
 def busy():
-    return lock.locked() or bool(active_turns)
+    return lock.locked() or bool(active_turns) or bool(waiting_turns)
 
 
 def authorize(authorization: str | None = Header(default=None)):
@@ -304,28 +307,75 @@ def usage_counts(usage):
             "cache_read_tokens": read, "cache_write_tokens": write}
 
 
+def admission_error(status, code, message):
+    return HTTPException(status, {"code": code, "message": message})
+
+
+class TurnResponse(StreamingResponse):
+    def __init__(self, content, ticket):
+        super().__init__(content, media_type="application/x-ndjson")
+        self.ticket = ticket
+        self.released = False
+
+    def release(self):
+        if not self.released:
+            active_turns.pop(self.ticket, None)
+            self.released = True
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # Also covers a disconnect before the generator is first advanced.
+            self.release()
+
+
+async def acquire_turn(ticket, conversation, request=None):
+    # No await between checking and reserving: one ASGI event loop owns these maps.
+    if ticket in active_turns or ticket in waiting_turns:
+        raise admission_error(409, "worker_execution_conflict", "Conversation already executing or queued")
+    if login and login.task and not login.task.done():
+        raise admission_error(409, "worker_execution_conflict", "Login in progress")
+    if lock.locked():
+        raise admission_error(409, "worker_execution_conflict", "Worker maintenance in progress")
+    if len(active_turns) < MAX_TURNS and not waiting_turns:
+        active_turns[ticket] = conversation
+        return
+    if len(waiting_turns) >= MAX_WAITERS:
+        raise admission_error(503, "worker_capacity_exceeded", "Claude worker admission queue is full")
+    waiting_turns[ticket] = conversation
+    deadline = time.monotonic() + QUEUE_TIMEOUT
+    try:
+        while True:
+            if request is not None and await request.is_disconnected():
+                raise admission_error(499, "request_interrupted", "Client disconnected while queued")
+            if time.monotonic() >= deadline:
+                raise admission_error(503, "worker_queue_timeout", "Claude worker admission queue wait timed out")
+            if next(iter(waiting_turns)) == ticket and not lock.locked() and len(active_turns) < MAX_TURNS:
+                active_turns[ticket] = conversation
+                return
+            await asyncio.sleep(0.05)
+    finally:
+        waiting_turns.pop(ticket, None)
+
+
 @app.post("/turn", dependencies=[Depends(authorize)])
-async def turn(body: Turn):
+async def turn(body: Turn, request: Request = None):
     workspace = Path(body.workspace).resolve()
     if workspace == ROOT or ROOT not in workspace.parents or not workspace.is_dir():
         raise HTTPException(400, "Invalid workspace")
-    if login and login.task and not login.task.done():
-        raise HTTPException(409, "Login in progress")
-    if lock.locked() or len(active_turns) >= MAX_TURNS:
-        raise HTTPException(409, "Worker capacity exhausted")
     ticket = body.conversation or body.session_id
-    if ticket in active_turns:
-        raise HTTPException(409, "Conversation already executing")
-    active_turns[ticket] = body.conversation
+    await acquire_turn(ticket, body.conversation, request)
 
     async def events():
         process = stderr_task = bridge = source = None
-        temporary = tempfile.TemporaryDirectory(prefix="gateway-turn-", dir="/tmp")
+        temporary = None
         terminal = None
         produced_output = False
         thread = body.conversation or body.session_id
         hidden_blocks = set()
         try:
+            temporary = tempfile.TemporaryDirectory(prefix="gateway-turn-", dir="/tmp")
             bridge = ToolBridge(body.tools)
             ACTIVE[bridge.token] = bridge
             args = BASE_ARGS + ["--input-format", "stream-json", "--include-partial-messages", "--model", body.model]
@@ -442,12 +492,14 @@ async def turn(body: Turn):
                     if bridge:
                         bridge.close()
                 finally:
-                    temporary.cleanup()
-                    active_turns.pop(ticket, None)
+                    if temporary:
+                        temporary.cleanup()
+                    response.release()
         # The terminal line promises the session can be resumed immediately.
         if terminal is not None:
             yield json.dumps(terminal) + "\n"
-    return StreamingResponse(events(), media_type="application/x-ndjson")
+    response = TurnResponse(events(), ticket)
+    return response
 
 
 # --- Subscription login through the official CLI, driven over a pty ---------------
@@ -673,7 +725,8 @@ async def prune_sessions(body: PruneInput):
     if lock.locked() or (login and login.task and not login.task.done()):
         raise HTTPException(409, "Worker is busy")
     import shutil
-    keep = set(body.keep_ids) | set(active_turns) | {v for v in active_turns.values() if v}
+    keep = (set(body.keep_ids) | set(active_turns) | {v for v in active_turns.values() if v}
+            | set(waiting_turns) | {v for v in waiting_turns.values() if v})
     cutoff, removed = time.time() - body.min_age_seconds, 0
     async with lock:
         for project in SESSION_ROOT.iterdir() if SESSION_ROOT.exists() else ():

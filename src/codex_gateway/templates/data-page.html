@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Codex Gateway</title><link rel="stylesheet" href="/static/admin.css">
+<script defer src="/static/token-format.js?v=20261003"></script><script defer src="/static/vendor/nunjucks-3.2.4.min.js"></script>
+<script defer src="/static/page-renderer.js?v=20261003"></script></head>
+<body class="{{ 'admin-page' if request.url.path.startswith('/admin') else '' }} {{ 'worker-page' if page in ['workers', 'admin_workers'] else '' }}" data-json-page="{{ page }}" data-page-template="{{ page_template }}">
+{% include "shared/sidebar.html" %}
+<main class="content" aria-busy="true"><p role="status">正在加载页面数据…</p><p data-page-error role="alert" hidden></p><button type="button" class="button" data-page-retry hidden>重试</button></main>
+</body></html>

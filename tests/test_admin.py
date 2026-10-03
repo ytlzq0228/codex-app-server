@@ -1,3 +1,4 @@
+from page_helpers import rendered_pages
 import re
 from contextlib import asynccontextmanager
 from uuid import uuid4
@@ -30,17 +31,17 @@ def login(client: TestClient) -> str:
 
 def test_admin_redirects_to_login_without_cookie() -> None:
     with TestClient(app) as client:
-        response = client.get("/admin", follow_redirects=False)
+        response = rendered_pages(client, "/admin", follow_redirects=False)
         assert response.status_code == 303
         assert response.headers["location"].startswith("/auth/login?next=/admin")
-        assert 'name="password"' in client.get("/auth/login").text
-        assert "[hidden]{display:none!important}" in client.get("/static/admin.css").text
+        assert 'name="password"' in rendered_pages(client, "/auth/login").text
+        assert "[hidden]{display:none!important}" in rendered_pages(client, "/static/admin.css").text
 
 
 def test_admin_cookie_login_dashboard_and_logout() -> None:
     with TestClient(app) as client:
         csrf = login(client)
-        dashboard = client.get("/admin")
+        dashboard = rendered_pages(client, "/admin")
         assert "运行控制台" in dashboard.text
         assert "API Keys" in dashboard.text
         assert "Key 活动会话" in dashboard.text
@@ -58,11 +59,11 @@ def test_admin_cookie_login_dashboard_and_logout() -> None:
 def test_admin_navigation_uses_four_isolated_pages() -> None:
     with TestClient(app) as client:
         login(client)
-        overview = client.get("/admin").text
-        keys = client.get("/admin/api-keys").text
-        workers = client.get("/admin/workers").text
-        sessions = client.get("/admin/sessions").text
-        history = client.get("/admin/history").text
+        overview = rendered_pages(client, "/admin").text
+        keys = rendered_pages(client, "/admin/api-keys").text
+        workers = rendered_pages(client, "/admin/workers").text
+        sessions = rendered_pages(client, "/admin/sessions").text
+        history = rendered_pages(client, "/admin/history").text
 
         assert 'id="overview"' in overview and 'id="monitoring"' in overview
         assert 'id="workers"' not in overview and 'id="keys"' not in overview
@@ -105,11 +106,11 @@ def test_admin_can_change_password_and_invalidate_old_session() -> None:
         )
         assert changed.status_code == 200
         assert SESSION_COOKIE in changed.headers["set-cookie"]
-        assert client.get("/admin", headers={"cookie": f"{SESSION_COOKIE}={old_cookie}"}, follow_redirects=False).status_code == 303
+        assert rendered_pages(client, "/admin", headers={"cookie": f"{SESSION_COOKIE}={old_cookie}"}, follow_redirects=False).status_code == 303
         assert client.post("/auth/login", data={"username": settings.admin_username, "password": old_password, "next": "/admin"}, follow_redirects=False).status_code == 401
         assert client.post("/auth/login", data={"username": settings.admin_username, "password": new_password, "next": "/admin"}, follow_redirects=False).status_code == 302
 
-        dashboard = client.get("/admin")
+        dashboard = rendered_pages(client, "/admin")
         new_csrf = re.search(r'name="csrf_token" value="([^"]+)"', dashboard.text).group(1)
         restored = client.post(
             "/user/account/password",
@@ -141,9 +142,9 @@ def test_key_can_be_edited_and_soft_deleted_without_losing_history() -> None:
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
         assert edited.status_code == 200
-        assert renamed in client.get("/admin/api-keys").text
+        assert renamed in rendered_pages(client, "/admin/api-keys").text
 
-        assert client.get("/v1/models", headers={"Authorization": f"Bearer {raw_key}"}).status_code == 200
+        assert rendered_pages(client, "/v1/models", headers={"Authorization": f"Bearer {raw_key}"}).status_code == 200
         api_response = client.post("/v1/responses", headers={"Authorization": f"Bearer {raw_key}"}, json={"model": "gpt-6-sol", "input": "history retention test"})
         assert api_response.status_code == 200
         request_id = api_response.json()["id"]
@@ -167,11 +168,11 @@ def test_key_can_be_edited_and_soft_deleted_without_losing_history() -> None:
             headers={"X-Requested-With": "XMLHttpRequest"},
         )
         assert deleted.status_code == 200
-        assert client.get("/v1/models", headers={"Authorization": f"Bearer {raw_key}"}).status_code == 401
-        history_page = client.get("/admin/history/data").text
-        keys_page = client.get("/admin/api-keys").text
-        groups=client.get("/admin/history/data",params={"key_id":key_id}).json()['groups']
-        assert any(request_id in client.get("/admin/history/requests", params={"conversation":group['conversation_id'],"key_id":key_id,"endpoint":group['endpoint']}).text for group in groups)
+        assert rendered_pages(client, "/v1/models", headers={"Authorization": f"Bearer {raw_key}"}).status_code == 401
+        history_page = rendered_pages(client, "/admin/history/data").text
+        keys_page = rendered_pages(client, "/admin/api-keys").text
+        groups=rendered_pages(client, "/admin/history/data",params={"key_id":key_id}).json()['groups']
+        assert any(request_id in rendered_pages(client, "/admin/history/requests", params={"conversation":group['conversation_id'],"key_id":key_id,"endpoint":group['endpoint']}).text for group in groups)
         assert renamed in history_page
         assert f"/admin/keys/{key_id}/edit" not in keys_page
 
@@ -192,7 +193,7 @@ def test_forged_session_cookie_is_rejected() -> None:
         csrf = login(client)
         cookie = client.cookies.get(SESSION_COOKIE)
         for forged in ("garbage", cookie + "x", cookie[:-1]):
-            response = client.get("/admin", headers={"cookie": f"{SESSION_COOKIE}={forged}"}, follow_redirects=False)
+            response = rendered_pages(client, "/admin", headers={"cookie": f"{SESSION_COOKIE}={forged}"}, follow_redirects=False)
             assert response.status_code == 303, forged
         assert csrf
 

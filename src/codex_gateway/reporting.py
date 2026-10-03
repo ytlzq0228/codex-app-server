@@ -1,3 +1,4 @@
+from .page_data import data_page, page_response, paginate, paginate_list, page_number
 """Usage inspection and historical price snapshots, independent of forwarding."""
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -39,7 +40,7 @@ def date_boundary(value, label):
         raise HTTPException(400, f"{label}日期格式应为 YYYY-MM-DD")
 
 
-@router.get("/user/usage")
+@data_page(router, "/user/usage", "account.html", "usage")
 async def usage(request: Request, q: str = "", model: str = "", status: str = "", start: str = "", end: str = "", page: int = 1, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     filters = []
     if q:
@@ -52,13 +53,24 @@ async def usage(request: Request, q: str = "", model: str = "", status: str = ""
         filters.append(UsageRecord.created_at < date_boundary(end, "结束"))
     history = await conversation_history(db,
         owner=request.state.user.username if request.state.user.role == "user" else None,
-        page=page, filters=filters, status=status)
-    return render(request, identity, page="usage", history_groups=history["groups"],
+        page=page_number(request), filters=filters, status=status, summaries_only=True)
+    return render(request, identity, page="usage", history=history, history_groups=[],
         total=history["total"], request_total=history["request_total"],
         number=history["page"], pages=history["pages"], show_cost=True)
 
 
-@router.get("/user/usage/{request_id}")
+@router.get("/user/usage/requests")
+async def usage_requests(request: Request, conversation: str, key_id: str, endpoint: str,
+    page: int = 1, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
+    from .admin import history_json
+    from .history import conversation_request_page
+    from .page_data import page_number
+    return history_json(await conversation_request_page(db, conversation_id=conversation,
+        key_id=key_id, endpoint=endpoint, page=page_number(request),
+        owner=identity.username if request.state.user.role == "user" else None))
+
+
+@data_page(router, "/user/usage/{request_id}", "account.html", "detail")
 async def detail(request: Request, request_id: str, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     record = await db.scalar(usage_query(request.state.user).where(UsageRecord.request_id == request_id))
     if not record:
@@ -70,14 +82,16 @@ async def detail(request: Request, request_id: str, identity=Depends(require_use
                   last_texts=await request_texts(db, record), params=json.dumps(record.request_params, ensure_ascii=False, indent=2), observation=json.dumps(record.request_observation, ensure_ascii=False, indent=2), correlation=json.dumps(record.conversation_evidence, ensure_ascii=False, indent=2))
 
 
-@router.get("/admin/finance")
+@data_page(router, "/admin/finance", "account.html", "finance")
 async def finance(request: Request, month: str = "", identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
     prices = (await db.scalars(select(ModelPrice).order_by(ModelPrice.model))).all()
     price_map = {price.model: price for price in prices}
     price_rows = [{"model": model, "price": price_map.get(model)} for model in sorted(set(get_settings().public_models()) | set(price_map))]
     subscriptions = await subscription_summary(db)
+    subscriptions["rows"], subscription_pagination = paginate_list(subscriptions["rows"], request, name="plans_page")
     await db.commit()
-    return render(request, identity, page="finance", price_rows=price_rows, subscriptions=subscriptions)
+    price_rows, pagination = paginate_list(price_rows, request)
+    return render(request, identity, page="finance", price_rows=price_rows, subscriptions=subscriptions, pagination=pagination, subscription_pagination=subscription_pagination)
 
 
 def summarize_latest(rows, prices):
@@ -103,7 +117,7 @@ def summarize_latest(rows, prices):
     return total, sorted(users.values(), key=lambda g: g["amount"], reverse=True), sorted(workers.values(), key=lambda g: g["amount"], reverse=True)
 
 
-@router.get("/admin/reports")
+@data_page(router, "/admin/reports", "account.html", "reports")
 async def financial_reports(request: Request, month: str = "", identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
     month = month or datetime.now(timezone.utc).strftime("%Y-%m")
     query = select(UsageRecord.owner_username, UsageRecord.api_key_id, ApiKey.name,
@@ -121,6 +135,7 @@ async def financial_reports(request: Request, month: str = "", identity=Depends(
     prices = {price.model: price for price in (await db.scalars(select(ModelPrice))).all()}
     total, user_rows, worker_rows = summarize_latest(rows, prices)
     subscriptions = await subscription_summary(db)
+    subscriptions["rows"], subscription_pagination = paginate_list(subscriptions["rows"], request, name="plans_page")
     current_month = datetime.now(timezone.utc).strftime("%Y-%m")
     live_cost = subscriptions["total"] if not subscriptions["unpriced"] else None
     if month == current_month:
@@ -136,7 +151,10 @@ async def financial_reports(request: Request, month: str = "", identity=Depends(
         cost_note = "所选月份手工录入的历史成本"
     cost_missing = "套餐未定价" if month in (current_month, "all") else "未录入"
     await db.commit()
+    user_rows, user_pagination = paginate_list(user_rows, request, name="users_page")
+    worker_rows, worker_pagination = paginate_list(worker_rows, request, name="workers_page")
     return render(request, identity, page="reports", subscriptions=subscriptions, month=month, total=total, user_rows=user_rows,
+                  user_pagination=user_pagination, worker_pagination=worker_pagination, subscription_pagination=subscription_pagination,
                   worker_rows=worker_rows, cost_amount=cost_amount, current_month=current_month, cost_note=cost_note, cost_missing=cost_missing,
                   savings=total["amount"]-cost_amount if cost_amount is not None else None)
 
@@ -206,7 +224,7 @@ async def subscription_cost(request: Request, month: str = Form(...), amount: De
     return {"message": "当月订阅成本已保存"}
 
 
-@router.get("/user/debug")
+@data_page(router, "/user/debug", "account.html", "debug")
 async def debug(request: Request, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     from .providers import allowed_providers, provider_for
     providers = await allowed_providers(db, identity.username)

@@ -24,6 +24,17 @@ HEADERS = {'user-agent': ['claude-cli/2.1.287 (external, cli)'], 'x-app': ['cli'
 TOOLS = [{'type': 'function', 'name': 'lookup', 'parameters': {'type': 'object'}}]
 
 
+@pytest.mark.parametrize("version,kind,expected", [
+    ("2.1.288", "status_summary", "status_summary"),
+    ("2.1.288", "context_compaction", None),
+    ("2.1.289", "status_summary", None),
+])
+def test_verified_288_templates_only(version, kind, expected):
+    params = {"input": [{"role": "user", "content": TEMPLATES[kind]}]}
+    headers = HEADERS | {"user-agent": [f"claude-cli/{version} (external, cli)"]}
+    assert auxiliary_kind(params, headers) == expected
+
+
 @pytest.fixture(autouse=True)
 def settings(monkeypatch):
     monkeypatch.setattr(get_settings(), 'model_providers', 'claude-test:claude')

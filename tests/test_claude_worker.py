@@ -38,9 +38,76 @@ async def test_same_session_rejected_before_subprocess_start(worker):
         with pytest.raises(HTTPException) as exc:
             await worker.turn(body)
         assert exc.value.status_code == 409
-        assert "Conversation" in exc.value.detail
+        assert exc.value.detail["code"] == "worker_execution_conflict"
     finally:
         worker.active_turns.clear()
+
+
+@pytest.mark.asyncio
+async def test_admission_fifo_limit_timeout_and_cancel(worker, monkeypatch):
+    import asyncio
+    assert worker.MAX_TURNS == 8
+    for i in range(8):
+        await worker.acquire_turn(str(i), None)
+    monkeypatch.setattr(worker, "MAX_WAITERS", 2)
+    first = asyncio.create_task(worker.acquire_turn("first", None))
+    second = asyncio.create_task(worker.acquire_turn("second", None))
+    await asyncio.sleep(.01)
+    with pytest.raises(HTTPException) as full:
+        await worker.acquire_turn("overflow", None)
+    assert full.value.detail["code"] == "worker_capacity_exceeded"
+    with pytest.raises(HTTPException) as duplicate:
+        await worker.acquire_turn("first", None)
+    assert duplicate.value.detail["code"] == "worker_execution_conflict"
+    worker.active_turns.pop("0")
+    await asyncio.wait_for(first, 1)
+    assert "first" in worker.active_turns and not second.done()
+    assert len(worker.active_turns) == 8
+    second.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await second
+    assert not worker.waiting_turns
+    monkeypatch.setattr(worker, "QUEUE_TIMEOUT", .02)
+    with pytest.raises(HTTPException) as timeout:
+        await worker.acquire_turn("timeout", None)
+    assert timeout.value.detail["code"] == "worker_queue_timeout"
+    assert not worker.waiting_turns and "timeout" not in worker.active_turns
+
+
+@pytest.mark.asyncio
+async def test_admission_disconnect_and_maintenance(worker):
+    for i in range(8):
+        await worker.acquire_turn(str(i), None)
+    class Disconnected:
+        async def is_disconnected(self):
+            return True
+    with pytest.raises(HTTPException) as disconnected:
+        await worker.acquire_turn("gone", None, Disconnected())
+    assert disconnected.value.status_code == 499
+    assert not worker.waiting_turns
+    worker.active_turns.clear()
+    async with worker.lock:
+        with pytest.raises(HTTPException) as maintenance:
+            await worker.acquire_turn("new", None)
+    assert maintenance.value.detail["code"] == "worker_execution_conflict"
+
+
+@pytest.mark.asyncio
+async def test_response_releases_once_even_if_send_fails(worker):
+    async def content():
+        yield "data"
+    async def receive():
+        return {"type": "http.disconnect"}
+    async def send(message):
+        raise RuntimeError("connection closed")
+    worker.active_turns["ticket"] = None
+    response = worker.TurnResponse(content(), "ticket")
+    with pytest.raises(RuntimeError):
+        await response({"type": "http", "asgi": {"spec_version": "2.4"}}, receive, send)
+    assert "ticket" not in worker.active_turns
+    await worker.acquire_turn("ticket", None)
+    response.release()
+    assert "ticket" in worker.active_turns
 
 
 @pytest.mark.asyncio

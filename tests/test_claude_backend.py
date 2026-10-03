@@ -43,6 +43,73 @@ def test_claude_capabilities(backend, effort):
     validate_capabilities(chat.to_response_request())
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code,status,kind", [
+    ("worker_capacity_exceeded", 503, "capacity"),
+    ("worker_queue_timeout", 503, "capacity"),
+    ("worker_execution_conflict", 409, "execution_conflict"),
+])
+async def test_admission_errors_preserve_reason(backend, monkeypatch, code, status, kind):
+    async def handler(request):
+        return httpx.Response(status, json={"detail": {"code": code}})
+    transport(monkeypatch, handler)
+    with pytest.raises(WorkerFailure) as caught:
+        await backend.complete(ResponseRequest(model="claude-test", input="hi"), TARGET)
+    assert (caught.value.code, caught.value.status, caught.value.kind) == (code, status, kind)
+    assert not caught.value.safe_to_retry
+    await backend.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exception,code", [
+    (httpx.ConnectTimeout, "worker_connection_timeout"),
+    (httpx.ReadTimeout, "worker_transport_timeout"),
+])
+async def test_timeout_reasons(backend, monkeypatch, exception, code):
+    async def handler(request):
+        raise exception("timeout", request=request)
+    transport(monkeypatch, handler)
+    with pytest.raises(WorkerFailure) as caught:
+        await backend.complete(ResponseRequest(model="claude-test", input="hi"), TARGET)
+    assert caught.value.code == code and caught.value.status == 504
+    assert not caught.value.safe_to_retry
+    await backend.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code,status,kind", [
+    ("worker_capacity_exceeded", 503, "capacity"),
+    ("worker_queue_timeout", 503, "capacity"),
+    ("worker_execution_conflict", 409, "execution_conflict"),
+    ("worker_connection_timeout", 504, "connection"),
+])
+async def test_gateway_preserves_worker_reason(monkeypatch, code, status, kind):
+    from codex_gateway import main
+    from codex_gateway.auth import ApiPrincipal
+    failure = WorkerFailure("specific reason", kind=kind, code=code, status=status)
+    class Failed:
+        async def complete(self, *args):
+            raise failure
+        async def stream(self, *args):
+            raise failure
+            yield
+    async def save(*args, **kwargs):
+        assert args[4] == status
+        assert kwargs["error_code"] == code
+    monkeypatch.setattr(main, "save_usage", save)
+    principal = ApiPrincipal(None, "test")
+    body = ResponseRequest(model="claude-test", input="hi")
+    with pytest.raises(HTTPException) as caught:
+        await main.complete_with_failover(body, Failed(), principal, TARGET, allow_retry=False)
+    assert caught.value.status_code == status
+    assert caught.value.detail["error"]["code"] == code
+    response_events = [event async for event in main.response_stream(body, Failed(), principal, TARGET, None, allow_retry=False)]
+    assert code in "".join(response_events)
+    chat = ChatCompletionRequest(model="claude-test", messages=[{"role": "user", "content": "hi"}])
+    chat_events = [event async for event in main.chat_completion_stream(chat, body, Failed(), principal, TARGET, allow_retry=False)]
+    assert code in "".join(chat_events)
+
+
 @pytest.mark.parametrize("extra", [
     {"reasoning": {"effort": "minimal"}}, {"reasoning": {"effort": "high", "summary": "auto"}},
     {"text": {"format": {"type": "other"}}}, {"unknown": True},

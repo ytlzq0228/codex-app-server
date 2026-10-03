@@ -152,8 +152,12 @@ def native_error(value, status=400):
         pass
     elif code == "provider_quota_exhausted":
         status = 429
-    elif code == "worker_capacity_exceeded":
+    elif code in {"worker_capacity_exceeded", "worker_queue_timeout"}:
         status = 529
+    elif code == "worker_execution_conflict":
+        status = 409
+    elif code in {"worker_connection_timeout", "worker_transport_timeout"}:
+        status = 504
     elif code in {"previous_response_not_found", "model_not_found"}:
         status = 404
     elif code.startswith(("invalid_", "client_tool")) or code in {"unsupported_parameter", "structured_output_invalid"}:

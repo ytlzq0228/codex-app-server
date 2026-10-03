@@ -1,3 +1,4 @@
+from page_helpers import rendered_pages
 from datetime import timedelta
 from types import SimpleNamespace
 from uuid import uuid4
@@ -126,10 +127,10 @@ def test_two_hour_display_does_not_delete_old_bindings_or_history():
     with TestClient(main.app) as client:
         client.portal.call(setup)
         s=get_settings();client.post('/auth/login',data={'username':s.admin_username,'password':s.admin_password.get_secret_value()})
-        page=client.get('/admin/sessions');assert page.status_code==200,page.text
+        page=rendered_pages(client, '/admin/sessions');assert page.status_code==200,page.text
         assert prefix+'-recent' in page.text and prefix+'-old' not in page.text
         assert 'TTL 到期' not in page.text and '最近 2 小时' in page.text
-        history=client.get('/admin/history/data',params={'conversation':'conv_'+prefix+'-old'})
+        history=rendered_pages(client, '/admin/history/data',params={'conversation':'conv_'+prefix+'-old'})
         assert history.json()['groups'][0]['conversation_id']=='conv_'+prefix+'-old'
         client.portal.call(verify)
 

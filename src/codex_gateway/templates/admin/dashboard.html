@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/static/admin.css">
   <link rel="stylesheet" href="/static/admin-features.css">
   <script defer src="/static/admin.js"></script>
-<link rel="stylesheet" href="/static/modals.css"><script defer src="/static/modals.js"></script><link rel="stylesheet" href="/static/controls.css"><link rel="stylesheet" href="/static/worker-rate-limits.css"><script defer src="/static/worker-rate-limits.js"></script><link rel="stylesheet" href="/static/history.css"><script defer src="/static/history.js"></script><script defer src="/static/history-filters.js"></script><script defer src="/static/local-time.js"></script>{% if page == "admin_workers" %}<link rel="stylesheet" href="/static/admin-workers.css?v=1">{% endif %}</head>
+<link rel="stylesheet" href="/static/modals.css"><script defer src="/static/modals.js"></script><link rel="stylesheet" href="/static/controls.css"><link rel="stylesheet" href="/static/worker-rate-limits.css"><script defer src="/static/worker-rate-limits.js"></script><link rel="stylesheet" href="/static/history.css"><script defer src="/static/history.js"></script><script defer src="/static/history-filters.js"></script><script defer src="/static/local-time.js"></script>{% if page == "admin_workers" %}<link rel="stylesheet" href="/static/admin-workers.css?v=1">{% endif %}<script defer src="/static/token-format.js?v=20261003"></script><script defer src="/static/vendor/nunjucks-3.2.4.min.js"></script><script defer src="/static/page-renderer.js?v=20261003"></script></head>
 <body data-csrf-token="{{ csrf_token }}" class="admin-page {{ 'worker-page' if page == 'admin_workers' else '' }}">
   {% include "shared/sidebar.html" %}
 
@@ -42,7 +42,7 @@
       <p class="muted">当前定位：{{ request.query_params.get('conversation', '') }} <a href="/admin/sessions">查看全部活动会话</a></p>
       {% endif %}
       {% include 'shared/active-conversations.html' %}
-      {% if not active_sessions %}<p class="empty">{{ "该会话最近 2 小时没有活动绑定；较早的绑定与请求历史仍保留" if request.query_params.get("conversation") else "最近 2 小时没有活动会话绑定" }}</p>{% endif %}
+
     </section>
     {% endif %}
 
@@ -65,7 +65,7 @@
       <p data-history-error class="alert alert-error" role="alert" hidden></p>
       <div data-history-results aria-live="polite"></div>
       <div class="pagination" data-history-pagination></div>
-      <script defer src="/static/admin-history.js"></script>
+      <script defer src="/static/admin-history.js?v=20261003"></script>
     </section>
     {% endif %}
 

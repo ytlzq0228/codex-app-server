@@ -1,3 +1,4 @@
+from .page_data import data_page, page_response, paginate, paginate_list
 import re
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
@@ -128,66 +129,63 @@ def manager_delete_succeeded(status_code: int) -> bool:
 
 
 async def render_admin_page(request: Request, page: str, history_page: int, admin: AdminSession, session: AsyncSession, *, conversation: str = "", key_id: str = "", endpoint: str = "", start: str = "", end: str = ""):
-    date_filters = history_time_filters(start, end)
+    context = {"page": page, "csrf_token": admin.csrf_token}
     if page == "history":
-        history_keys = (await session.scalars(select(ApiKey).order_by(ApiKey.name, ApiKey.id))).all()
-        return templates(request).TemplateResponse(request, "admin/dashboard.html",
-            {"page": page, "history_keys": history_keys, "csrf_token": admin.csrf_token})
-    if page == "overview":
-        stats = {
+        history_time_filters(start, end)
+        context["history_keys"] = (await session.scalars(select(ApiKey).order_by(ApiKey.name, ApiKey.id))).all()
+    elif page == "overview":
+        context["stats"] = {
             "requests": await session.scalar(select(func.count()).select_from(UsageRecord)) or 0,
             "input_tokens": await session.scalar(select(func.coalesce(func.sum(UsageRecord.input_tokens), 0))) or 0,
             "output_tokens": await session.scalar(select(func.coalesce(func.sum(UsageRecord.output_tokens), 0))) or 0,
         }
-        return templates(request).TemplateResponse(request, "admin/dashboard.html",
-            {"page": page, "stats": stats, "csrf_token": admin.csrf_token})
-    history_page = max(history_page, 1)
-    history_page_size = 30
-    keys = (await session.scalars(select(ApiKey).where(ApiKey.deleted_at.is_(None)).order_by(ApiKey.created_at.desc()))).all()
-    workers = (await session.scalars(select(Worker).where(Worker.endpoint != "removed://worker").order_by(Worker.created_at.asc()))).all()
-    plans = (await session.scalars(select(SubscriptionPlan))).all() if page == "admin_workers" else []
-    plan_styles = {plan.name: plan_pill_style(plan.color) for plan in plans}
-    history_keys = (await session.scalars(select(ApiKey).order_by(ApiKey.name, ApiKey.id))).all() if page == "history" else []
-    history = await conversation_history(session, filters=date_filters, page=history_page, page_size=history_page_size, conversation_id=conversation, key_id=key_id, endpoint=endpoint)
-    history_total = history["request_total"]
-    history_session_total = history["total"]
-    history_page, history_pages = history["page"], history["pages"]
-    history_groups = history["groups"]
-    binding_rows = (await session.execute(
-        select(ResponseBinding, ApiKey, Worker, UsageRecord.logical_conversation_id, UsageRecord.thread_id, UsageRecord.endpoint)
-        .join(ApiKey, ResponseBinding.api_key_id == ApiKey.id)
-        .join(Worker, ResponseBinding.worker_id == Worker.id)
-        .outerjoin(UsageRecord, (UsageRecord.request_id == ResponseBinding.response_id) & (UsageRecord.api_key_id == ResponseBinding.api_key_id))
-        .where(ApiKey.deleted_at.is_(None), ResponseBinding.status == "active", Worker.endpoint != "removed://worker", ResponseBinding.worker_generation == Worker.execution_generation)
-        .order_by(ResponseBinding.last_used_at.desc(), ResponseBinding.response_id.desc())
-    )).all()
-    active_sessions, sessions_by_key = active_conversation_groups(binding_rows)
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
-    active_sessions = [group for group in active_sessions if group["latest_at"] >= cutoff]
-    sessions_by_key = {}
-    for group in active_sessions:
-        sessions_by_key.setdefault(group["key"].id, []).append(group)
-    if page == "sessions" and (conversation or key_id or endpoint):
-        active_sessions = [group for group in active_sessions
-            if (not conversation or group["conversation_id"] == conversation)
-            and (not key_id or str(group["key"].id) == key_id)
-            and (not endpoint or group["endpoint"] == endpoint)]
-        sessions_by_key = {}
-        for group in active_sessions:
-            sessions_by_key.setdefault(group["key"].id, []).append(group)
-    stats = {
-        "requests": await session.scalar(select(func.count()).select_from(UsageRecord)) or 0,
-        "input_tokens": await session.scalar(select(func.coalesce(func.sum(UsageRecord.input_tokens), 0))) or 0,
-        "output_tokens": await session.scalar(select(func.coalesce(func.sum(UsageRecord.output_tokens), 0))) or 0,
-    }
-    return templates(request).TemplateResponse(
-        request,
-        "admin/dashboard.html",
-        {"users": (await session.scalars(select(User).order_by(User.username))).all(), "page": page, "history_keys": history_keys, "keys": keys, "workers": workers, "plan_styles": plan_styles, "default_plan_style": plan_pill_style(DEFAULT_PLAN_COLOR), "history_groups": history_groups, "history_page": history_page, "history_pages": history_pages, "history_total": history_total, "history_session_total": history_session_total, "active_sessions": active_sessions, "sessions_by_key": sessions_by_key, "stats": stats, "csrf_token": admin.csrf_token, "show_cost": page == "history"},
-    )
+    elif page == "keys":
+        context["keys"], context["pagination"] = await paginate(session,
+            select(ApiKey).where(ApiKey.deleted_at.is_(None)).order_by(ApiKey.created_at.desc(), ApiKey.id), request)
+        # Pickers only need display identifiers, never ORM credentials.
+        context["workers"] = [dict(row) for row in (await session.execute(select(
+            Worker.id, Worker.name, Worker.enabled).where(Worker.endpoint != "removed://worker", Worker.id.in_([key.pinned_worker_id for key in context["keys"] if key.pinned_worker_id])).order_by(Worker.name, Worker.id))).mappings()]
+        context["users"] = [dict(row) for row in (await session.execute(select(
+            User.username, User.enabled, User.role).where(User.username.in_(
+                [key.owner_username for key in context["keys"] if key.owner_username])).order_by(User.username))).mappings()]
+    elif page == "admin_workers":
+        context["workers"], context["pagination"] = await paginate(session,
+            select(Worker).where(Worker.endpoint != "removed://worker").order_by(Worker.created_at, Worker.id), request)
+        plans = (await session.scalars(select(SubscriptionPlan))).all()
+        context["plan_styles"] = {plan.name: plan_pill_style(plan.color) for plan in plans}
+        context["default_plan_style"] = plan_pill_style(DEFAULT_PLAN_COLOR)
+        context["users"] = [dict(row) for row in (await session.execute(select(
+            User.username, User.enabled, User.role).order_by(User.username).limit(30))).mappings()]
+        owners = {w.owner_username for w in context["workers"] if w.owner_username}
+        present = {u["username"] for u in context["users"]}
+        context["users"] += [dict(row) for row in (await session.execute(select(
+            User.username, User.enabled, User.role).where(User.username.in_(owners - present)))).mappings()]
+    elif page == "sessions":
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
+        base = (select(ResponseBinding, ApiKey, Worker, UsageRecord.logical_conversation_id, UsageRecord.thread_id, UsageRecord.endpoint)
+            .join(ApiKey, ResponseBinding.api_key_id == ApiKey.id)
+            .join(Worker, ResponseBinding.worker_id == Worker.id)
+            .outerjoin(UsageRecord, (UsageRecord.request_id == ResponseBinding.response_id) & (UsageRecord.api_key_id == ResponseBinding.api_key_id))
+            .where(ApiKey.deleted_at.is_(None), ResponseBinding.status == "active",
+                Worker.endpoint != "removed://worker", ResponseBinding.worker_generation == Worker.execution_generation))
+        # Select recent threads, then retain all bindings within those threads.
+        recent = select(ResponseBinding.api_key_id, ResponseBinding.worker_id, ResponseBinding.thread_id).where(
+            ResponseBinding.status == "active", ResponseBinding.last_used_at >= cutoff).distinct().subquery()
+        base = base.join(recent, (recent.c.api_key_id == ResponseBinding.api_key_id) &
+            (recent.c.worker_id == ResponseBinding.worker_id) & (recent.c.thread_id == ResponseBinding.thread_id))
+        rows = (await session.execute(base.order_by(ResponseBinding.last_used_at.desc(), ResponseBinding.response_id.desc()))).all()
+        groups, _ = active_conversation_groups(rows)
+        groups = [g for g in groups if (not conversation or g["conversation_id"] == conversation)
+            and (not key_id or str(g["key"].id) == key_id) and (not endpoint or g["endpoint"] == endpoint)]
+        # Paginate displayed threads, so one large conversation cannot bypass the bound.
+        routes = [{"group": {k: v for k, v in g.items() if k != "threads"}, "item": item}
+                  for g in groups for item in g["threads"]]
+        routes, context["pagination"] = paginate_list(routes, request)
+        context["session_routes"] = routes
+    return page_response(request, "admin/dashboard.html", context)
 
 
-@router.get("", response_class=HTMLResponse)
+@data_page(router, "", "admin/dashboard.html", "overview")
 async def dashboard(request: Request, admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     return await render_admin_page(request, "overview", 1, admin, session)
 
@@ -200,17 +198,17 @@ async def overview_monitoring(days: int = 7, admin: AdminSession = Depends(requi
     return JSONResponse(await monitoring_data(session, days), headers={"Cache-Control": "no-store"})
 
 
-@router.get("/api-keys", response_class=HTMLResponse)
+@data_page(router, "/api-keys", "admin/dashboard.html", "keys")
 async def api_keys_page(request: Request, admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     return await render_admin_page(request, "keys", 1, admin, session)
 
 
-@router.get("/workers", response_class=HTMLResponse)
+@data_page(router, "/workers", "admin/dashboard.html", "admin_workers")
 async def workers_admin_page(request: Request, admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     return await render_admin_page(request, "admin_workers", 1, admin, session)
 
 
-@router.get("/sessions", response_class=HTMLResponse)
+@data_page(router, "/sessions", "admin/dashboard.html", "sessions")
 async def sessions_page(request: Request, conversation: str = "", key_id: str = "", endpoint: str = "", admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     return await render_admin_page(request, "sessions", 1, admin, session, conversation=conversation, key_id=key_id, endpoint=endpoint)
 
@@ -241,6 +239,26 @@ async def history_requests(conversation: str = Query(..., min_length=1), key_id:
     admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     return history_json(await conversation_request_page(session, conversation_id=conversation,
         key_id=key_id, endpoint=endpoint, page=page))
+
+
+@router.get("/options/{kind}")
+async def page_options(kind: str, request: Request, search: str = "", page: int = Query(1, ge=1),
+    admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+    if kind == "users":
+        query = select(User).order_by(User.username)
+        if search:
+            query = query.where(User.username.contains(search, autoescape=True))
+        rows, pagination = await paginate(session, query, request)
+        options = [{"value": u.username, "label": u.username, "enabled": u.enabled} for u in rows]
+    elif kind == "workers":
+        query = select(Worker).where(Worker.endpoint != "removed://worker", Worker.enabled.is_(True)).order_by(Worker.name, Worker.id)
+        if search:
+            query = query.where(Worker.name.contains(search, autoescape=True))
+        rows, pagination = await paginate(session, query, request)
+        options = [{"value": str(w.id), "label": w.name, "enabled": w.enabled} for w in rows]
+    else:
+        raise HTTPException(404, "未知选项类型")
+    return history_json({"options": options, "pagination": pagination})
 
 
 @router.post("/keys")

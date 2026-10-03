@@ -1,3 +1,4 @@
+from page_helpers import rendered_pages
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
 
@@ -42,7 +43,7 @@ def test_claude_login_quota_windows_and_logout(worker_services, monkeypatch):
         response = client.post("/user/workers", data={"provider": "claude", "csrf_token": csrf}, headers=AJAX)
         assert response.status_code == 200, response.text
         worker_id = response.json()["worker_id"]
-        page = client.get("/user/workers").text
+        page = rendered_pages(client, "/user/workers").text
         assert 'data-provider="claude"' in page and "Claude / Claude Code" in page
         base = "/user/workers/" + worker_id
         response = client.post(base + "/provider-login/start", data={"csrf_token": csrf}, headers=AJAX)
@@ -51,7 +52,7 @@ def test_claude_login_quota_windows_and_logout(worker_services, monkeypatch):
         assert response.json()["verification"]["ok"]
         q, generation = client.portal.call(inspect, owner, worker_id)
         assert q["contributed"] == 1
-        assert "Claude · team" in client.get("/user/workers").text
+        assert "Claude · team" in rendered_pages(client, "/user/workers").text
         response = client.post(base + "/rate-limits", data={"csrf_token": csrf}, headers=AJAX)
         assert response.json()["buckets"][0]["five_hour"]["used"] == 20
         assert response.json()["buckets"][0]["week"]["used"] == 40

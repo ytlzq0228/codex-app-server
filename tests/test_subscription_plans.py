@@ -1,3 +1,4 @@
+from page_helpers import rendered_pages
 from decimal import Decimal
 from uuid import uuid4, UUID
 
@@ -41,7 +42,7 @@ def test_plan_prices_discovery_totals_and_permissions():
         token=admin_login(client)
         client.portal.call(seed)
         try:
-            page=client.get('/admin/finance')
+            page=rendered_pages(client, '/admin/finance')
             assert page.status_code==200 and plan in page.text and '新增套餐' in page.text
             result=client.portal.call(row)
             assert result['count']==3 and result['price'] is None
@@ -61,7 +62,7 @@ def test_plan_prices_discovery_totals_and_permissions():
             assert r.status_code==200,r.text
             result=client.portal.call(row)
             assert result['color']=='#f2c94c' and result['style']=='background-color:#f2c94c;color:#111827'
-            assert 'name="color" type="color" value="#f2c94c"' in client.get('/admin/finance').text
+            assert 'name="color" type="color" value="#f2c94c"' in rendered_pages(client, '/admin/finance').text
             # Older clients that omit color keep the configured value.
             assert client.post('/admin/subscription-plans',data={'csrf_token':token,'name':plan,
                 'monthly_price':'21'},headers=AJAX).status_code==200
@@ -71,7 +72,7 @@ def test_plan_prices_discovery_totals_and_permissions():
                     'monthly_price':'20','color':color},headers=AJAX).status_code in (400,422)
             assert client.post('/admin/subscription-plans',data={'csrf_token':token,'name':custom,'monthly_price':'12'},headers=AJAX).status_code==200
             for url in ['/admin/finance','/admin/reports?month=all']:
-                assert custom in client.get(url).text
+                assert custom in rendered_pages(client, url).text
             name,pw=create_person(client)
             user_token=user_login(client,name,pw)
             assert client.post('/admin/subscription-plans',data={'csrf_token':user_token,'name':plan,'monthly_price':'1'},headers=AJAX).status_code==403
@@ -113,4 +114,4 @@ def test_limit_preserves_subscription_and_logout_retains_plan(worker_services, m
         mode,kind,row=client.portal.call(snapshot,worker)
         assert mode is None and kind=='logged_out' and row['count']==0
         token=admin_login(client)
-        assert plan in client.get('/admin/finance').text
+        assert plan in rendered_pages(client, '/admin/finance').text

@@ -1,3 +1,4 @@
+from page_helpers import rendered_pages
 from contextlib import asynccontextmanager
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
@@ -181,15 +182,15 @@ def test_admin_sets_granted_quota_and_reduces_oldest_key():
 
         client.portal.call(mark_newer_used)
         admin_token = admin_login(client)
-        page = client.get('/admin/users').text
+        page = rendered_pages(client, '/admin/users').text
         assert '编辑 Quota' in page and 'name="quota_granted"' in page
         response = client.post(f'/admin/users/{name}/quota', data={
             'csrf_token': admin_token, 'quota_granted': 1}, headers=AJAX)
         assert response.status_code == 200, response.text
         assert '已停用 1 个' in response.json()['message']
         assert client.portal.call(summary, name)['granted'] == 1
-        assert client.get('/v1/models', headers={'Authorization': 'Bearer ' + older['secret']}).status_code == 401
-        assert client.get('/v1/models', headers={'Authorization': 'Bearer ' + newer['secret']}).status_code == 200
+        assert rendered_pages(client, '/v1/models', headers={'Authorization': 'Bearer ' + older['secret']}).status_code == 401
+        assert rendered_pages(client, '/v1/models', headers={'Authorization': 'Bearer ' + newer['secret']}).status_code == 200
 
         response = client.post(f'/admin/users/{name}/quota', data={
             'csrf_token': admin_token, 'quota_granted': 0}, headers=AJAX)
@@ -226,8 +227,8 @@ def test_worker_credit_lifecycle_and_lru(worker_services):
         worker_services['account']=None
         probe(client,token,worker)
         assert client.portal.call(summary,name)['used']==1
-        assert client.get('/v1/models',headers={'Authorization':'Bearer '+older['secret']}).status_code==401
-        assert client.get('/v1/models',headers={'Authorization':'Bearer '+newer['secret']}).status_code==200
+        assert rendered_pages(client, '/v1/models',headers={'Authorization':'Bearer '+older['secret']}).status_code==401
+        assert rendered_pages(client, '/v1/models',headers={'Authorization':'Bearer '+newer['secret']}).status_code==200
         worker_services['account']={'type':'chatgpt','email':'contributor@example.com','planType':'pro'}
         probe(client,token,worker)
         assert client.portal.call(summary,name)['available']==1
@@ -247,24 +248,24 @@ def test_owner_isolation_account_read_and_admin_transfer(worker_services):
         assert new_key(client,token).status_code == 200
         r=client.post('/user/workers/'+worker+'/account',data={'csrf_token':token},headers=AJAX)
         assert r.json()['account']['email']=='contributor@example.com'
-        page=client.get('/user/workers')
+        page=rendered_pages(client, '/user/workers')
         assert page.status_code==200 and 'contributor@example.com' in page.text and '+1 额度' in page.text
         token=user_login(client,bob,bpw)
         calls=worker_services['calls']
         for action in ['login','probe','account','delete']:
             assert client.post('/user/workers/'+worker+'/'+action,data={'csrf_token':token},headers=AJAX).status_code==404
         assert worker_services['calls']==calls and not worker_services['deleted']
-        assert 'contributor@example.com' not in client.get('/user/workers').text
+        assert 'contributor@example.com' not in rendered_pages(client, '/user/workers').text
         assert client.post('/admin/workers/'+worker+'/owner',data={'csrf_token':token,'username':bob},headers=AJAX).status_code==403
         token=admin_login(client)
-        admin_workers=client.get('/admin/workers').text
+        admin_workers=rendered_pages(client, '/admin/workers').text
         assert f'data-worker-id="{worker}"' in admin_workers
         assert f'data-worker-owner="{alice}"' in admin_workers
         assert 'id="worker-owner-dialog"' in admin_workers
         assert '<th>归属</th><th>节点</th><th>登录账号 / 套餐</th>' in admin_workers
         assert 'contributor@example.com' in admin_workers and '>plus</span>' in admin_workers
         assert client.post('/admin/workers/'+worker+'/owner',data={'csrf_token':token,'username':bob},headers=AJAX).status_code==200
-        assert f'data-worker-owner="{bob}"' in client.get('/admin/workers').text
+        assert f'data-worker-owner="{bob}"' in rendered_pages(client, '/admin/workers').text
         assert client.portal.call(summary,alice)['total']==0
         assert client.portal.call(summary,alice)['used']==0
         assert client.portal.call(summary,bob)['total']==1
@@ -282,7 +283,7 @@ def test_failed_account_read_removes_credit(worker_services):
         assert client.post('/user/workers/'+worker+'/account',data={'csrf_token':token},headers=AJAX).status_code==502
         assert client.portal.call(summary,name)['total']==0
         assert client.portal.call(summary,name)['used']==0
-        assert client.get('/v1/models',headers={'Authorization':'Bearer '+key['secret']}).status_code==401
+        assert rendered_pages(client, '/v1/models',headers={'Authorization':'Bearer '+key['secret']}).status_code==401
 
 
 def test_admin_key_transfer_and_enable_respect_destination_capacity():
@@ -327,18 +328,18 @@ def test_worker_names_and_pending_login_guard(worker_services):
             results=list(pool.map(lambda _:client.post('/user/workers',data={'csrf_token':token},headers=AJAX),range(2)))
         assert sorted(r.status_code for r in results)==[200,409]
         worker=next(r.json()['worker_id'] for r in results if r.status_code==200)
-        page=client.get('/user/workers').text
+        page=rendered_pages(client, '/user/workers').text
         assert name+'-worker-01' in page
         assert 'data-modal-open="contribute-worker" disabled' in page
         worker_services['account']['planType']='free'
         probe(client,token,worker)
-        assert 'value="02"' in client.get('/user/workers').text
+        assert 'value="02"' in rendered_pages(client, '/user/workers').text
         r=client.post('/user/workers',data={'csrf_token':token,'suffix':'7'},headers=AJAX)
         assert r.status_code==200,r.text
         second=r.json()['worker_id']
-        assert name+'-worker-07' in client.get('/user/workers').text
+        assert name+'-worker-07' in rendered_pages(client, '/user/workers').text
         assert client.post('/user/workers/'+second+'/delete',data={'csrf_token':token},headers=AJAX).status_code==200
-        assert 'value="02"' in client.get('/user/workers').text
+        assert 'value="02"' in rendered_pages(client, '/user/workers').text
         async def archived_names():
             async with SessionLocal() as db:
                 deleted = await db.get(Worker, UUID(second))
@@ -360,15 +361,15 @@ def test_admin_worker_page_is_separate_from_contribution_page(worker_services):
     with TestClient(app) as client:
         token=admin_login(client)
         assert client.post('/user/workers',data={'csrf_token':token},headers=AJAX).status_code==409
-        page=client.get('/user/workers').text
+        page=rendered_pages(client, '/user/workers').text
         assert '我的 Worker' in page and '更改归属' not in page
         names=[f"admin-system-{uuid4().hex[:8]}", f"admin-system-{uuid4().hex[:8]}"]
         for name in names:
             r=client.post('/admin/workers',data={'csrf_token':token,'name':name},headers=AJAX)
             assert r.status_code==200,r.text
-        admin_page=client.get('/admin/workers').text
+        admin_page=rendered_pages(client, '/admin/workers').text
         assert 'Worker 管理' in admin_page and all(name in admin_page for name in names)
-        assert 'href="/admin/workers"' in client.get('/admin').text
+        assert 'href="/admin/workers"' in rendered_pages(client, '/admin').text
         assert '进入 Worker 管理' not in admin_page
 
 
@@ -397,7 +398,7 @@ def test_admin_can_rename_worker_without_changing_runtime_identity(worker_servic
         assert response.status_code == 200, response.text
         after = client.portal.call(runtime_identity)
         assert after == (renamed, before[1], before[2])
-        page = client.get('/admin/workers').text
+        page = rendered_pages(client, '/admin/workers').text
         assert renamed in page and original_name not in page
 
         other_name = f"rename-other-{uuid4().hex[:8]}"
@@ -425,7 +426,7 @@ def test_renamed_default_worker_survives_gateway_restart():
             data={'csrf_token': token, 'name': renamed}, headers=AJAX)
         assert response.status_code == 200, response.text
     with TestClient(app) as client:
-        assert client.get('/healthz').status_code == 200
+        assert rendered_pages(client, '/healthz').status_code == 200
         async def defaults():
             async with SessionLocal() as db:
                 return (await db.scalars(select(Worker).where(Worker.container_name == 'codex-worker-1'))).all()
@@ -443,7 +444,7 @@ def test_duplicate_account_quota_lifecycle_and_transfer(worker_services):
         worker_services['account']['email']='  CONTRIBUTOR@example.com  '
         probe(client,token,second)
         assert client.portal.call(summary,alice)['contributed']==1
-        assert '重复账号，不增加额度' in client.get('/user/workers').text
+        assert '重复账号，不增加额度' in rendered_pages(client, '/user/workers').text
         older=new_key(client,token).json()['key_id']
         assert new_key(client,token).status_code==409
         worker_services['account']['email']='another@example.com'
@@ -502,7 +503,7 @@ def test_relogin_logout_order_and_failure_state(worker_services, monkeypatch, fa
         token=user_login(client,name,pw)
         worker=contribute(client,token);probe(client,token,worker)
         assert new_key(client,token).status_code==200
-        assert '是否退出当前账号并重新登录' in client.get('/user/workers').text
+        assert '是否退出当前账号并重新登录' in rendered_pages(client, '/user/workers').text
         monkeypatch.setattr(admin,'open_app_server',opened)
         response=client.post('/user/workers/'+worker+'/login',data={'csrf_token':token,'force':'true'},headers=AJAX)
         assert response.status_code==(502 if failure else 200)
@@ -528,4 +529,4 @@ def test_any_identified_non_free_plan_contributes(worker_services):
         probe(client,token,worker)
         second=contribute(client,token);probe(client,token,second)
         assert client.portal.call(summary,name)['contributed']==1
-        assert '重复账号，不增加额度' in client.get('/user/workers').text
+        assert '重复账号，不增加额度' in rendered_pages(client, '/user/workers').text

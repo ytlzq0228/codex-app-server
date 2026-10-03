@@ -24,11 +24,7 @@
     content.textContent = '正在加载请求详情…';
     dialog.showModal();
     try {
-      const response = await fetch(link.href, {headers:{'X-Requested-With':'XMLHttpRequest'}, signal:active.signal});
-      if (!response.ok) throw new Error(response.status === 401 ? '登录已过期，请重新登录。' : response.status === 404 ? '请求不存在或无权查看。' : '加载失败，请关闭后重试。');
-      const documentBody = new DOMParser().parseFromString(await response.text(), 'text/html');
-      const panel = documentBody.querySelector('main.content > section.panel');
-      if (!panel) throw new Error('无法读取请求详情，请重新登录后重试。');
+      const panel = await window.PageRenderer.detail(link.href, active.signal);
       if (!active.signal.aborted) content.replaceChildren(document.importNode(panel, true));
     } catch (error) {
       if (!active.signal.aborted) content.textContent = error.message;

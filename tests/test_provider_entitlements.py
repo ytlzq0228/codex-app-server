@@ -1,3 +1,4 @@
+from page_helpers import rendered_pages
 from datetime import datetime, timezone
 from uuid import uuid4
 from fastapi.testclient import TestClient
@@ -56,7 +57,7 @@ def test_owner_provider_entitlements_and_cross_provider_credits(monkeypatch):
         assert q["contributed"] == 1 and len(duplicates) == 1
         for raw in keys:
             headers = {"Authorization": "Bearer "+raw}
-            assert [m["id"] for m in client.get("/v1/models",headers=headers).json()["data"]] == ["gpt-6-sol"]
+            assert [m["id"] for m in rendered_pages(client, "/v1/models",headers=headers).json()["data"]] == ["gpt-6-sol"]
             for path, payload in [("/v1/chat/completions", {"messages":[{"role":"user","content":"hi"}]}),
                                   ("/v1/responses", {"input":"hi"})]:
                 r=client.post(path,headers=headers,json={"model":"gemini-entitlement",**payload})
@@ -66,14 +67,14 @@ def test_owner_provider_entitlements_and_cross_provider_credits(monkeypatch):
         assert q["contributed"] == 2 and not duplicates
         for raw in keys:
             headers={"Authorization":"Bearer "+raw}
-            assert len(client.get("/v1/models",headers=headers).json()["data"]) == 2
-            assert client.get("/v1/models/gemini-entitlement",headers=headers).status_code == 200
+            assert len(rendered_pages(client, "/v1/models",headers=headers).json()["data"]) == 2
+            assert rendered_pages(client, "/v1/models/gemini-entitlement",headers=headers).status_code == 200
             r=client.post("/v1/responses",headers=headers,json={"model":"gemini-entitlement","input":"hi","temperature":1})
             assert r.status_code == 400 and r.json()["error"]["param"] == "temperature"
         client.portal.call(change,"gemini","free-tier")
         assert client.portal.call(inspect)[0]["contributed"] == 1
         client.portal.call(change,"gemini","gcp-ge-plus-tier",True)
-        assert len(client.get("/v1/models",headers=headers).json()["data"]) == 1
+        assert len(rendered_pages(client, "/v1/models",headers=headers).json()["data"]) == 1
 
         async def audit():
             async with SessionLocal() as db:
@@ -195,12 +196,12 @@ def test_admin_manual_provider_grants_and_revocation(monkeypatch):
         headers = {'Authorization': 'Bearer '+raw}
         path = f'/admin/users/{owner}/providers'
         def models():
-            return [x['id'] for x in client.get('/v1/models', headers=headers).json()['data']]
+            return [x['id'] for x in rendered_pages(client, '/v1/models', headers=headers).json()['data']]
         assert models() == ['gpt-6-sol']
         assert client.post(path, data={'csrf_token': 'wrong', 'gemini': 'true'}, headers=AJAX).status_code == 403
         assert client.post(path, data={'csrf_token': token, 'gemini': 'true'}, headers=AJAX).status_code == 200
         assert models() == ['gpt-6-sol', 'gemini-manual']
-        assert 'Provider 权限' in client.get('/admin/users').text
+        assert 'Provider 权限' in rendered_pages(client, '/admin/users').text
         assert client.post(path, data={'csrf_token': token}, headers=AJAX).status_code == 200
         assert models() == ['gpt-6-sol']  # Automatic Worker entitlement is preserved.
         assert client.post('/v1/responses', headers=headers, json={'model':'gemini-manual','input':'hi'}).status_code == 403

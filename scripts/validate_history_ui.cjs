@@ -22,32 +22,38 @@ print(e.get_template('admin/dashboard.html').render(page='history',history_keys=
  await page.route('https://gateway.test/**',async route=>{
   const url=new URL(route.request().url());
   if(url.pathname==='/admin/history')return route.fulfill({body:html,contentType:'text/html'});
-  if(url.pathname.startsWith('/static/'))return route.fulfill({path:path.join(root,'src/codex_gateway/static',url.pathname.slice(8)),contentType:url.pathname.endsWith('.js')?'text/javascript':'text/css'});
+  if(url.pathname.startsWith('/static/'))return route.fulfill({path:path.join(root,'src/codex_gateway/static',url.pathname.slice(8)),contentType:url.pathname.endsWith('.json')?'application/json':url.pathname.endsWith('.js')?'text/javascript':'text/css'});
   calls.push(url);
   if(url.pathname==='/admin/history/data'){
    if(failNext){failNext=false;return route.fulfill({status:500,json:{detail:'测试加载失败'}});}
    const number=Number(url.searchParams.get('history_page') || 1);
-   return route.fulfill({json:{total:31,request_total:55,page:number,pages:2,page_size:30,groups:[{identity:'key:responses:conversation-'+number,conversation_id:'conversation-'+number,key_id:'key',key_name:'<img src=x onerror="window.pwned=1">',endpoint:'responses',latest_at:'2026-10-02T15:00:00Z',logical:true,thread_count:2,request_count:25,latest_status:200,input_tokens:10,output_tokens:20,duration_ms:30,cost_usd:'0.1000',unpriced_count:0}]}});
+   return route.fulfill({json:{total:31,request_total:55,page:number,pages:2,page_size:30,groups:[{identity:'key:responses:conversation-'+number,conversation_id:'conversation-'+number,key_id:'key',key_name:'<img src=x onerror="window.pwned=1">',endpoint:'responses',latest_at:'2026-10-02T15:00:00Z',logical:true,thread_count:2,request_count:25,latest_status:200,input_tokens:'1100000',output_tokens:'150000',duration_ms:30,cost_usd:'0.1000',unpriced_count:0}]}});
   }
   if(url.pathname==='/admin/history/requests'){
    const number=Number(url.searchParams.get('page') || 1);
-   return route.fulfill({json:{total:25,page:number,pages:2,page_size:20,requests:Array.from({length:number===1?20:5},(_,i)=>({request_id:'request-'+((number-1)*20+i),created_at:'2026-10-02T15:00:00Z',owner_username:'owner',model:'<script>window.pwned=1</script>',worker_name:'Worker',thread_id:'thread',evidence:'test',status_code:200,input_tokens:1,output_tokens:2,duration_ms:3,cost_usd:'0.0040'}))}});
+   return route.fulfill({json:{total:25,page:number,pages:2,page_size:20,requests:Array.from({length:number===1?20:5},(_,i)=>({request_id:'request-'+((number-1)*20+i),created_at:'2026-10-02T15:00:00Z',owner_username:'owner',model:'<script>window.pwned=1</script>',worker_name:'Worker',thread_id:'thread',evidence:'test',status_code:200,input_tokens:'900000',output_tokens:'350000',duration_ms:3,cost_usd:'0.0040'}))}});
   }
-  if(url.pathname.startsWith('/user/usage/'))return route.fulfill({contentType:'text/html',body:'<main class="content"><section class="panel">请求详情测试</section></main>'});
+  if(url.pathname.startsWith('/user/usage/'))return route.fulfill({json:{record:{request_id:'请求详情测试',duration_ms:3,input_tokens:1250000,output_tokens:1000000,cache_read_tokens:1100000,cache_write_tokens:0},worker:null,evidence_fields:[],observation_fields:[],last_texts:{},params:'{}',observation:'{}',correlation:'{}'}});
   return route.fulfill({status:404,body:'Not found'});
  });
  await page.goto('https://gateway.test/admin/history');
  await page.getByText('共 55 条请求，聚合为 31 个会话').waitFor();
  assert.equal(calls.filter(u=>u.pathname==='/admin/history/requests').length,0);
  assert.equal(await page.locator('[data-history-request]').count(),0);
+ assert.equal(await page.locator('.history-row').getByText('1.2500 million',{exact:true}).count(),1);
  await page.getByRole('button',{name:'展开',exact:true}).click();
  await page.locator('[data-history-request]').nth(19).waitFor();
  assert.equal(await page.locator('[data-history-request]').count(),20);
+ assert.equal(await page.locator('[data-history-request]').first().getByText('1.2500 million',{exact:true}).count(),1);
+ assert.equal(await page.getByText('输入 1.1000 million Token',{exact:true}).count(),1);
  await page.getByRole('button',{name:'更多（剩余 5 条）'}).click();
  await page.locator('[data-history-request]').nth(24).waitFor();
  assert.equal(calls.filter(u=>u.pathname==='/admin/history/requests').length,2);
  await page.locator('[data-request-detail]').first().click();
- await page.locator('#request-detail-content').getByText('请求详情测试').waitFor();
+ await page.waitForFunction(()=>document.querySelector('#request-detail-content').textContent !== '正在加载请求详情…');
+ assert.match(await page.locator('#request-detail-content').innerText(), /请求详情测试/);
+ assert.equal(await page.locator('#request-detail-content').getByText('1.2500 million',{exact:true}).count(),1);
+ assert.equal(await page.locator('#request-detail-content').getByText('1000000',{exact:true}).count(),1);
  await page.locator('#request-detail-dialog [data-modal-close]').click();
  assert.equal(await page.evaluate(()=>window.pwned),undefined);
  await page.getByRole('button',{name:'下一页',exact:true}).click();

@@ -162,6 +162,30 @@ def appended_items(request, expected):
     return delta
 
 
+def gemini_rebuild_history(items):
+    """Require prior dialogue and resolved tools before a fresh Gemini turn."""
+    from .claude_helpers import dialogue_tail
+    tail = dialogue_tail(items)
+    if not tail or tail.get("role") != "user":
+        return False
+    if sum(item.get("role") == "user" for item in items) < 2:
+        return False
+    if not any(item.get("role") == "assistant" for item in items):
+        return False
+    calls, completed = {}, set()
+    for item in items:
+        kind, call_id = item.get("type"), item.get("call_id")
+        if kind in {"function_call", "custom_tool_call"}:
+            if not isinstance(call_id, str) or not call_id or call_id in calls:
+                return False
+            calls[call_id] = kind + "_output"
+        elif kind in {"function_call_output", "custom_tool_call_output"}:
+            if not isinstance(call_id, str) or calls.get(call_id) != kind or call_id in completed:
+                return False
+            completed.add(call_id)
+    return completed == calls.keys()
+
+
 def conflict(message, code="conversation_busy"):
     return HTTPException(409, detail={"error": {"message": message, "type": "invalid_request_error",
                           "code": code, "param": None}}, headers={"Retry-After": "2"})
@@ -371,13 +395,15 @@ async def _prepare(request, principal, endpoint, audit, *, pending_thread=None, 
                     request._execution_auto_resume = True
                     action, reason = "resume", "explicit_identity_and_history_prefix"
         if provider != "codex" and row.state != "new" and action == "new_thread":
-            # Claude can rebuild flattened history on a fresh CLI session, but
-            # a tool reply must go through its authenticated suspended run.
-            # Gemini retains its existing resume restriction.
+            # Fresh sessions consume history as context; tool continuations
+            # must still use their authenticated suspended run.
             from .claude_helpers import dialogue_tail
             tail = dialogue_tail(items)
             rebuild = (provider == "claude" and tail and tail.get("role") == "user"
                        and not tool_outputs(request))
+            if provider == "gemini":
+                rebuild = (row.state == "ready" and not row.lease_token
+                           and gemini_rebuild_history(items) and not tool_outputs(request))
             if not rebuild:
                 raise conflict("Provider conversation cannot be safely resumed; start a new conversation", "conversation_resume_unavailable")
         token = str(uuid4())

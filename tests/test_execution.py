@@ -193,10 +193,10 @@ def test_persistent_lease_checkpoint_and_isolation():
     ('edit','history_not_append_only'),('tools','configuration_changed'),
     ('released','binding_invalidated'),('worker','worker_unavailable'),
 ])
-@pytest.mark.parametrize('provider', ['codex', 'claude'])
+@pytest.mark.parametrize('provider', ['codex', 'claude', 'gemini'])
 def test_safe_rollovers(change,reason,provider,monkeypatch):
     from codex_gateway.config import get_settings
-    monkeypatch.setattr(get_settings(), 'model_providers', f'claude-test:claude')
+    monkeypatch.setattr(get_settings(), 'model_providers', 'claude-test:claude,gemini-test:gemini')
     async def run():
         async with SessionLocal() as db:
             k=ApiKey(name='rollover',prefix=uuid4().hex[:20],key_hash=uuid4().hex*2)
@@ -204,7 +204,7 @@ def test_safe_rollovers(change,reason,provider,monkeypatch):
             db.add_all([k,w]);await db.commit()
         p=ApiPrincipal(k.id,'test');t=BackendTarget(str(k.id)+':'+str(w.id),w.endpoint,'/tmp',w.id,provider=provider)
         r=req()
-        if provider == 'claude':r.model = 'claude-test'
+        if provider != 'codex':r.model = f'{provider}-test'
         thread=str(uuid4());a=audit_for(r,thread)
         await ex.prepare(r,p,'responses',a)
         rid='resp_'+uuid4().hex

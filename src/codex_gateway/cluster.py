@@ -17,7 +17,7 @@ from .backend import BackendTarget, WorkerFailure
 from .client_tools import ToolProtocolError, tool_outputs
 from .config import get_settings
 from .database import SessionLocal
-from .models import AppNode, PendingToolRoute, Worker
+from .models import AppNode, PendingToolRoute, Worker, ExecutionSession
 from .schemas import BackendResult, BackendStreamEvent, ResponseRequest
 
 router = APIRouter()
@@ -155,6 +155,74 @@ async def pending_route(request, key, backend):
     target = backend.continuation_target(request, key) if hasattr(backend, "continuation_target") else None
     thread = backend.continuation_thread(request, key) if target and hasattr(backend, "continuation_thread") else None
     return target, thread
+
+
+
+async def supersede_tool(db, row, body, sessions):
+    """Called under the ingress checkpoint lock; only the owner cancels a run."""
+    settings = get_settings()
+    if sessions and sessions.has_pending(row.api_key_id, row.thread_id):
+        cancel = getattr(sessions, "supersede_with_user_turn", None)
+        return bool(cancel and await cancel(body, row.api_key_id, row.thread_id, len(row.history_hashes or [])))
+    if not settings.node_id:
+        return False
+    from .execution import history_items, recovery_call_id
+    call_id = recovery_call_id(history_items(body), len(row.history_hashes or []))
+    route = await db.get(PendingToolRoute, (str(row.api_key_id), call_id)) if call_id else None
+    if not route or route.thread_id != row.thread_id or route.node_id == settings.node_id:
+        return False
+    node = await db.scalar(select(AppNode).where(
+        AppNode.id == route.node_id, AppNode.enabled.is_(True),
+        AppNode.heartbeat_at > cutoff(settings)))
+    if not node:
+        raise HTTPException(503, "Pending tool owner is unavailable")
+    payload = {"logical_id": row.logical_id, "key_id": str(row.api_key_id),
+               "response_id": row.response_id, "request": body.model_dump(mode="json")}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(node.gateway_url + "/internal/tools/supersede", json=payload,
+                headers={"Authorization": "Bearer " + settings.manager_token.get_secret_value()})
+            response.raise_for_status()
+            return response.json().get("cancelled") is True
+    except (httpx.HTTPError, ValueError) as exc:
+        # An ambiguous cancellation is never followed by executing a new turn.
+        raise HTTPException(503, "Pending tool cancellation could not be confirmed") from exc
+
+
+@router.post("/internal/tools/supersede", include_in_schema=False)
+async def supersede(request: Request):
+    settings = get_settings()
+    expected = "Bearer " + settings.manager_token.get_secret_value()
+    if not settings.node_id or not hmac.compare_digest(request.headers.get("authorization", ""), expected):
+        raise HTTPException(401, "Unauthorized")
+    from .execution import checkpoint_matches, history_items, recovery_call_id
+    payload = await request.json()
+    body = ResponseRequest.model_validate(payload["request"])
+    async with SessionLocal() as db:
+        row = await db.get(ExecutionSession, payload["logical_id"])
+        if (not row or str(row.api_key_id) != payload["key_id"] or row.response_id != payload["response_id"]
+                or row.state != "waiting_tool" or row.lease_token):
+            raise HTTPException(409, "Pending execution changed")
+        items = history_items(body)
+        if not checkpoint_matches(items, row.history_hashes):
+            raise HTTPException(409, "Pending execution history changed")
+        call_id = recovery_call_id(items, len(row.history_hashes or []))
+        route = await db.get(PendingToolRoute, (str(row.api_key_id), call_id)) if call_id else None
+        worker = await db.get(Worker, row.worker_id) if row.worker_id else None
+        if (not route or route.node_id != settings.node_id or route.thread_id != row.thread_id
+                or not worker or worker.node_id != settings.node_id or not worker.enabled
+                or str(worker.id) != route.target.get("worker_id")
+                or worker.execution_generation != route.target.get("worker_generation")
+                or worker.provider != row.provider or worker.endpoint != route.target.get("endpoint")):
+            raise HTTPException(409, "Pending tool ownership changed")
+        sessions = request.app.state.backend.tool_sessions
+        cancelled = await sessions.supersede_with_user_turn(body, row.api_key_id, row.thread_id, len(row.history_hashes))
+        # A stale route with no live task is also safe to retire. The ingress
+        # retries against the unchanged checkpoint if cancellation lost the race.
+        if cancelled or not sessions.has_pending(row.api_key_id, row.thread_id):
+            await db.delete(route)
+            await db.commit()
+        return {"cancelled": cancelled}
 
 
 async def owner_url(target, settings):

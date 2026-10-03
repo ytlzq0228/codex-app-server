@@ -97,11 +97,12 @@ def test_live_wait_with_completed_tool_output_and_new_user_rebuilds():
     async def run():
         key,w,p,t=await seed();a,b,follow,rid,tid=await checkpoint(key,w,p,t,tool=True)
         cancelled=[]
-        async def cancel(*args):cancelled.append(args)
+        async def cancel(request, key, thread, length):
+            cancelled.append((key, thread))
+            return True
         tools=SimpleNamespace(
             has_pending=lambda *args: True,
-            can_supersede_with_user_turn=lambda *args: True,
-            cancel_thread=cancel,
+            supersede_with_user_turn=cancel,
         )
         prepared,binding=await ex.prepare(follow,p,'responses',b,tool_sessions=tools)
         assert binding is None and prepared.previous_response_id is None

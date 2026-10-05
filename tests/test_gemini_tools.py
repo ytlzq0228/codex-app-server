@@ -67,7 +67,8 @@ def mock_worker(monkeypatch, **overrides):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("streaming", [False, True])
-async def test_gemini_tool_roundtrip_and_usage(gemini_backend, monkeypatch, streaming):
+@pytest.mark.parametrize("is_error", [False, True])
+async def test_gemini_tool_roundtrip_and_usage(gemini_backend, monkeypatch, streaming, is_error):
     state = mock_worker(monkeypatch)
     backend = gemini_backend
     target = BackendTarget("key:worker", "http://worker", "/workspace/key", provider="gemini")
@@ -85,7 +86,7 @@ async def test_gemini_tool_roundtrip_and_usage(gemini_backend, monkeypatch, stre
         assert json.loads(call["arguments"]) == {"query": "dns"}
         assert call["call_id"] != "private-call"
         followup = ResponseRequest(model="gemini-test", input=[
-            {"type": "function_call_output", "call_id": call["call_id"], "output": "client answer"}])
+            {"type": "function_call_output", "call_id": call["call_id"], "output": "client answer", "is_error": is_error}])
         assert backend.continuation_target(followup, "key") is target
         assert backend.continuation_thread(followup, "key") == "thread-a"
         with pytest.raises(ToolProtocolError):
@@ -96,6 +97,7 @@ async def test_gemini_tool_roundtrip_and_usage(gemini_backend, monkeypatch, stre
         assert len([path for path, _ in state["requests"] if path == "/turn"]) == 1
         assert state["requests"][1][1]["tools"][0]["name"] == "gateway_client_0"
         assert state["requests"][2][1]["content"] == [{"type": "text", "text": "client answer"}]
+        assert state["requests"][2][1]["is_error"] is is_error
         with pytest.raises(ToolProtocolError):
             backend.continuation_target(followup, "key")
     finally:

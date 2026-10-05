@@ -18,7 +18,7 @@ from test_execution import audit_for
 @pytest.mark.parametrize('case', [
     'changed_tools', 'reordered_history', 'busy', 'waiting', 'invalid',
     'delta_only', 'missing_output', 'orphan_output', 'duplicate_output', 'tool_tail',
-    'duplicate_call', 'wrong_output_type', 'assistant_tail', 'reminder',
+    'duplicate_call', 'wrong_output_type', 'assistant_tail', 'reminder', 'recovered_history',
 ])
 def test_gemini_completed_history_recovery(monkeypatch, case):
     monkeypatch.setattr(get_settings(), 'model_providers', 'gemini-test:gemini')
@@ -43,7 +43,7 @@ def test_gemini_completed_history_recovery(monkeypatch, case):
             follow.tools = [{'type': 'function', 'name': 'new_memory_tool', 'parameters': {'type': 'object'}}]
         if case == 'delta_only':
             follow.input = follow.input[-1:]
-        if case == 'missing_output':
+        if case in {'missing_output', 'recovered_history'}:
             follow.input.remove(output)
         if case == 'orphan_output':
             follow.input.remove(call)
@@ -64,21 +64,34 @@ def test_gemini_completed_history_recovery(monkeypatch, case):
             row.state = {'waiting': 'waiting_tool', 'invalid': 'invalid'}.get(case, 'ready')
             row.config_hash = ex.configuration(original)
             row.history_hashes = ex.hashes([*original.input, call, output, answer])
+            if case == 'recovered_history':
+                follow.input += [{'role': 'assistant', 'content': 'Recovered without tools'},
+                                 {'role': 'user', 'content': 'Now use new_memory_tool'}]
+                row.history_hashes = ex.hashes(follow.input[:-1])
             if case == 'busy':
                 row.lease_token = str(uuid4())
                 row.lease_until = ex.now() + timedelta(minutes=1)
             await db.commit()
         audit = audit_for(follow, session)
         try:
-            if case in {'changed_tools', 'reordered_history', 'reminder'}:
+            if case in {'changed_tools', 'reordered_history', 'reminder', 'recovered_history'}:
                 prepared, binding = await ex.prepare(follow, principal, 'responses', audit)
                 assert binding is None and prepared.previous_response_id is None
                 assert prepared.input == follow.input
+                assert prepared.tools == follow.tools and prepared.tool_choice != 'none'
                 assert not prepared._execution_auto_resume
-                assert 'already executed' in prepared.input_text()
+                if case != 'recovered_history':
+                    assert 'already executed' in prepared.input_text()
                 assert audit['execution_decision']['action'] == 'new_thread'
                 assert audit['execution_decision']['reason'] == (
                     'history_not_append_only' if case == 'reordered_history' else 'configuration_changed')
+            elif case not in {"busy", "tool_tail", "assistant_tail"}:
+                prepared, binding = await ex.prepare(follow, principal, "responses", audit)
+                assert binding is None and prepared.previous_response_id is None
+                assert prepared.tools == [] and prepared.tool_choice == "none"
+                assert ex.RECOVERY_NOTICE in prepared.instructions
+                assert prepared.input == follow.input
+                assert audit["execution_decision"]["reason"] == "context_only_recovery"
             else:
                 with pytest.raises(HTTPException) as error:
                     await ex.prepare(follow, principal, 'responses', audit)

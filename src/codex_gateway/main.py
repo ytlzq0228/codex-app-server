@@ -948,8 +948,9 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
     request = body.to_response_request()
     validate_capabilities(request)
     await validate_grammars(request)
-    from .cluster import pending_route
-    pending_target, pending_thread = await pending_route(request, principal.key_id, backend)
+    from .cluster import recoverable_pending_route
+    request, pending_target, pending_thread = await recoverable_pending_route(
+        request, principal, "chat.completions", backend, current_audit.get())
     await validate_pending_worker(backend, pending_target, session)
     if pending_target:
         from .audit import track_backend
@@ -1010,8 +1011,9 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
             return openai_error(404, "previous_response_id is no longer available", "previous_response_not_found", param="previous_response_id")
         await touch_response_thread(session, binding)
         body = body.model_copy(update={"previous_response_id": binding.thread_id})
-    from .cluster import pending_route
-    pending_target, pending_thread = await pending_route(body, principal.key_id, backend)
+    from .cluster import recoverable_pending_route
+    body, pending_target, pending_thread = await recoverable_pending_route(
+        body, principal, "responses", backend, current_audit.get())
     if pending_target and binding and pending_target.worker_id != binding.worker_id:
         return openai_error(400, "Tool output and previous_response_id refer to different Workers", "invalid_client_tool")
     await validate_pending_worker(backend, pending_target, session)

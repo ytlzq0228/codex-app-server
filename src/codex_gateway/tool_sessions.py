@@ -7,7 +7,7 @@ import asyncio
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
-from .client_tools import ToolProtocolError, tool_outputs, definitions
+from .client_tools import ToolProtocolError, tool_outputs, definitions, compatible_definitions
 
 
 @dataclass(eq=False)
@@ -54,7 +54,9 @@ class ToolSessions:
         raw_items = request.input if isinstance(request.input, list) else []
         items = [item for item in raw_items
                  if not (isinstance(item, dict) and item.get('type') == 'additional_tools')]
-        if len(items) <= checkpoint_length or not isinstance(items[-1], dict) or items[-1].get('role') != 'user':
+        from .claude_helpers import dialogue_tail
+        tail = dialogue_tail(items)
+        if len(items) <= checkpoint_length or not isinstance(tail, dict) or tail.get('role') != 'user':
             return False
         matches = []
         for item in items[checkpoint_length:]:
@@ -77,12 +79,32 @@ class ToolSessions:
         run = self.pending.get((str(key), call_id))
         if run is None:
             return False
-        if request.model != run.request.model or definitions(request) != definitions(run.request):
+        from .providers import provider_for
+        if provider_for(request.model) != provider_for(run.request.model):
+            raise ToolProtocolError("Cannot change provider while cancelling a pending tool")
+        if provider_for(request.model) == "codex" and (
+                request.model != run.request.model or definitions(request) != definitions(run.request)):
             raise ToolProtocolError("Cannot change model or tools while cancelling a pending tool")
         run.claimed = True
         self.retire((str(key), call_id), "client_tool_call_unavailable")
         run.task.cancel()
         await asyncio.gather(run.task, return_exceptions=True)
+        return True
+
+    async def abandon_thread(self, key, thread_id):
+        """Retire a suspended run before starting a separate context-only turn."""
+        runs = [r for r in self.runs if r.thread_id == thread_id
+                and r.target.connection_key.split(':', 1)[0] == str(key)
+                and not r.task.done()]
+        # Never cancel a result that another request has already accepted.
+        if any(r.claimed or r.reply is None or r.reply.done() for r in runs):
+            return False
+        for run in runs:
+            run.claimed = True
+            if run.call_id:
+                self.retire((str(key), run.call_id), "client_tool_call_unavailable")
+            run.task.cancel()
+        await asyncio.gather(*(r.task for r in runs), return_exceptions=True)
         return True
 
     async def cancel_thread(self, key, thread_id):
@@ -111,8 +133,13 @@ class ToolSessions:
             raise ToolProtocolError('Cannot change model while returning a pending tool output')
         if request.previous_response_id and request.previous_response_id != run.thread_id:
             raise ToolProtocolError('Tool output and previous_response_id refer to different Threads')
-        if definitions(request) and definitions(request) != definitions(run.request):
-            raise ToolProtocolError('Cannot change tools while returning a pending tool output')
+        from .providers import provider_for
+        compatible = (compatible_definitions(request, run.request)
+                      if provider_for(request.model) in {"claude", "gemini"}
+                      else definitions(request) == definitions(run.request))
+        if definitions(request) and not compatible:
+            raise ToolProtocolError('Cannot change tool contracts while returning a pending tool output',
+                "tool_configuration_changed" if provider_for(request.model) in {"claude", "gemini"} else "invalid_client_tool")
         return run
 
     def target_for(self, request, key):
@@ -168,7 +195,7 @@ class ToolSessions:
             run.accepted_call_id=run.call_id
             self.retire((key,run.call_id), 'client_tool_result_duplicate')
             output=tool_outputs(request)[0][1]
-            if getattr(target, "provider", None) == "claude":
+            if getattr(target, "provider", None) in {"claude", "gemini"}:
                 items = request.input if isinstance(request.input, list) else [request.input]
                 run.result_is_error = any(isinstance(item, dict) and item.get("call_id") == run.call_id
                                           and item.get("is_error") is True for item in items)

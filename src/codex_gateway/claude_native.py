@@ -53,6 +53,9 @@ def translate_request(body, model=None, stream=None):
         if role not in {"user", "assistant", "system"}:
             raise ValueError("Unsupported message role")
         content = message["content"]
+        # Claude Code 2.1.288 --bare appends an empty system reminder.
+        if role == "system" and content == []:
+            continue
         if isinstance(content, str):
             content = [{"type": "text", "text": content}]
         if not isinstance(content, list) or not content:

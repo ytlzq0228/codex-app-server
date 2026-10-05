@@ -56,19 +56,31 @@ def definitions(request):
     return result
 
 
+
+def compatible_definitions(request, original):
+    """Order and display descriptions do not change a registered tool contract.
+
+    The suspended run keeps its original alias mapping. New/removed tools,
+    schemas, kinds and grammars still require a fresh execution.
+    """
+    def contracts(body):
+        return {(s["namespace"], s["name"]):
+                {k: v for k, v in s.items() if k not in {"alias", "description"}}
+                for s in definitions(body)}
+    return contracts(request) == contracts(original)
+
 def tool_outputs(request):
     items = request.input if isinstance(request.input,list) else [request.input]
-    # Claude Code appends per-turn system reminders after tool_result blocks.
+    # Clients append system/developer reminders after tool results, including
+    # Codex image_resize_notice messages after image outputs.
     # Preserve those reminders in the relay reply while retaining the original
     # request/history for audit and prefix verification. A new user message is
     # deliberately not consumed as a tool result.
-    from .providers import provider_for
     reminders = []
-    if provider_for(getattr(request, "model", "")) == "claude":
-        items = list(items)
-        while items and isinstance(items[-1], dict) and items[-1].get("role") in {"system", "developer"}:
-            reminder = items.pop()
-            reminders.insert(0, request._item_text(reminder))
+    items = list(items)
+    while items and isinstance(items[-1], dict) and items[-1].get("role") in {"system", "developer"}:
+        reminder = items.pop()
+        reminders.insert(0, request._item_text(reminder))
     outputs = []
     for item in reversed(items):
         if not isinstance(item,dict) or item.get('type') not in {'function_call_output','custom_tool_call_output'}:

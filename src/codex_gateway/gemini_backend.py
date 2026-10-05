@@ -160,7 +160,8 @@ class GeminiAdapter:
                             output = await self.tool_sessions.receive_result(tool_run)
                             content = ([{"type": "text", "text": output}] if isinstance(output, str)
                                        else [{"type": "text", "text": part["text"]} for part in output])
-                            await worker_rpc(target.endpoint, self.settings, "/tool-result", {**reply, "content": content})
+                            await worker_rpc(target.endpoint, self.settings, "/tool-result", {**reply, "content": content,
+                                             "is_error": tool_run.result_is_error})
                             continue
                         if data.get("done") and grammar_needs_correction:
                             raise ToolProtocolError("Model ended without correcting the invalid client tool input")

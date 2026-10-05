@@ -158,6 +158,20 @@ async def pending_route(request, key, backend):
 
 
 
+async def recoverable_pending_route(body, principal, endpoint, backend, audit):
+    try:
+        target, thread = await pending_route(body, principal.key_id, backend)
+        return body, target, thread
+    except ToolProtocolError as exc:
+        if exc.code not in {"client_tool_call_unavailable", "tool_configuration_changed"}:
+            raise
+        from .execution import recover_lost_output
+        recovered = await recover_lost_output(body, principal, endpoint, audit)
+        if recovered is None:
+            raise
+        return recovered, None, None
+
+
 async def supersede_tool(db, row, body, sessions):
     """Called under the ingress checkpoint lock; only the owner cancels a run."""
     settings = get_settings()
@@ -222,6 +236,78 @@ async def supersede(request: Request):
         if cancelled or not sessions.has_pending(row.api_key_id, row.thread_id):
             await db.delete(route)
             await db.commit()
+        return {"cancelled": cancelled}
+
+
+async def abandon_tool(db, row, sessions):
+    """Cancel by server-owned execution identity, never a client-supplied call ID.
+
+    The ingress holds the execution row lock across owner acknowledgement. This
+    is cancellation only: submitted history is not used to resume the old run.
+    """
+    settings = get_settings()
+    from .models import PendingToolRoute
+    routes = list((await db.scalars(select(PendingToolRoute).where(
+        PendingToolRoute.key_id == str(row.api_key_id),
+        PendingToolRoute.thread_id == row.thread_id,
+    ))).all())
+    owners = {route.node_id for route in routes if route.node_id != settings.node_id}
+    # Routes can expire before the suspended pump exits. Ask its worker owner too.
+    worker = await db.get(Worker, row.worker_id) if row.worker_id else None
+    if settings.node_id and worker and worker.node_id and worker.node_id != settings.node_id:
+        owners.add(worker.node_id)
+    if sessions and not await sessions.abandon_thread(row.api_key_id, row.thread_id):
+        return False
+    if not sessions and not owners:
+        return False
+    payload = {"logical_id": row.logical_id, "key_id": str(row.api_key_id),
+               "response_id": row.response_id, "thread_id": row.thread_id}
+    for owner in sorted(owners):
+        node = await db.scalar(select(AppNode).where(
+            AppNode.id == owner, AppNode.enabled.is_(True),
+            AppNode.heartbeat_at > cutoff(settings)))
+        if not node:
+            raise HTTPException(503, "Pending tool owner is unavailable")
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                response = await client.post(node.gateway_url + "/internal/tools/abandon",
+                    json=payload, headers={"Authorization": "Bearer " + settings.manager_token.get_secret_value()})
+                response.raise_for_status()
+                if response.json().get("cancelled") is not True:
+                    return False
+        except (httpx.HTTPError, ValueError) as exc:
+            raise HTTPException(503, "Pending tool cancellation could not be confirmed") from exc
+    for route in routes:
+        await db.delete(route)
+    return True
+
+
+@router.post("/internal/tools/abandon", include_in_schema=False)
+async def abandon(request: Request):
+    settings = get_settings()
+    expected = "Bearer " + settings.manager_token.get_secret_value()
+    if not settings.node_id or not hmac.compare_digest(request.headers.get("authorization", ""), expected):
+        raise HTTPException(401, "Unauthorized")
+    payload = await request.json()
+    async with SessionLocal() as db:
+        # No FOR UPDATE here: ingress owns this lock until cancellation is confirmed.
+        row = await db.get(ExecutionSession, payload.get("logical_id"))
+        if (not row or str(row.api_key_id) != payload.get("key_id")
+                or row.response_id != payload.get("response_id")
+                or row.thread_id != payload.get("thread_id")
+                or row.provider not in {"claude", "gemini"}
+                or row.state != "waiting_tool" or row.lease_token):
+            raise HTTPException(409, "Pending execution changed")
+        routes = list((await db.scalars(select(PendingToolRoute).where(
+            PendingToolRoute.key_id == str(row.api_key_id),
+            PendingToolRoute.thread_id == row.thread_id,
+            PendingToolRoute.node_id == settings.node_id,
+        ))).all())
+        worker = await db.get(Worker, row.worker_id) if row.worker_id else None
+        if not routes and (not worker or worker.node_id != settings.node_id):
+            raise HTTPException(409, "Pending execution belongs to another node")
+        cancelled = await request.app.state.backend.tool_sessions.abandon_thread(row.api_key_id, row.thread_id)
+        # The ingress retires routes in the same transaction as the new lease.
         return {"cancelled": cancelled}
 
 

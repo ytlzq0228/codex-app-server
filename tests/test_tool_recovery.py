@@ -88,12 +88,15 @@ async def setup_waiting(legacy=True, owner=""):
     return principal, worker, target, first, follow, client_id, audit["execution"]["logical_id"], thread, sessions
 
 
+@pytest.mark.parametrize("reminder", [False, True])
 @pytest.mark.parametrize("legacy", [True, False])
 @pytest.mark.parametrize("expired", [True, False])
-def test_rejected_tool_then_continue_rebuilds_verified_history(monkeypatch, legacy, expired):
+def test_rejected_tool_then_continue_rebuilds_verified_history(monkeypatch, legacy, expired, reminder):
     monkeypatch.setattr(get_settings(), "model_providers", "claude-recovery:claude")
     async def run():
         p, w, t, first, follow, cid, logical, thread, sessions = await setup_waiting(legacy)
+        if reminder:
+            follow.input.append({"role": "developer", "content": "<total_tokens>15000000 tokens left</total_tokens>"})
         if expired:
             await sessions.close()
             async with SessionLocal() as db:
@@ -105,7 +108,7 @@ def test_rejected_tool_then_continue_rebuilds_verified_history(monkeypatch, lega
             prepared, binding = await ex.prepare(follow, p, "responses", audit, tool_sessions=sessions)
             assert binding is None and prepared.previous_response_id is None
             assert prepared.input == follow.input
-            assert prepared.input[-1]["content"] == "继续"
+            assert ex.has_new_user_turn(prepared.input)
             assert prepared.input[3]["is_error"] is True
             assert audit["execution_decision"]["reason"] == ("pending_tool_lost" if expired else "pending_tool_superseded")
             assert audit["execution"]["history"] == ex.hashes(follow.input)
@@ -119,7 +122,7 @@ def test_rejected_tool_then_continue_rebuilds_verified_history(monkeypatch, lega
 
 @pytest.mark.parametrize("tamper", ["arguments", "call_id", "duplicate", "partial", "tool_name"])
 @pytest.mark.parametrize("expired", [False, True])
-def test_recovery_does_not_bypass_tool_or_history_checks(monkeypatch, tamper, expired):
+def test_edited_history_only_recovers_as_separate_no_tools_context(monkeypatch, tamper, expired):
     monkeypatch.setattr(get_settings(), "model_providers", "claude-recovery:claude")
     async def run():
         p, w, t, first, follow, cid, logical, thread, sessions = await setup_waiting()
@@ -130,19 +133,25 @@ def test_recovery_does_not_bypass_tool_or_history_checks(monkeypatch, tamper, ex
         if tamper == "duplicate": follow.input.insert(4, copy.deepcopy(follow.input[3]))
         if tamper == "partial": follow.input.pop(0)
         if tamper == "tool_name": follow.input[2]["name"] = "Other"
+        audit = audit_for(follow, cid)
         try:
-            with pytest.raises(HTTPException) as error:
-                await ex.prepare(follow, p, "responses", audit_for(follow, cid), tool_sessions=sessions)
-            assert error.value.status_code == 409
-            assert sessions.has_pending(p.key_id, thread) == (not expired)
+            prepared, binding = await ex.prepare(follow, p, "responses", audit, tool_sessions=sessions)
+            assert binding is None and prepared.previous_response_id is None
+            assert prepared.tools == [] and prepared.tool_choice == "none"
+            assert ex.RECOVERY_NOTICE in prepared.instructions
+            assert prepared.input == follow.input
+            assert audit["execution_decision"]["reason"] == "context_only_recovery"
+            assert not sessions.has_pending(p.key_id, thread)
         finally:
+            await ex.cleanup(audit)
             await sessions.close()
     with TestClient(app) as client:
         client.portal.call(run)
 
 
+@pytest.mark.parametrize("missing_checkpoint", [False, True])
 @pytest.mark.parametrize("failure", [None, "timeout"])
-def test_cross_node_recovery_cancels_on_owner_before_rebuild(monkeypatch, failure):
+def test_cross_node_recovery_cancels_on_owner_before_rebuild(monkeypatch, failure, missing_checkpoint):
     from contextvars import ContextVar
     from dataclasses import asdict
     monkeypatch.setattr(get_settings(), "model_providers", "claude-recovery:claude")
@@ -152,6 +161,9 @@ def test_cross_node_recovery_cancels_on_owner_before_rebuild(monkeypatch, failur
         ingress = settings.model_copy(update={"node_id": "recovery-ingress"})
         owner = settings.model_copy(update={"node_id": "recovery-owner"})
         async with SessionLocal() as db:
+            if missing_checkpoint:
+                row = await db.get(ExecutionSession, logical)
+                row.history_hashes = None
             node = await db.get(AppNode, owner.node_id)
             if not node:
                 node = AppNode(id=owner.node_id, gateway_url="http://owner", manager_url="http://manager")
@@ -194,11 +206,11 @@ def test_cross_node_recovery_cancels_on_owner_before_rebuild(monkeypatch, failur
             else:
                 prepared, binding = await ex.prepare(follow, p, "responses", audit, tool_sessions=empty)
                 assert binding is None and prepared.input == follow.input
-                assert audit["execution_decision"]["reason"] == "pending_tool_superseded"
+                assert audit["execution_decision"]["reason"] == ("context_only_recovery" if missing_checkpoint else "pending_tool_superseded")
                 assert not sessions.has_pending(p.key_id, thread)
                 async with SessionLocal() as db:
                     assert await db.get(PendingToolRoute, (str(p.key_id), call()["call_id"])) is None
-            assert seen == ["/internal/tools/supersede"]
+            assert seen == ["/internal/tools/abandon" if missing_checkpoint else "/internal/tools/supersede"]
         finally:
             await ex.cleanup(audit)
             await sessions.close()

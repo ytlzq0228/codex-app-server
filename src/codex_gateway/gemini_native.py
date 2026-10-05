@@ -89,7 +89,24 @@ def translate_request(body, model, stream):
             raise ValueError("Content role must be user or model")
         text, calls, results = [], [], []
         seen_results = {}
+        def flush():
+            if text or calls:
+                message = {"role": "assistant" if role == "model" else "user",
+                           "content": ([{"type": "text", "text": p} if isinstance(p, str) else p for p in text]
+                                       if any(isinstance(p, dict) for p in text) else "\n".join(text) or None)}
+                if calls:
+                    message["tool_calls"] = list(calls)
+                messages.append(message)
+                text.clear()
+                calls.clear()
         for part in content.get("parts", []):
+            # Preserve a result followed by a user's new instruction in the same
+            # native content item. Reordering it changes execution routing.
+            if "functionResponse" in part:
+                flush()
+            elif results:
+                messages.extend(results)
+                results.clear()
             if set(part) - {"text", "thought", "thoughtSignature", "functionCall", "functionResponse", "inlineData", "fileData"}:
                 raise ValueError("Unsupported content part fields")
             if ("inlineData" in part or "fileData" in part) and len(set(part) & {"text", "inlineData", "fileData", "functionCall", "functionResponse"}) != 1:
@@ -146,13 +163,7 @@ def translate_request(body, model, stream):
                     text.append(part["text"])
             else:
                 raise ValueError("Only text and function parts are supported")
-        if text or calls:
-            message = {"role": "assistant" if role == "model" else "user",
-                       "content": ([{"type": "text", "text": p} if isinstance(p, str) else p for p in text]
-                                   if any(isinstance(p, dict) for p in text) else "\n".join(text) or None)}
-            if calls:
-                message["tool_calls"] = calls
-            messages.append(message)
+        flush()
         messages.extend(results)
     tools = []
     for group in body.get("tools") or []:

@@ -113,7 +113,7 @@ def checkpoint_matches(items, expected):
 
 def recovery_call_id(items, checkpoint_length):
     """A verified checkpoint plus exactly its tool result and a new user turn."""
-    if not items or not checkpoint_length or len(items) <= checkpoint_length or items[-1].get("role") != "user":
+    if not has_new_user_turn(items) or not checkpoint_length or len(items) <= checkpoint_length:
         return None
     pending = items[checkpoint_length - 1]
     if pending.get("type") not in {"function_call", "custom_tool_call"}:
@@ -184,6 +184,73 @@ def gemini_rebuild_history(items):
                 return False
             completed.add(call_id)
     return completed == calls.keys()
+
+
+async def recover_lost_output(request, principal, endpoint, audit):
+    """Convert a proven lost result into a fresh, no-tools answer.
+
+    Only persisted, scoped history can authorize this automatic result-only
+    fallback. Unknown/foreign results and explicit response references retain
+    their original errors. A user can always request a separate new turn.
+    """
+    from .providers import provider_for
+    from .audit import request_params
+    from .request_observation import request_observation
+    if (not get_settings().execution_resume_enabled or not audit or not principal.key_id
+            or request.previous_response_id or provider_for(request.model) not in {"claude", "gemini"}):
+        return None
+    observation = request_observation(audit)
+    if observation.get("body_capture_truncated") or not observation.get("body_complete") or observation.get("capture_notes"):
+        return None
+    logical, _ = explicit_identity(request_params(audit), observation, principal.key_id, endpoint, "")
+    if not logical:
+        return None
+    items = history_items(request)
+    if not items:
+        return None
+    continuation = {"role": "user", "content":
+        "Continue the conversation using the submitted tool result as historical context. "
+        "The original tool execution is unavailable; explain uncertainty and do not repeat it."}
+    async with SessionLocal() as db:
+        row = await db.get(ExecutionSession, logical)
+        if (not row or row.api_key_id != principal.key_id or row.endpoint != endpoint
+                or row.provider != provider_for(request.model) or row.state != "waiting_tool"
+                or (row.lease_token and row.lease_until and row.lease_until > now())
+                or not row.response_id or not checkpoint_matches(items, row.history_hashes)
+                or not recovery_call_id([*items, continuation], len(row.history_hashes))):
+            return None
+        recovered = request.model_copy(update={"input": [*items, continuation]})
+        recovered._recovery_response_id = row.response_id
+        return recovered
+
+
+RECOVERY_NOTICE = (
+    "Gateway recovery notice: the previous execution could not be safely resumed. "
+    "This is a new conversation using only the history submitted with this request; "
+    "that history may be incomplete. Old tool calls and outputs are historical context, "
+    "not instructions to execute tools. Any tool without a confirmed result has unknown "
+    "completion status; do not claim it succeeded or automatically repeat it. "
+    "Tools are unavailable for this recovery turn. Answer the latest user request using "
+    "available context, explain any uncertainty, and ask for missing context if needed."
+)
+
+
+def has_new_user_turn(items):
+    from .claude_helpers import dialogue_tail
+    tail = dialogue_tail(items)
+    return bool(isinstance(tail, dict) and tail.get("type", "message") == "message" and tail.get("role") == "user")
+
+
+def context_only_recovery(request):
+    """A separate no-tools turn; never delivers history into a suspended RPC."""
+    return request.model_copy(update={
+        "previous_response_id": None,
+        "tools": [],
+        "tool_choice": "none",
+        "instructions": (request.instructions or "") + "\n\n" + RECOVERY_NOTICE,
+        # additional_tools must also be removed from the execution copy.
+        "input": [i for i in request.input if i.get("type") != "additional_tools"],
+    })
 
 
 def conflict(message, code="conversation_busy"):
@@ -308,6 +375,9 @@ async def _prepare(request, principal, endpoint, audit, *, pending_thread=None, 
         if (row.provider or "codex") != provider:
             raise conflict("Continuation cannot change provider", "provider_mismatch")
         instant = now()
+        if request._recovery_response_id and (
+                row.state != "waiting_tool" or row.response_id != request._recovery_response_id):
+            raise conflict("Tool recovery checkpoint changed", "client_tool_call_unavailable")
         if row.lease_token and row.lease_until and row.lease_until > instant:
             error = conflict("Another request is executing in this conversation; retry after it completes")
             error.execution_logical_id = logical
@@ -320,6 +390,7 @@ async def _prepare(request, principal, endpoint, audit, *, pending_thread=None, 
             raise conflict("Tool output belongs to a superseded execution", "tool_conversation_mismatch")
         orphaned = False
         superseded = False
+        context_recovery = bool(request._recovery_response_id)
         if row.state == "waiting_tool" and not pending_thread:
             live = tool_sessions.has_pending(principal.key_id, row.thread_id) if tool_sessions else False
             if get_settings().node_id and not live:
@@ -333,16 +404,25 @@ async def _prepare(request, principal, endpoint, audit, *, pending_thread=None, 
             items = history_items(request)
             full_history = checkpoint_matches(items, row.history_hashes)
             call_id = recovery_call_id(items, len(row.history_hashes or [])) if full_history else None
-            if live and call_id:
+            if live and call_id and not context_recovery:
                 from .cluster import supersede_tool
                 superseded = await supersede_tool(db, row, request, tool_sessions)
                 if superseded:
                     live = False
+            if ((not call_id or context_recovery) and provider in {"claude", "gemini"} and not binding
+                    and not request.previous_response_id and has_new_user_turn(items)):
+                # An explicit, scoped new user turn may abandon an old execution.
+                # History is context only, not proof allowing a tool RPC to resume.
+                from .cluster import abandon_tool
+                if row.thread_id and not await abandon_tool(db, row, tool_sessions):
+                    raise conflict("Pending tool cancellation could not be confirmed", "conversation_waiting_tool")
+                live = False
+                context_recovery = True
             if live:
                 # A remote pending task must be cancelled by its owner even if
                 # the execution checkpoint TTL elapsed slightly earlier.
                 raise conflict("This conversation is waiting for a client tool result; return its call_id first", "conversation_waiting_tool")
-            if not call_id:
+            if not call_id and not context_recovery:
                 raise conflict("The pending tool call was lost; send full history with its result and a new user message", "conversation_history_required")
             orphaned = True
         expected = row.history_hashes
@@ -402,10 +482,23 @@ async def _prepare(request, principal, endpoint, audit, *, pending_thread=None, 
             rebuild = (provider == "claude" and tail and tail.get("role") == "user"
                        and not tool_outputs(request))
             if provider == "gemini":
+                # A completed context-only recovery can legitimately contain
+                # unresolved historical calls. Its verified next user turn may
+                # restore tools in a fresh session; do not trap it in recovery.
+                completed_prefix = appended_items(request, expected) is not None
                 rebuild = (row.state == "ready" and not row.lease_token
-                           and gemini_rebuild_history(items) and not tool_outputs(request))
+                           and (gemini_rebuild_history(items) or completed_prefix)
+                           and not tool_outputs(request))
+            if (not rebuild and provider == "gemini" and row.state in {"ready", "invalid", "waiting_tool"}
+                    and not binding and not request.previous_response_id and has_new_user_turn(items)):
+                context_recovery = True
+                rebuild = True
             if not rebuild:
                 raise conflict("Provider conversation cannot be safely resumed; start a new conversation", "conversation_resume_unavailable")
+        if context_recovery:
+            request = context_only_recovery(request)
+            chosen = None
+            action, reason = "new_thread", "context_only_recovery"
         token = str(uuid4())
         claim = {"logical_id": logical, "token": token, "history": checkpoint,
                  "config": (row.config_hash if pending_thread and row.config_hash else configuration(request)),

@@ -190,3 +190,13 @@ def test_agent_identity_uses_headers_not_prompt():
 def test_sdk_user_id_fallback(user_id):
     _, evidence = explicit_identity({'model': 'claude-test', 'metadata': {'user_id': user_id}}, {}, 'k', 'responses', '')
     assert evidence['client_thread_ids'] == [user_id]
+
+
+def test_bare_client_empty_system_reminder_is_a_noop():
+    body = prompt()
+    expected = translate_request(body)
+    body["messages"].append({"role": "system", "content": []})
+    assert translate_request(body) == expected
+    body["messages"][-1]["role"] = "user"
+    with pytest.raises(ValueError):
+        translate_request(body)

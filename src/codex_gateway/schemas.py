@@ -31,6 +31,7 @@ class ResponseRequest(OpenAIRequestModel):
     _execution_input_text: str | None = PrivateAttr(default=None)
     _execution_input_items: list[Any] | None = PrivateAttr(default=None)
     _execution_auto_resume: bool = PrivateAttr(default=False)
+    _recovery_response_id: str | None = PrivateAttr(default=None)
     model: str
     input: str | dict[str, Any] | list[Any]
     instructions: str | None = None

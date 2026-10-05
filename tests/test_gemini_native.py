@@ -112,3 +112,19 @@ def test_resume_duplicate_function_results(conflicting):
     else:
         translated = translate_request(body, "gemini", False)
         assert len([m for m in translated["messages"] if m["role"] == "tool"]) == 1
+
+
+@pytest.mark.parametrize("result_first", [True, False])
+def test_tool_result_and_user_text_keep_wire_order(result_first):
+    part = function_part({"id": "call_order", "function": {"name": "read_file", "arguments": "{}"}})
+    output = {"functionResponse": {"name": "read_file", "id": "call_order", "response": {"error": "denied"}}}
+    text = {"text": "Continue without the tool"}
+    body = prompt()
+    body["contents"] += [
+        {"role": "model", "parts": [part]},
+        {"role": "user", "parts": [output, text] if result_first else [text, output]},
+    ]
+    result = translate_request(body, "gemini", False)
+    assert [m["role"] for m in result["messages"][-2:]] == (
+        ["tool", "user"] if result_first else ["user", "tool"])
+    assert "denied" in result["messages"][-2 if result_first else -1]["content"]

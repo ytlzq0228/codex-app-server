@@ -96,7 +96,7 @@ def test_claude_agents_isolate_leases_and_authenticated_tools(monkeypatch):
     ('claude', [{'role': 'assistant', 'content': 'done'}, {'role': 'developer', 'content': 'environment'}], False),
     ('claude', [{'type': 'function_call_output', 'call_id': 'c', 'output': 'ok'}], False),
     ('claude', [{'type': 'function_call_output', 'call_id': 'c', 'output': 'ok'}, {'role': 'developer', 'content': 'reminder'}], False),
-    ('gemini', [{'role': 'user', 'content': 'new turn'}], False),
+    ('gemini', [{'role': 'user', 'content': 'new turn'}], True),
 ])
 def test_provider_rebuild_requires_user_history(monkeypatch, provider, tail, allowed):
     from codex_gateway.config import get_settings

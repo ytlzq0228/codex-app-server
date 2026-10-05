@@ -2,7 +2,7 @@ import asyncio
 import json
 from types import SimpleNamespace
 import pytest
-from codex_gateway.client_tools import definitions,validate,public_call,ToolProtocolError
+from codex_gateway.client_tools import definitions,validate,public_call,ToolProtocolError,tool_outputs
 from codex_gateway.schemas import ResponseRequest,BackendStreamEvent,ChatCompletionRequest,BackendResult
 from codex_gateway.backend import BackendTarget
 from codex_gateway.tool_sessions import ToolSessions
@@ -43,8 +43,9 @@ def test_chat_tools_and_returned_result_conversion():
     assert r.to_response_request().input==[{'type':'function_call_output','call_id':'call_a','output':'answer'}]
 
 
+@pytest.mark.parametrize('reminder', [False, True])
 @pytest.mark.asyncio
-async def test_dynamic_continuation_is_scoped_and_not_reexecuted():
+async def test_dynamic_continuation_is_scoped_and_not_reexecuted(reminder):
     sessions=None
     executions=[]
     async def events(req,target,run):
@@ -60,14 +61,57 @@ async def test_dynamic_continuation_is_scoped_and_not_reexecuted():
     first=[e async for e in sessions.stream(request(),target)]
     assert first[0].tool_call['call_id']=='call_a'
     continued=ResponseRequest(model='test',input=[{'type':'function_call_output','call_id':'call_a','output':'client answer'}])
+    if reminder:
+        continued.input.append({'role':'developer','content':'Updated environment context'})
     with pytest.raises(ToolProtocolError):sessions.target_for(continued,'other-key')
     assert sessions.target_for(continued,'key')==target
     final=[e async for e in sessions.stream(continued,target)]
-    assert final[0].delta=='client answer'
+    assert final[0].delta==('client answer\n\nDEVELOPER:\nUpdated environment context' if reminder else 'client answer')
     assert (final[-1].input_tokens, final[-1].output_tokens, final[-1].cache_read_tokens, final[-1].cache_write_tokens)==(5,1,3,1)
     assert executions==['started']
     with pytest.raises(ToolProtocolError):sessions.target_for(continued,'key')
     await sessions.close()
+
+
+@pytest.mark.parametrize('kind', ['function_call_output', 'custom_tool_call_output'])
+@pytest.mark.parametrize('notice', ['<image_resize_notice>Image resized.</image_resize_notice>',
+    'Current working directory changed.', 'Remaining token budget: 10000', 'Follow the updated project instructions.'])
+@pytest.mark.parametrize('output', ['text result', [{'type':'input_text','text':'text result'}],
+    [{'type':'input_image','image_url':'https://example.com/image.png'}]])
+def test_codex_result_with_trailing_reminders_preserves_input(kind, notice, output):
+    import copy
+    body = ResponseRequest(model='gpt-6-astra', input=[
+        {'type':kind, 'call_id':'call_image', 'output':output},
+        {'type':'message', 'role':'developer', 'content':[{'type':'input_text','text':notice}]},
+        {'role':'system', 'content':'context reminder'},
+    ])
+    original = copy.deepcopy(body.input)
+    suffix = 'DEVELOPER:\n' + notice + '\n\nSYSTEM:\ncontext reminder'
+    expected = output + '\n\n' + suffix if isinstance(output, str) else [
+        *output, {'type':'input_text', 'text':suffix}]
+    assert tool_outputs(body) == [('call_image', expected)]
+    assert body.input == original
+
+
+@pytest.mark.parametrize('role', ['user', 'assistant'])
+def test_codex_reminder_does_not_cross_dialogue_boundary(role):
+    body = ResponseRequest(model='gpt-6-astra', input=[
+        {'type':'custom_tool_call_output','call_id':'call_old','output':'done'},
+        {'role':role,'content':'new message'},
+        {'role':'developer','content':'context reminder'},
+    ])
+    assert tool_outputs(body) == []
+
+
+@pytest.mark.parametrize('invalid', ['missing_call_id', 'duplicate_call_id'])
+def test_codex_trailing_developer_preserves_tool_validation(invalid):
+    output = {'type':'function_call_output','call_id':'call_a','output':'done'}
+    items = [output, dict(output)] if invalid == 'duplicate_call_id' else [
+        {**output, 'call_id':''}]
+    body = ResponseRequest(model='gpt-6-astra', input=[*items,
+        {'role':'developer','content':'Updated environment context'}])
+    with pytest.raises(ToolProtocolError):
+        tool_outputs(body)
 
 
 @pytest.mark.asyncio

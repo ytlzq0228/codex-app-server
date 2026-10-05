@@ -154,10 +154,13 @@ def test_bounded_wait_rechecks_state_and_cleans_up(monkeypatch, mode):
                 task.cancel()
                 with pytest.raises(asyncio.CancelledError):
                     await task
-            elif mode == 'release':
-                await task
+            elif mode in {'release', 'waiting_tool'}:
+                prepared, binding = await task
                 assert b['execution_decision']['action'] == 'new_thread'
                 assert b['execution_decision']['wait_ms'] > 0
+                if mode == 'waiting_tool':
+                    assert prepared.tool_choice == 'none'
+                    assert b['execution_decision']['reason'] == 'context_only_recovery'
             else:
                 with pytest.raises(HTTPException) as error:
                     await task
@@ -167,7 +170,7 @@ def test_bounded_wait_rechecks_state_and_cleans_up(monkeypatch, mode):
                     expected = 'conversation_history_required' if mode == 'waiting_tool' else 'conversation_busy'
                     assert error.value.detail['error']['code'] == expected
             assert not ex._waiters
-            if mode != 'release':
+            if mode not in {'release', 'waiting_tool'}:
                 assert 'execution' not in b
         finally:
             if task and not task.done():

@@ -22,6 +22,7 @@ from .security import generate_api_key, hash_api_key, hash_password
 from .user_auth import cookie_secure, digest, issue_session, require_user
 
 from .usernames import username_prefix
+from .user_usage import recent_user_usage
 
 router = APIRouter()
 
@@ -72,7 +73,8 @@ async def account(request: Request, identity=Depends(require_user), db: AsyncSes
     from .quota import quota_summary
     from .providers import allowed_providers
     return render(request, identity, page="account", keys=keys, pagination=pagination, quota=await quota_summary(db, identity.username),
-                  account_providers=sorted(await allowed_providers(db, identity.username)))
+                  account_providers=sorted(await allowed_providers(db, identity.username)),
+                  recent_usage=await recent_user_usage(db, identity.username))
 
 
 @router.post("/user/account/key")

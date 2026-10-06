@@ -218,3 +218,89 @@ async def test_login_reads_real_pty_after_fast_child_exit(worker,monkeypatch):
     assert 'Login successful' in session.text
     assert session.state()['logged_in']
     assert not session.error
+
+
+@pytest.mark.asyncio
+async def test_bridge_progress_and_tool_result_refresh_deadlines(worker, monkeypatch):
+    import asyncio
+    import json
+    bridge_module = sys.modules["client_bridge"]
+    monkeypatch.setattr(bridge_module, "INFERENCE_IDLE_TIMEOUT", .08)
+    monkeypatch.setattr(bridge_module, "INFERENCE_STAGE_TIMEOUT", .22)
+    bridge = worker.ToolBridge([])
+    stdout = asyncio.StreamReader()
+    stream = bridge.messages(stdout)
+    async def produce():
+        for _ in range(6):
+            await asyncio.sleep(.025)
+            stdout.feed_data((json.dumps({"type": "stream_event", "event": {
+                "type": "content_block_delta"}}) + "\n").encode())
+    producer = asyncio.create_task(produce())
+    try:
+        for _ in range(6):
+            assert (await anext(stream))["type"] == "stream_event"
+        await producer
+        old_stage = bridge.stage_started
+        future = asyncio.get_running_loop().create_future()
+        bridge.pending["call"] = future
+        # Waiting for a client tool must not consume the inference-stage budget.
+        next_event = asyncio.create_task(anext(stream))
+        await asyncio.sleep(.24)
+        assert not next_event.done()
+        bridge.resolve("call", {})
+        bridge.pending.pop("call")
+        assert bridge.stage_started > old_stage
+        stdout.feed_data(b'{"type":"result"}\n')
+        assert (await next_event)["type"] == "result"
+    finally:
+        await stream.aclose()
+        await producer
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("limit", ["idle", "stage", "total"])
+async def test_bridge_timeouts_remain_bounded(worker, monkeypatch, limit):
+    import asyncio
+    bridge_module = sys.modules["client_bridge"]
+    monkeypatch.setattr(bridge_module, "INFERENCE_IDLE_TIMEOUT", .04 if limit == "idle" else 10)
+    monkeypatch.setattr(bridge_module, "INFERENCE_STAGE_TIMEOUT", .04 if limit == "stage" else 10)
+    monkeypatch.setattr(bridge_module, "EXECUTION_TIMEOUT", .04 if limit == "total" else 10)
+    bridge = worker.ToolBridge([])
+    if limit == "total":
+        bridge.pending["call"] = asyncio.get_running_loop().create_future()
+    stream = bridge.messages(asyncio.StreamReader())
+    try:
+        with pytest.raises(TimeoutError, match="execution timed out"):
+            async with asyncio.timeout(1):
+                async for _ in stream:
+                    pass
+    finally:
+        await stream.aclose()
+
+
+@pytest.mark.asyncio
+async def test_bridge_stage_limit_survives_continuous_output(worker, monkeypatch):
+    import asyncio
+    bridge_module = sys.modules["client_bridge"]
+    monkeypatch.setattr(bridge_module, "INFERENCE_IDLE_TIMEOUT", .1)
+    monkeypatch.setattr(bridge_module, "INFERENCE_STAGE_TIMEOUT", .12)
+    bridge = worker.ToolBridge([])
+    stdout = asyncio.StreamReader()
+    stream = bridge.messages(stdout)
+    async def produce():
+        while True:
+            stdout.feed_data(b'{"type":"stream_event","event":{"type":"content_block_delta"}}\n')
+            await asyncio.sleep(.01)
+    producer = asyncio.create_task(produce())
+    received = 0
+    try:
+        with pytest.raises(TimeoutError, match="execution timed out"):
+            async with asyncio.timeout(1):
+                async for event in stream:
+                    if event.get("type") == "stream_event":
+                        received += 1
+        assert received >= 2
+    finally:
+        producer.cancel()
+        await asyncio.gather(producer, return_exceptions=True)
+        await stream.aclose()

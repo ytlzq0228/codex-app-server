@@ -83,8 +83,12 @@ class ToolSessions:
         if provider_for(request.model) != provider_for(run.request.model):
             raise ToolProtocolError("Cannot change provider while cancelling a pending tool")
         if provider_for(request.model) == "codex" and (
-                request.model != run.request.model or definitions(request) != definitions(run.request)):
+                request.model != run.request.model or (definitions(request)
+                and definitions(request) != definitions(run.request))):
             raise ToolProtocolError("Cannot change model or tools while cancelling a pending tool")
+        # A verified new user turn (including compaction) may omit tools.
+        # Cancellation starts a fresh thread; it never resumes the old RPC or
+        # inherits its tools. Explicit incompatible definitions remain invalid.
         run.claimed = True
         self.retire((str(key), call_id), "client_tool_call_unavailable")
         run.task.cancel()

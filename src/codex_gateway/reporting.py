@@ -19,6 +19,7 @@ from .self_service import render
 from .user_auth import require_user
 from .history import conversation_history
 from .billing import priced_amount
+from .user_usage import recent_user_usage
 from .request_detail import readable_fields, observation_fields, request_texts
 
 router = APIRouter()
@@ -61,7 +62,8 @@ async def usage(request: Request, q: str = "", model: str = "", status: str = ""
         page=page_number(request), filters=filters, status=status, summaries_only=True)
     return render(request, identity, page="usage", history=history, history_groups=[],
         total=history["total"], request_total=history["request_total"],
-        number=history["page"], pages=history["pages"], show_cost=True)
+        number=history["page"], pages=history["pages"], show_cost=True,
+        recent_usage=await recent_user_usage(db, identity.username))
 
 
 @router.get("/user/usage/requests")

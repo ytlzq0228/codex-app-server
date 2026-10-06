@@ -186,7 +186,16 @@ def gemini_rebuild_history(items):
     return completed == calls.keys()
 
 
-async def recover_lost_output(request, principal, endpoint, audit):
+def failed_tool_checkpoint(row, items):
+    # Exact authenticated failed input, including its submitted tool output.
+    # This proof permits context-only recovery, never resuming the old RPC.
+    return (row.state == "invalid" and row.invalid_reason == "tool_execution_failed"
+            and bool(row.history_hashes) and len(hashes(items)) == len(row.history_hashes)
+            and checkpoint_matches(items, row.history_hashes)
+            and any(i.get("type") in {"function_call_output", "custom_tool_call_output"} for i in items))
+
+
+async def recover_lost_output(request, principal, endpoint, audit, *, failed_only=False):
     """Convert a proven lost result into a fresh, no-tools answer.
 
     Only persisted, scoped history can authorize this automatic result-only
@@ -206,7 +215,7 @@ async def recover_lost_output(request, principal, endpoint, audit):
     if not logical:
         return None
     items = history_items(request)
-    if not items:
+    if not items or not tool_outputs(request):
         return None
     continuation = {"role": "user", "content":
         "Continue the conversation using the submitted tool result as historical context. "
@@ -214,10 +223,15 @@ async def recover_lost_output(request, principal, endpoint, audit):
     async with SessionLocal() as db:
         row = await db.get(ExecutionSession, logical)
         if (not row or row.api_key_id != principal.key_id or row.endpoint != endpoint
-                or row.provider != provider_for(request.model) or row.state != "waiting_tool"
+                or row.provider != provider_for(request.model)
                 or (row.lease_token and row.lease_until and row.lease_until > now())
-                or not row.response_id or not checkpoint_matches(items, row.history_hashes)
-                or not recovery_call_id([*items, continuation], len(row.history_hashes))):
+                or not row.response_id):
+            return None
+        verified = failed_tool_checkpoint(row, items)
+        if not verified and not failed_only and row.state == "waiting_tool":
+            verified = (checkpoint_matches(items, row.history_hashes)
+                        and recovery_call_id([*items, continuation], len(row.history_hashes)))
+        if not verified:
             return None
         recovered = request.model_copy(update={"input": [*items, continuation]})
         recovered._recovery_response_id = row.response_id
@@ -376,7 +390,8 @@ async def _prepare(request, principal, endpoint, audit, *, pending_thread=None, 
             raise conflict("Continuation cannot change provider", "provider_mismatch")
         instant = now()
         if request._recovery_response_id and (
-                row.state != "waiting_tool" or row.response_id != request._recovery_response_id):
+                row.response_id != request._recovery_response_id
+                or not (row.state == "waiting_tool" or failed_tool_checkpoint(row, history_items(request)[:-1]))):
             raise conflict("Tool recovery checkpoint changed", "client_tool_call_unavailable")
         if row.lease_token and row.lease_until and row.lease_until > instant:
             error = conflict("Another request is executing in this conversation; retry after it completes")
@@ -479,8 +494,8 @@ async def _prepare(request, principal, endpoint, audit, *, pending_thread=None, 
             # must still use their authenticated suspended run.
             from .claude_helpers import dialogue_tail
             tail = dialogue_tail(items)
-            rebuild = (provider == "claude" and tail and tail.get("role") == "user"
-                       and not tool_outputs(request))
+            rebuild = (context_recovery or (provider == "claude" and tail and tail.get("role") == "user"
+                       and not tool_outputs(request)))
             if provider == "gemini":
                 # A completed context-only recovery can legitimately contain
                 # unresolved historical calls. Its verified next user turn may
@@ -529,7 +544,9 @@ async def finish(db, audit, result, target, response_id):
             expected.append(digest({"role": "assistant", "text": result.text}))
         expected.extend(digest(normal_item(c)) for c in result.tool_calls)
     instant = now()
-    row.history_hashes = expected if result else None
+    failed_tool = (not result and target.provider == "claude"
+                   and claim["action"] == "tool_continuation" and expected is not None)
+    row.history_hashes = expected if result or failed_tool else None
     row.config_hash = claim["config"]
     row.state = ("waiting_tool" if result.tool_calls else "ready") if result else "invalid"
     row.thread_id = result.thread_id if result else None
@@ -537,7 +554,7 @@ async def finish(db, audit, result, target, response_id):
     row.provider = target.provider
     row.response_id = response_id
     row.expires_at = instant + timedelta(seconds=300) if result and result.tool_calls else None
-    row.invalid_reason = None if result else "execution_failed"
+    row.invalid_reason = None if result else "tool_execution_failed" if failed_tool else "execution_failed"
     row.lease_token = row.lease_until = None
     return True
 

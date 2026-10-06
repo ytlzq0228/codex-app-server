@@ -47,22 +47,22 @@ def test_json_checkpoint_semantics_and_legacy_preimage():
     assert ex.hashes([{"role": "user", "content": "a b"}]) != ex.hashes([{"role": "user", "content": "ab"}])
 
 
-async def setup_waiting(legacy=True, owner=""):
+async def setup_waiting(legacy=True, owner="", provider="claude"):
     async with SessionLocal() as db:
         key = ApiKey(name="recovery", prefix=uuid4().hex[:20], key_hash=uuid4().hex * 2)
         worker = Worker(name=uuid4().hex, container_name=uuid4().hex, endpoint="http://worker",
-                        status="ready", enabled=True, provider="claude", node_id=owner or None)
+                        status="ready", enabled=True, provider=provider, node_id=owner or None)
         db.add_all([key, worker])
         await db.commit()
     principal = ApiPrincipal(key.id, "test")
-    first = ResponseRequest(model="claude-recovery", input=[{"role": "user", "content": "Inspect DNS"}],
+    first = ResponseRequest(model="claude-recovery" if provider == "claude" else "gpt-6-astra", input=[{"role": "user", "content": "Inspect DNS"}],
                             tools=[{"type": "function", "name": "Bash", "parameters": {"type": "object"}}])
     client_id = str(uuid4())
     audit = audit_for(first, client_id)
     await ex.prepare(first, principal, "responses", audit)
     thread = str(uuid4())
     target = BackendTarget(str(key.id) + ":" + str(worker.id), worker.endpoint, "/tmp",
-                           worker.id, worker.execution_generation, "claude")
+                           worker.id, worker.execution_generation, provider)
     prefix = [*first.input, {"role": "assistant", "content": "I will inspect DNS"}, call()]
     async with SessionLocal() as db:
         await ex.finish(db, audit, BackendResult(text="I will inspect DNS", tool_calls=[call()], thread_id=thread),
@@ -149,14 +149,17 @@ def test_edited_history_only_recovers_as_separate_no_tools_context(monkeypatch, 
         client.portal.call(run)
 
 
-@pytest.mark.parametrize("missing_checkpoint", [False, True])
+@pytest.mark.parametrize("provider,missing_checkpoint", [("claude", False), ("claude", True), ("codex", False)])
 @pytest.mark.parametrize("failure", [None, "timeout"])
-def test_cross_node_recovery_cancels_on_owner_before_rebuild(monkeypatch, failure, missing_checkpoint):
+def test_cross_node_recovery_cancels_on_owner_before_rebuild(monkeypatch, failure, missing_checkpoint, provider):
     from contextvars import ContextVar
     from dataclasses import asdict
     monkeypatch.setattr(get_settings(), "model_providers", "claude-recovery:claude")
     async def run():
-        p, w, target, first, follow, cid, logical, thread, sessions = await setup_waiting(owner="recovery-owner")
+        p, w, target, first, follow, cid, logical, thread, sessions = await setup_waiting(owner="recovery-owner", provider=provider)
+        if provider == "codex":
+            follow.tools = []
+            follow.input = follow.input[:4] + [{"role":"user", "content":"You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary."}]
         settings = get_settings()
         ingress = settings.model_copy(update={"node_id": "recovery-ingress"})
         owner = settings.model_copy(update={"node_id": "recovery-owner"})

@@ -97,3 +97,41 @@ async def test_legacy_manager_route_is_preserved():
     settings = Settings(node_id='', manager_url='http://legacy')
     assert await cluster.manager_for(None, None, settings) == 'http://legacy'
     assert await cluster.select_node(None, settings) == (None, 'http://legacy')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["400", "409", "422", "500", "timeout", "malformed", "invalid_ack", "cancelled", "not_cancelled"])
+async def test_supersede_preserves_owner_errors_and_requires_confirmation(monkeypatch, case):
+    from unittest.mock import AsyncMock
+    row = SimpleNamespace(api_key_id=uuid4(), thread_id="thread", history_hashes=["checkpoint", "call"],
+                          logical_id="logical", response_id="response")
+    body = ResponseRequest(model="gpt-6-astra", input=[
+        {"role":"user", "content":"checkpoint"},
+        {"type":"function_call", "call_id":"call", "name":"lookup", "arguments":"{}"},
+        {"type":"function_call_output", "call_id":"call", "output":"done"},
+        {"role":"user", "content":"Compact context"},
+    ])
+    db = SimpleNamespace(get=AsyncMock(return_value=SimpleNamespace(thread_id="thread", node_id="owner")),
+                         scalar=AsyncMock(return_value=SimpleNamespace(gateway_url="http://owner")))
+    monkeypatch.setattr(cluster, "get_settings", lambda: Settings(node_id="ingress", node_gateway_url="http://ingress", node_manager_url="http://manager", bootstrap_worker=False))
+    error = {"message":"Cannot change tools", "code":"invalid_client_tool", "type":"invalid_request_error", "param":"tools"}
+    class Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def post(self, url, **kwargs):
+            if case == "timeout": raise httpx.ReadTimeout("unknown outcome")
+            status = int(case) if case.isdigit() else 200
+            payload = {"error": error} if case.isdigit() else {"cancelled":case == "cancelled"}
+            if case == "invalid_ack": payload = []
+            if case == "malformed":
+                return httpx.Response(400, text="not json", request=httpx.Request("POST", url))
+            return httpx.Response(status, json=payload, request=httpx.Request("POST", url))
+    monkeypatch.setattr(cluster.httpx, "AsyncClient", lambda **kwargs: Client())
+    if case in {"cancelled", "not_cancelled"}:
+        assert await cluster.supersede_tool(db, row, body, None) is (case == "cancelled")
+    else:
+        with pytest.raises(HTTPException) as caught:
+            await cluster.supersede_tool(db, row, body, None)
+        assert caught.value.status_code == (int(case) if case in {"400", "409", "422"} else 503)
+        if case in {"400", "409", "422"}:
+            assert caught.value.detail == {"error":error}

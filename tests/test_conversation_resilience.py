@@ -158,3 +158,62 @@ def test_tool_contracts_ignore_order_and_description_but_not_schema():
     changed.tools[0]["parameters"]["required"] = ["path"]
     assert not compatible_definitions(changed, original)
     assert original.tools == tools
+
+
+@pytest.mark.parametrize("case", ["ok", "changed_output", "foreign_key", "wrong_session", "explicit_response", "stale", "claimed"])
+def test_failed_tool_retry_recovers_only_verified_context(monkeypatch, case):
+    monkeypatch.setattr(get_settings(), "model_providers", "claude-recovery:claude")
+    async def run():
+        p, w, t, first, follow, cid, logical, thread, sessions = await setup_waiting()
+        follow.input = follow.input[:4]
+        failed_audit = audit_for(follow, cid)
+        await ex.prepare(follow, p, "responses", failed_audit, pending_thread=thread, tool_sessions=sessions)
+        async with SessionLocal() as db:
+            await ex.finish(db, failed_audit, None, t, "resp_failed_test")
+            await db.commit()
+        await ex.cleanup(failed_audit)
+        await sessions.close()
+        if case == "changed_output":
+            follow.input[-1]["output"] = "forged"
+        if case == "foreign_key":
+            p = ApiPrincipal(uuid4(), "test")
+        if case == "wrong_session":
+            cid = str(uuid4())
+        if case == "explicit_response":
+            follow.previous_response_id = "resp_failed_test"
+        if case == "claimed":
+            async with SessionLocal() as db:
+                row = await db.get(ExecutionSession, logical)
+                row.lease_token = "another-owner"
+                from datetime import timedelta
+                row.lease_until = ex.now() + timedelta(seconds=60)
+                await db.commit()
+        audit = audit_for(follow, cid)
+        recovered = await ex.recover_lost_output(follow, p, "responses", audit, failed_only=True)
+        if case in {"changed_output", "foreign_key", "wrong_session", "explicit_response", "claimed"}:
+            assert recovered is None
+            return
+        assert recovered is not None
+        # A stale owner route must not be consulted once the failure is proven.
+        backend = SimpleNamespace(continuation_target=lambda *_: pytest.fail("old RPC resumed"))
+        routed, target, routed_thread = await cluster.recoverable_pending_route(
+            follow, p, "responses", backend, audit)
+        assert target is None and routed_thread is None and routed._recovery_response_id
+        if case == "stale":
+            async with SessionLocal() as db:
+                row = await db.get(ExecutionSession, logical)
+                row.response_id = "resp_replaced"
+                await db.commit()
+            with pytest.raises(HTTPException):
+                await ex.prepare(recovered, p, "responses", audit)
+            return
+        try:
+            prepared, binding = await ex.prepare(recovered, p, "responses", audit)
+            assert binding is None
+            assert not definitions(prepared) and prepared.tool_choice == "none"
+            assert ex.RECOVERY_NOTICE in prepared.input_text()
+            assert audit["execution_decision"]["reason"] == "context_only_recovery"
+        finally:
+            await ex.cleanup(audit)
+    with TestClient(app) as client:
+        client.portal.call(run)

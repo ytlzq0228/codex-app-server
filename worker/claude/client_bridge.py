@@ -13,6 +13,9 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
 TOOL_TTL = 300
+INFERENCE_IDLE_TIMEOUT = 300.0
+INFERENCE_STAGE_TIMEOUT = 1800.0
+EXECUTION_TIMEOUT = 14400.0
 SERVER_NAME = "client"
 ACTIVE = {}
 
@@ -28,6 +31,7 @@ class ToolBridge:
         # One outstanding client call at a time matches the gateway continuation protocol.
         self.serial = asyncio.Lock()
         self.closed = False
+        self.stage_started = self.last_progress = None
 
     def mcp_config(self):
         return json.dumps({"mcpServers": {SERVER_NAME: {
@@ -54,6 +58,7 @@ class ToolBridge:
         future = self.pending.get(call_id)
         if future is None or future.done():
             raise HTTPException(409, "Tool call unavailable or already completed")
+        self.stage_started = self.last_progress = asyncio.get_running_loop().time()
         future.set_result(result)
 
     def close(self):
@@ -79,19 +84,31 @@ class ToolBridge:
             await self.events.put(None)
 
         reader = asyncio.create_task(read())
-        remaining = 300.0  # Bounded inference time; client result waits have their own TTL.
         loop = asyncio.get_running_loop()
+        started = self.stage_started = self.last_progress = loop.time()
         try:
             while True:
-                start = loop.time()
+                now = loop.time()
+                deadlines = [started + EXECUTION_TIMEOUT]
+                if not self.pending:
+                    deadlines += [self.last_progress + INFERENCE_IDLE_TIMEOUT,
+                                  self.stage_started + INFERENCE_STAGE_TIMEOUT]
+                remaining = min(deadlines) - now
+                if remaining <= 0:
+                    raise TimeoutError("Claude execution timed out")
                 try:
                     event = await asyncio.wait_for(self.events.get(), min(15, remaining))
                 except asyncio.TimeoutError:
-                    event = {"event": "heartbeat"}
-                if not self.pending:
-                    remaining -= loop.time() - start
-                if remaining <= 0:
-                    raise TimeoutError("Claude execution timed out")
+                    yield {"event": "heartbeat"}
+                    continue
+                if isinstance(event, dict) and (
+                    event.get("type") in {"assistant", "result"}
+                    or event.get("event") == "client_tool"
+                    or (event.get("type") == "stream_event"
+                        and isinstance(event.get("event"), dict)
+                        and event["event"].get("type") == "content_block_delta")
+                ):
+                    self.last_progress = loop.time()
                 if event is None:
                     return
                 if isinstance(event, Exception):

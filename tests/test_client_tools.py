@@ -264,3 +264,46 @@ async def test_chat_stream_preserves_four_metrics_and_tool_call(monkeypatch):
     assert any(e['choices'] and e['choices'][0]['finish_reason']=='tool_calls' for e in events)
     response=main.chat_completion_object('id',0,body,saved[0])
     assert response['usage']==events[-1]['usage']
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["omitted", "empty", "same", "changed", "model", "claimed"])
+async def test_codex_compaction_cancels_without_resuming_tool(case):
+    sessions = None
+    resumed = []
+    async def events(req, target, run):
+        await sessions.await_result(run, {"call_id": "compact-call"})
+        yield BackendStreamEvent(tool_call={"call_id": "compact-call"}, thread_id="thread-a")
+        resumed.append(await sessions.receive_result(run))
+    sessions = ToolSessions(events)
+    target = BackendTarget("key:worker", "ws://worker", "/workspace")
+    first = ResponseRequest(model="gpt-6-astra", input=[{"role":"user", "content":"start"}], tools=[TOOL])
+    try:
+        _ = [event async for event in sessions.stream(first, target)]
+        body = ResponseRequest(model=first.model, input=[
+            *first.input,
+            {"type":"function_call", "call_id":"compact-call", "name":"lookup", "arguments":"{}"},
+            {"type":"function_call_output", "call_id":"compact-call", "output":"done"},
+            {"role":"user", "content":"You are performing a CONTEXT CHECKPOINT COMPACTION. Create a handoff summary."},
+        ])
+        if case == "empty": body.tools = []
+        if case == "same": body.tools = [TOOL]
+        if case == "changed": body.tools = [{**TOOL, "name":"other"}]
+        if case == "model": body.model = "gpt-6-sol"
+        if case == "claimed": next(iter(sessions.runs)).claimed = True
+        if case in {"changed", "model"}:
+            with pytest.raises(ToolProtocolError):
+                await sessions.supersede_with_user_turn(body, "key", "thread-a", 2)
+            assert sessions.has_pending("key", "thread-a")
+        elif case == "claimed":
+            assert not await sessions.supersede_with_user_turn(body, "key", "thread-a", 2)
+            assert sessions.has_pending("key", "thread-a")
+        else:
+            assert await sessions.supersede_with_user_turn(body, "key", "thread-a", 2)
+            assert not sessions.has_pending("key", "thread-a")
+            assert body.tools == ([TOOL] if case == "same" else None if case == "omitted" else [])
+            with pytest.raises(ToolProtocolError):
+                sessions.find(ResponseRequest(model=first.model, input=[body.input[2]]), "key")
+        assert resumed == []
+    finally:
+        await sessions.close()

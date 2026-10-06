@@ -159,6 +159,10 @@ async def pending_route(request, key, backend):
 
 
 async def recoverable_pending_route(body, principal, endpoint, backend, audit):
+    from .execution import recover_lost_output
+    recovered = await recover_lost_output(body, principal, endpoint, audit, failed_only=True)
+    if recovered is not None:
+        return recovered, None, None
     try:
         target, thread = await pending_route(body, principal.key_id, backend)
         return body, target, thread
@@ -196,8 +200,18 @@ async def supersede_tool(db, row, body, sessions):
         async with httpx.AsyncClient(timeout=10) as client:
             response = await client.post(node.gateway_url + "/internal/tools/supersede", json=payload,
                 headers={"Authorization": "Bearer " + settings.manager_token.get_secret_value()})
+            if response.status_code in {400, 409, 422}:
+                data = response.json()
+                error = data.get("error") if isinstance(data, dict) else None
+                if (isinstance(error, dict) and isinstance(error.get("message"), str)
+                        and isinstance(error.get("code"), str)):
+                    # Preserve deterministic owner rejection instead of retryable 503.
+                    raise HTTPException(response.status_code, detail={"error": error})
             response.raise_for_status()
-            return response.json().get("cancelled") is True
+            data = response.json()
+            if not isinstance(data, dict) or not isinstance(data.get("cancelled"), bool):
+                raise ValueError("Invalid cancellation acknowledgement")
+            return data["cancelled"]
     except (httpx.HTTPError, ValueError) as exc:
         # An ambiguous cancellation is never followed by executing a new turn.
         raise HTTPException(503, "Pending tool cancellation could not be confirmed") from exc

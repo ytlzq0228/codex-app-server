@@ -38,8 +38,8 @@
 <form method="get" data-history-filters class="portal-row filter-toolbar">
 <label>{{ t('请求 ID') }}<input {% if loading %}disabled{% endif %} name="q" value="{{ request.query_params.get('q','') }}"></label>
 <label>{{ t('模型') }}<input {% if loading %}disabled{% endif %} name="model" value="{{ request.query_params.get('model','') }}"></label>
-<label>{{ t('开始日期（UTC）') }}<input {% if loading %}disabled{% endif %} type="date" name="start" value="{{ request.query_params.get('start','') }}"></label>
-<label>{{ t('结束日期（不含）') }}<input {% if loading %}disabled{% endif %} type="date" name="end" value="{{ request.query_params.get('end','') }}"></label>
+<label>{{ t('开始日期（UTC）') }}<input {% if loading %}disabled{% endif %} type="text" data-calendar-type="date" placeholder="YYYY-MM-DD" autocomplete="off" name="start" value="{{ request.query_params.get('start','') }}"></label>
+<label>{{ t('结束日期（不含）') }}<input {% if loading %}disabled{% endif %} type="text" data-calendar-type="date" placeholder="YYYY-MM-DD" autocomplete="off" name="end" value="{{ request.query_params.get('end','') }}"></label>
 <label>{{ t('最近请求状态') }}<select {% if loading %}disabled{% endif %} name="status"><option value="">{{ t('全部') }}</option><option value="error" {{ 'selected' if request.query_params.get('status') == 'error' }}>{{ t('失败') }}</option><option value="success" {{ 'selected' if request.query_params.get('status') == 'success' }}>{{ t('成功') }}</option></select></label><button {% if loading %}disabled{% endif %} class="button">{{ t('查询') }}</button></form>
 <p data-history-summary>{{ t('正在加载用量详单…') }}</p><p class="muted">{{ t('会话状态取最后一次请求；筛选匹配会话内请求，展开后按页加载完整会话。') }}</p>
 <p data-history-error class="alert alert-error" hidden></p><div data-history-results aria-live="polite"></div><div class="pagination" data-history-pagination></div>{% if not loading %}<script src="/static/admin-history.js?v=20261003c"></script>{% endif %}</section>

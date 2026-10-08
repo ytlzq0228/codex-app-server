@@ -13,9 +13,9 @@
     amPM: list('calendar.am_pm'), time_24hr: true,
     ordinal: () => '',
   };
-  document.querySelectorAll('input[type="date"],input[type="datetime-local"],input[type="month"]').forEach(input => {
+  document.querySelectorAll('input[data-calendar-type],input[type="date"],input[type="datetime-local"],input[type="month"]').forEach(input => {
     if (input.disabled || input._flatpickr) return;
-    const type = input.type;
+    const type = input.dataset.calendarType || input.type;
     // Preserve local-time history bounds and the server's ISO date/month format.
     if (type === 'datetime-local' && input.dataset.instant) {
       const date = new Date(input.dataset.instant);

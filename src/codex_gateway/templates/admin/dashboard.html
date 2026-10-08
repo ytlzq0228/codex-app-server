@@ -57,8 +57,8 @@
           {% for key in history_keys %}<option value="{{ key.id }}" {{ 'selected' if request.query_params.get('key_id') == key.id|string }}>{{ key.name }} · {{ key.owner_username or t('无归属') }} · {{ key.id }}{{ t('（已删除）') if key.deleted_at else '' }}</option>{% endfor %}
         </select></div>
         <label>{{ t('接口') }}<input {% if loading %}disabled{% endif %} name="endpoint" value="{{ request.query_params.get('endpoint','') }}" placeholder="{{ t('例如 responses') }}"></label>
-        <label>{{ t('开始时间') }}<input {% if loading %}disabled{% endif %} type="datetime-local" step="1" data-time-bound="start" data-instant="{{ request.query_params.get('start','') }}"></label>
-        <label>{{ t('结束时间') }}<input {% if loading %}disabled{% endif %} type="datetime-local" step="1" data-time-bound="end" data-instant="{{ request.query_params.get('end','') }}"></label>
+        <label>{{ t('开始时间') }}<input {% if loading %}disabled{% endif %} type="text" data-calendar-type="datetime-local" placeholder="YYYY-MM-DDTHH:mm:ss" autocomplete="off" step="1" data-time-bound="start" data-instant="{{ request.query_params.get('start','') }}"></label>
+        <label>{{ t('结束时间') }}<input {% if loading %}disabled{% endif %} type="text" data-calendar-type="datetime-local" placeholder="YYYY-MM-DDTHH:mm:ss" autocomplete="off" step="1" data-time-bound="end" data-instant="{{ request.query_params.get('end','') }}"></label>
         <div class="history-filter-actions"><button {% if loading %}disabled{% endif %} class="button button-primary">{{ t('查询') }}</button><a class="button" href="/admin/history">{{ t('查看全部') }}</a></div>
         <p class="history-filter-hint muted">{{ t('时间按浏览器时区') }} <span data-browser-timezone></span> {{ t('显示和筛选，包含开始时间、不包含结束时间；显示含匹配请求的完整会话。') }}</p>
       </form>

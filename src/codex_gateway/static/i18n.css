@@ -10,27 +10,13 @@ body .sidebar .language-switch{background:#ffffff0d;border-color:#ffffff26;color
 body .sidebar .language-switch-thumb{background:#a9ebca}
 body .sidebar .language-switch label:has(input:focus-visible){outline-color:#a9ebca}
 .brand strong{overflow-wrap:anywhere}.brand-mark{flex-shrink:0}
-/* Keep all administration links visible on typical laptop screens. */
+/* Preserve the original sidebar layout and only slightly reduce its text. */
 @media(min-width:721px){
-  body .sidebar{padding:18px 16px}
-  body .sidebar .brand{gap:9px;margin-bottom:0}
-  body .sidebar .brand-mark{width:36px;height:36px;border-radius:11px}
-  body .sidebar .brand strong{font-size:14px;line-height:1.2}
+  body .sidebar .brand strong{font-size:15px}
   body .sidebar .brand span{font-size:11px}
-  body .sidebar nav{scrollbar-width:thin}
-  body .sidebar .nav-section{gap:0;margin-bottom:8px}
-  body .sidebar .nav-section h2{font-size:11px;line-height:16px;margin:0 0 4px;padding:4px 10px;border-radius:7px}
-  body .sidebar nav a{font-size:12px;line-height:18px;padding:4px 10px;border-radius:7px}
-  body .sidebar .logout-form{padding-top:8px}
-  body .sidebar .logout-form button{font-size:12px;line-height:18px;padding:6px 10px}
-}
-@media(min-width:721px) and (max-height:760px){
-  body .sidebar{padding:12px 14px}
-  body .sidebar .language-switch{height:30px;margin:6px 0 8px}
-  body .sidebar .nav-section{margin-bottom:5px}
-  body .sidebar .nav-section h2{padding:3px 10px;margin-bottom:2px}
-  body .sidebar nav a{padding:3px 10px}
-  body .sidebar .logout-form{padding-top:5px}
+  body .sidebar .nav-section h2{font-size:12px}
+  body .sidebar nav a{font-size:13px}
+  body .sidebar .logout-form button{font-size:15px}
 }
 @media(pointer:coarse){.language-switch{height:44px}}
 @media(prefers-reduced-motion:reduce){.language-switch-thumb{transition:none}}

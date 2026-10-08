@@ -61,7 +61,10 @@ async def overview(request: Request, identity=Depends(require_user), db: AsyncSe
         attention.append({"name": worker.name, "reason": reason})
     healthy = bool(workers) and not attention
     completed = int(bool(logged)) + int(bool(key_count)) + int(healthy)
+    from .dchat import display_names
+    names = await display_names(db, [identity.username])
     return render(request, identity, page="self_overview", workers=workers, logged_count=len(logged),
+                  display_name=names.get(identity.username, identity.username),
                   key_count=key_count, enabled_key_count=enabled_key_count,
                   attention=attention, healthy=healthy, completed=completed,
                   quota=await quota_summary(db, identity.username))

@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     app_server_url: str = "ws://worker-1:4500"
     app_server_token: SecretStr = SecretStr("development-worker-token-change-me")
     app_server_timeout_seconds: float = 300.0
+    app_server_max_message_bytes: int = Field(default=64 * 1024 * 1024, gt=0)
     workspace_host_root: str = "/worker-workspaces/worker-1"
     workspace_worker_root: str = "/workspace"
     manager_url: str = "http://worker-manager:4600"

@@ -72,9 +72,32 @@
     {% if page == 'admin_workers' %}
     <section id="workers" class="panel">
       <div class="section-head"><div><p class="eyebrow">{{ t('RUNTIME') }}</p><h2>{{ t('Workers') }}</h2></div><button {% if loading %}disabled{% endif %} class="button button-primary" data-open-dialog="worker-dialog">{{ t('增加 Worker') }}</button></div>
+      <form id="worker-filters" method="get" action="/admin/workers" class="worker-search">
+        <label for="worker-search">{{ t('查询 Worker') }}</label>
+        <input id="worker-search" type="search" name="q" value="{{ worker_filters.q if not loading else '' }}" placeholder="{{ t('搜索名称、归属用户名或登录邮箱') }}" {% if loading %}disabled{% endif %}>
+        <button class="button button-primary" {% if loading %}disabled{% endif %}>{{ t('查询') }}</button>
+        <a class="button" href="/admin/workers">{{ t('重置筛选') }}</a>
+      </form>
+      {% macro worker_filter(name, label) %}
+      <label class="worker-column-filter"><span>{{ label }}</span><select name="{{ name }}" form="worker-filters" aria-label="{{ label }}" {% if loading %}disabled{% endif %}>
+        <option value="">{{ t('全部') }}</option>
+        {% if not loading %}{% for value in worker_filter_options[name] %}
+        <option value="{{ value }}" {{ 'selected' if worker_filters[name] == value }}>{% if value == '__none__' %}{{ t('未读取套餐') }}{% elif value == '__local__' %}{{ t('本机') }}{% elif value == 'logged_in' %}{{ t('已登录') }}{% elif value == 'logged_out' %}{{ t('未登录') }}{% elif name == 'status' and value == 'error' %}{{ t('已隔离') }}{% elif name == 'status' %}{{ t(value) }}{% else %}{{ value }}{% endif %}</option>
+        {% endfor %}{% endif %}
+      </select></label>
+      {% endmacro %}
       <div class="table-wrap"><table class="worker-table">
         <colgroup><col class="col-name"><col class="col-status"><col class="col-owner"><col class="col-node"><col class="col-account"><col class="col-auth"><col class="col-usage"><col class="col-actions"></colgroup>
-        <thead><tr><th>{{ t('名称') }}</th><th>{{ t('状态') }}</th><th>{{ t('归属') }}</th><th>{{ t('节点') }}</th><th>{{ t('登录账号 / 套餐') }}</th><th>{{ t('认证方式') }}</th><th>{{ t('账号已用额度') }}</th><th>{{ t('操作') }}</th></tr></thead><tbody {% if loading %}aria-busy="true"{% endif %}>
+        <thead><tr><th>{{ t('名称') }}</th><th>{{ t('状态') }}</th><th>{{ t('归属') }}</th><th>{{ t('节点') }}</th><th>{{ t('登录账号 / 套餐') }}</th><th>{{ t('认证方式') }}</th><th>{{ t('账号已用额度') }}</th><th>{{ t('操作') }}</th></tr>
+        <tr class="worker-filter-row">
+          <th>{{ worker_filter('provider', 'Provider') }}</th>
+          <th>{{ worker_filter('status', t('状态')) }}</th>
+          <th></th>
+          <th>{{ worker_filter('node', 'Node') }}</th>
+          <th>{{ worker_filter('plan', 'Provider Plan') }}</th>
+          <th>{{ worker_filter('authentication', t('认证状态')) }}</th>
+          <th></th><th></th>
+        </tr></thead><tbody {% if loading %}aria-busy="true"{% endif %}>
         {% for worker in workers %}
         {% set display_status = 'error' if worker.status.value == 'offline' and worker.failure_kind else worker.status.value %}
         {% set normalized_plan = (worker.plan_type or '')|trim|lower %}
@@ -94,7 +117,7 @@
             <form data-ajax data-reload method="post" action="/admin/workers/{{ worker.id }}/state"><input {% if loading %}disabled{% endif %} type="hidden" name="csrf_token" value="{{ csrf_token }}"><button {% if loading %}disabled{% endif %} class="button button-small" title="{{ t('排空') if worker.enabled else t('启用') }}">{{ t('排空') if worker.enabled else t('启用') }}</button></form>
             <form data-ajax data-reload data-confirm="{{ t('确定删除这个 Worker 容器吗？') }}" method="post" action="/admin/workers/{{ worker.id }}/delete"><input {% if loading %}disabled{% endif %} type="hidden" name="csrf_token" value="{{ csrf_token }}"><button {% if loading %}disabled{% endif %} class="button button-small button-danger" title="{{ t('删除') }}">{{ t('删除') }}</button></form>
           </div></td>
-        </tr>{% else %}<tr><td colspan="8" class="empty">{{ t('还没有 Worker') }}</td></tr>{% endfor %}
+        </tr>{% else %}<tr><td colspan="8" class="empty">{{ t('没有符合条件的 Worker') }}</td></tr>{% endfor %}
         </tbody></table></div>
     </section>
     {% endif %}

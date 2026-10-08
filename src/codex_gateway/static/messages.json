@@ -1217,7 +1217,7 @@
   },
   "已登录": {
     "CN": "已登录",
-    "EN": "Signed in"
+    "EN": "Logged in"
   },
   "个 Worker": {
     "CN": "个 Worker",
@@ -3706,5 +3706,29 @@
   "calendar.next": {
     "CN": "下个月",
     "EN": "Next month"
+  },
+  "查询 Worker": {
+    "CN": "查询 Worker",
+    "EN": "Search Workers"
+  },
+  "搜索名称、归属用户名或登录邮箱": {
+    "CN": "搜索名称、归属用户名或登录邮箱",
+    "EN": "Search name, owner username or account email"
+  },
+  "重置筛选": {
+    "CN": "重置筛选",
+    "EN": "Reset filters"
+  },
+  "未读取套餐": {
+    "CN": "未读取套餐",
+    "EN": "Unknown plan"
+  },
+  "认证状态": {
+    "CN": "认证状态",
+    "EN": "Authentication"
+  },
+  "没有符合条件的 Worker": {
+    "CN": "没有符合条件的 Worker",
+    "EN": "No matching Workers"
   }
 }

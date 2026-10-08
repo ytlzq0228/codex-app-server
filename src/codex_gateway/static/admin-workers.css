@@ -38,3 +38,10 @@
 .worker-page .worker-account-plan .plan-pill{display:block;min-width:0;flex:1;min-height:20px;padding:2px 6px;line-height:16px}
 
 .worker-page .usage-window:only-child{grid-column:1 / -1}
+
+.worker-search{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:16px 0}
+.worker-search input{flex:1;min-width:220px;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:inherit}
+.worker-column-filter{display:flex;flex-direction:column;gap:5px;text-transform:none;letter-spacing:normal}
+.worker-column-filter>span{white-space:normal}
+.worker-page .worker-column-filter select{width:100%;min-width:0;font-size:12px;padding:6px 20px 6px 5px;min-height:34px;background-position:right 3px center}
+.worker-page .worker-filter-row th{vertical-align:bottom;white-space:normal}

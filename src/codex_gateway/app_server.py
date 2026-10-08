@@ -9,6 +9,8 @@ from typing import Any
 
 from websockets.asyncio.client import connect
 
+from .config import get_settings
+
 
 class AppServerError(RuntimeError):
     pass
@@ -85,6 +87,8 @@ async def connect_app_server(url: str, token: str, timeout: float = 300.0, ping_
         additional_headers={"Authorization": f"Bearer {token}"},
         open_timeout=15,
         ping_timeout=ping_timeout,
+        # Long histories and compaction events can exceed websockets' 1 MiB default.
+        max_size=get_settings().app_server_max_message_bytes,
     )
     session = AppServerSession(websocket, timeout)
     try:

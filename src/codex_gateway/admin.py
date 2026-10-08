@@ -150,8 +150,11 @@ async def render_admin_page(request: Request, page: str, history_page: int, admi
             User.username, User.enabled, User.role).where(User.username.in_(
                 [key.owner_username for key in context["keys"] if key.owner_username])).order_by(User.username))).mappings()]
     elif page == "admin_workers":
+        from .worker_filters import worker_query, worker_filter_options
+        context["worker_filters"] = {name: request.query_params.get(name, "").strip() for name in ("q", "provider", "plan", "status", "node", "authentication")}
+        context["worker_filter_options"] = await worker_filter_options(session)
         context["workers"], context["pagination"] = await paginate(session,
-            select(Worker).where(Worker.endpoint != "removed://worker").order_by(Worker.created_at, Worker.id), request)
+            worker_query(request.query_params), request)
         plans = (await session.scalars(select(SubscriptionPlan))).all()
         context["plan_styles"] = {plan.name: plan_pill_style(plan.color) for plan in plans}
         context["default_plan_style"] = plan_pill_style(DEFAULT_PLAN_COLOR)

@@ -344,6 +344,7 @@ async def remote_stream(url, request, target, settings):
     if data["worker_id"]:
         data["worker_id"] = str(data["worker_id"])
     payload = {"request": request.model_dump(mode="json"), "target": data,
+               "upstream_model": request._upstream_model,
                "execution_input_text": request._execution_input_text,
                "execution_input_items": request._execution_input_items,
                "execution_auto_resume": request._execution_auto_resume}
@@ -410,6 +411,7 @@ async def execute(request: Request):
             raise HTTPException(409, "Worker identity changed")
     body = ResponseRequest.model_validate(payload["request"])
     body._execution_input_text = payload.get("execution_input_text")
+    body._upstream_model = payload.get("upstream_model")
     body._execution_input_items = payload.get("execution_input_items")
     body._execution_auto_resume = payload.get("execution_auto_resume", False)
     async def events():

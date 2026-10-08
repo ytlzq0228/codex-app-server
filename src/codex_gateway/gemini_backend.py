@@ -43,7 +43,7 @@ class GeminiAdapter:
                 worker = await db.get(Worker, target.worker_id)
                 if not worker or worker.provider != "gemini" or worker.execution_generation != target.worker_generation or worker.endpoint != target.endpoint:
                     raise WorkerFailure("Worker identity changed", kind="account_changed")
-        payload = {"prompt": request.input_text(), "model": self.settings.model_alias_map().get(request.model, request.model),
+        payload = {"prompt": request.input_text(), "model": request._upstream_model or self.settings.model_alias_map().get(request.model, request.model),
                    "conversation": request.previous_response_id, "workspace": target.workspace}
         image_parts = request.worker_input()
         has_images = any(part.get("type") == "image" for part in image_parts)

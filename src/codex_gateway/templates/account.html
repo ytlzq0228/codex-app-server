@@ -46,6 +46,7 @@
 {% elif page == 'detail' %}
 {% include "shared/request-detail.html" %}
 {% elif page == 'finance' %}
+{% include 'shared/model-mappings.html' %}
 <section class="panel"><h2>模型价格 · USD / 1M tokens</h2><p>读/写分别对应总输入/输出；缓存读、缓存写是输入 Token 的子集，分别使用自己的单价。财务报表按最新价格重算，历史请求价格快照保持不变。</p>
 <div class="table-wrap"><table class="model-prices"><thead><tr><th>模型</th><th>读（输入）</th><th>写（输出）</th><th>缓存读</th><th>缓存写</th><th>状态</th><th>操作</th></tr></thead><tbody {% if loading %}aria-busy="true"{% endif %}>
 {% for item in price_rows %}{% set price_form = 'model-price-' ~ loop.index %}<tr><td><strong>{{ item.model }}</strong></td>

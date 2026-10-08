@@ -97,6 +97,9 @@ async def detail(request: Request, request_id: str, identity=Depends(require_use
 
 @data_page(router, "/admin/finance", "account.html", "finance")
 async def finance(request: Request, month: str = "", identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
+    from .models import ModelMapping
+    mappings = {row.model: row.upstream_model for row in (await db.scalars(select(ModelMapping))).all()}
+    mapping_rows = [{"model": model, "upstream_model": mappings[model]} for model in sorted(mappings)]
     prices = (await db.scalars(select(ModelPrice).order_by(ModelPrice.model))).all()
     price_map = {price.model: price for price in prices}
     price_rows = [{"model": model, "price": price_map.get(model)} for model in sorted(set(get_settings().public_models()) | set(price_map))]
@@ -104,7 +107,35 @@ async def finance(request: Request, month: str = "", identity=Depends(require_ad
     subscriptions["rows"], subscription_pagination = paginate_list(subscriptions["rows"], request, name="plans_page")
     await db.commit()
     price_rows, pagination = paginate_list(price_rows, request)
-    return render(request, identity, page="finance", price_rows=price_rows, subscriptions=subscriptions, pagination=pagination, subscription_pagination=subscription_pagination)
+    return render(request, identity, page="finance", mapping_rows=mapping_rows, price_rows=price_rows, subscriptions=subscriptions, pagination=pagination, subscription_pagination=subscription_pagination)
+
+
+@router.post("/admin/model-mappings")
+async def model_mapping(request: Request, model: str = Form(..., min_length=1, max_length=120),
+                        upstream_model: str = Form("", max_length=120), csrf_token: str = Form(...),
+                        identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
+    from .models import ModelMapping
+    from .providers import provider_for
+    from sqlalchemy.dialects.postgresql import insert
+    verify_csrf(request, identity, csrf_token)
+    model, upstream_model = model.strip(), upstream_model.strip()
+    if not model:
+        raise HTTPException(400, "模型名称不能为空")
+    if not upstream_model:
+        record = await db.get(ModelMapping, model)
+        if record:
+            await db.delete(record)
+    else:
+        settings = get_settings()
+        if any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in model + upstream_model):
+            raise HTTPException(400, "模型名称不能包含空白或控制字符")
+        if provider_for(upstream_model) != provider_for(model):
+            raise HTTPException(400, "模型映射不能跨厂商")
+        statement = insert(ModelMapping).values(model=model, upstream_model=upstream_model)
+        await db.execute(statement.on_conflict_do_update(index_elements=[ModelMapping.model],
+                                                       set_={"upstream_model": upstream_model}))
+    await db.commit()
+    return {"message": "模型映射已保存，新请求立即生效" if upstream_model else "模型映射已移除，直接使用用户传入的模型名"}
 
 
 def summarize_latest(rows, prices):

@@ -60,6 +60,12 @@ class OAuthState(Base):
     verifier: Mapped[str] = mapped_column(String(128))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
+class ModelMapping(Base):
+    __tablename__ = "model_mappings"
+    model: Mapped[str] = mapped_column(String(120), primary_key=True)
+    upstream_model: Mapped[str] = mapped_column(String(120))
+
+
 class ModelPrice(Base):
     __tablename__ = "model_prices"
     provider: Mapped[str] = mapped_column(String(16), default="codex", server_default="codex", index=True)

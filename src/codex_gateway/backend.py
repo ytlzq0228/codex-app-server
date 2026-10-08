@@ -196,7 +196,7 @@ class AppServerBackend:
                 request._execution_input_items = None
                 request.previous_response_id = None
         if not request.previous_response_id:
-            result = await app_server.call("thread/start", {"model": self.model(request.model), "cwd": workspace, "serviceName": "codex_gateway", **thread_policy(), "dynamicTools": dynamic_specs(definitions(request)) if request.tool_choice != "none" else []})
+            result = await app_server.call("thread/start", {"model": request._upstream_model or self.model(request.model), "cwd": workspace, "serviceName": "codex_gateway", **thread_policy(), "dynamicTools": dynamic_specs(definitions(request)) if request.tool_choice != "none" else []})
         return result["thread"]["id"]
 
     def continuation_target(self, request, key):
@@ -239,7 +239,7 @@ class AppServerBackend:
                     turn_params = {
                         "threadId": thread_id, "input": request.worker_input(),
                         "cwd": workspace, **turn_policy(),
-                        "model": self.model(request.model),
+                        "model": request._upstream_model or self.model(request.model),
                     }
                     effort = (request.reasoning or {}).get("effort")
                     if effort:

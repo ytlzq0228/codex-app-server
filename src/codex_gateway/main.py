@@ -1,3 +1,4 @@
+from .model_mapping import model_available
 import json
 import hashlib
 import logging
@@ -926,7 +927,7 @@ async def models(principal: ApiPrincipal = Depends(require_api_key), session: As
 
 @app.get("/v1/models/{model_id}")
 async def retrieve_model(model_id: str, principal: ApiPrincipal = Depends(require_api_key), session: AsyncSession = Depends(get_session)):
-    if model_id not in get_settings().public_models():
+    if not await model_available(session, model_id):
         return openai_error(404, f"The model '{model_id}' does not exist", "model_not_found", param="model")
     from .providers import authorize_model
     await authorize_model(session, principal, model_id)
@@ -938,7 +939,7 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
     if response is not None and provider_for(body.model) == "claude":
         response.headers["x-gateway-generation-policy"] = "worker-defaults"
     settings = get_settings()
-    if body.model not in settings.public_models():
+    if not await model_available(session, body.model):
         return openai_error(400, f"Model '{body.model}' is not available", "model_not_found", param="model")
     from .providers import authorize_model
     await authorize_model(session, principal, body.model)
@@ -946,6 +947,8 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
         return openai_error(400, unsupported[1], "unsupported_parameter", param=unsupported[0])
     validate_chat_capabilities(body)
     request = body.to_response_request()
+    from .model_mapping import resolve_model
+    request._upstream_model = await resolve_model(session, request.model)
     validate_capabilities(request)
     await validate_grammars(request)
     from .cluster import recoverable_pending_route
@@ -986,13 +989,15 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
     if response is not None and provider_for(body.model) == "claude":
         response.headers["x-gateway-generation-policy"] = "worker-defaults"
     settings = get_settings()
-    if body.model not in settings.public_models():
+    if not await model_available(session, body.model):
         return openai_error(400, f"Model '{body.model}' is not available", "model_not_found", param="model")
     from .providers import authorize_model
     await authorize_model(session, principal, body.model)
     if unsupported := body.unsupported():
         return openai_error(400, unsupported[1], "unsupported_parameter", param=unsupported[0])
     validate_capabilities(body)
+    from .model_mapping import resolve_model
+    body._upstream_model = await resolve_model(session, body.model)
     await validate_grammars(body)
     public_previous_id = body.previous_response_id
     binding = None
@@ -1052,7 +1057,7 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
 @app.post("/v1/responses/count_tokens", include_in_schema=False)
 async def estimate_claude_tokens(body: ResponseRequest, principal: ApiPrincipal = Depends(require_api_key), session: AsyncSession = Depends(get_session)):
     from .providers import authorize_model
-    if body.model not in get_settings().public_models() or provider_for(body.model) != "claude":
+    if not await model_available(session, body.model) or provider_for(body.model) != "claude":
         return openai_error(404, "Claude model is not available", "model_not_found", param="model")
     await authorize_model(session, principal, body.model)
     if unsupported := body.unsupported():

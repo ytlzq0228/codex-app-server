@@ -27,6 +27,7 @@ class ResponseStreamOptions(OpenAIRequestModel):
 
 
 class ResponseRequest(OpenAIRequestModel):
+    _upstream_model: str | None = PrivateAttr(default=None)
     # Server-only: never populated from client JSON or persisted as request input.
     _execution_input_text: str | None = PrivateAttr(default=None)
     _execution_input_items: list[Any] | None = PrivateAttr(default=None)

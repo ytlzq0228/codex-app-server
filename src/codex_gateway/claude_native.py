@@ -258,7 +258,7 @@ class ClaudeNativeMiddleware:
             aliases = dict(p.strip().split(":", 1) for p in settings.claude_native_model_aliases.split(",") if p.strip())
             model = aliases.get(requested, requested)
             from .providers import provider_for
-            if model not in settings.public_models() or provider_for(model) != "claude":
+            if provider_for(model) != "claude":
                 return await fail("Claude model is not available", 404)
             body = translate_request(original, model, False if count else None)
         except (ValueError, TypeError, KeyError, AttributeError) as exc:

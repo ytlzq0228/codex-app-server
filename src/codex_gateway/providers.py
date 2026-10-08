@@ -18,7 +18,7 @@ CAPABILITIES = {"codex": Capabilities(images=True, tools=True, structured_output
 
 def provider_for(model):
     from .config import get_settings
-    return get_settings().provider_map().get(model, "codex")
+    return get_settings().provider_map().get(model, "gemini" if model.startswith("gemini-") else "claude" if model.startswith("claude-") else "codex")
 
 def reject(param, message, code="unsupported_parameter"):
     raise HTTPException(400, detail={"error": {"message": message, "type": "invalid_request_error", "code": code, "param": param}})
@@ -140,7 +140,8 @@ async def authorize_model(db, principal, model):
 
 async def visible_models(db, principal):
     from .config import get_settings
-    models = get_settings().public_models()
+    from .model_mapping import public_models
+    models = await public_models(db)
     if principal.owner_username is None:
         return models
     providers = await allowed_providers(db, principal.owner_username)

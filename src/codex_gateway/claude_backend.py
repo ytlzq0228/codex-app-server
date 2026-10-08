@@ -45,7 +45,7 @@ class ClaudeAdapter:
         from uuid import uuid4
         usage_run_id = uuid4().hex
         from .claude_images import content_blocks
-        payload = {"model": self.settings.model_alias_map().get(request.model, request.model),
+        payload = {"model": request._upstream_model or self.settings.model_alias_map().get(request.model, request.model),
                    "session_id": request.previous_response_id or str(uuid4()),
                    "conversation": request.previous_response_id, "workspace": target.workspace,
                    "system": request.instructions, "effort": (request.reasoning or {}).get("effort"),

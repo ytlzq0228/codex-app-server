@@ -12,7 +12,7 @@
   {% include "shared/sidebar.html" %}
 
   <main class="content" {% if loading %}aria-busy="true" data-page-loading{% endif %}>
-    <header class="topbar"><div><p class="eyebrow">{{ {'overview':'OPERATIONS','keys':'ACCESS CONTROL','admin_workers':'RUNTIME','sessions':'THREAD BINDINGS','history':'AUDIT LOG'}[page] }}</p><h1>{{ {'overview':'运行控制台','keys':'API Keys','admin_workers':'Worker 管理','sessions':'Key 活动会话','history':'请求历史'}[page] }}</h1><p class="muted">{{ {'overview':'查看订阅池用量风险及 Worker 状态变化。','keys':'创建、编辑、停用或删除 API Key。','admin_workers':'管理系统内全部 Codex、Gemini 和 Claude Worker、归属、登录账号与运行状态。','sessions':'查看并释放 Key 与 Worker 的会话绑定。','history':'查看系统请求记录与用量详情。'}[page] }}</p></div><div class="health-pill"><span></span>系统在线</div></header>
+    <header class="topbar"><div><p class="eyebrow">{{ {'overview':'OPERATIONS','keys':'ACCESS CONTROL','admin_workers':'RUNTIME','sessions':'THREAD BINDINGS','history':'AUDIT LOG'}.get(page) }}</p><h1>{{ {'overview':'运行控制台','keys':'API Keys','admin_workers':'Worker 管理','sessions':'Key 活动会话','history':'请求历史'}.get(page) }}</h1><p class="muted">{{ {'overview':'查看订阅池用量风险及 Worker 状态变化。','keys':'创建、编辑、停用或删除 API Key。','admin_workers':'管理系统内全部 Codex、Gemini 和 Claude Worker、归属、登录账号与运行状态。','sessions':'查看并释放 Key 与 Worker 的会话绑定。','history':'查看系统请求记录与用量详情。'}.get(page) }}</p></div><div class="health-pill"><span></span>系统在线</div></header>
 
     {% if page == 'overview' %}
     <section id="overview" class="stats-grid">

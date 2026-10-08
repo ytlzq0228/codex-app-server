@@ -14,6 +14,18 @@ Checkpoint updates, usage and ResponseBinding creation commit together before th
 
 `CODEX_GATEWAY_EXECUTION_RESUME_ENABLED=true` enables this by default. Set it to `false` and restart the gateway to disable automatic continuation while retaining existing explicit response/tool continuation behavior. Worker security policy is applied on every start/resume/turn and is never derived from client configuration.
 
+## Async questions
+
+Native Codex async question messages (`item/completed` with an `agentMessage`,
+`delivery: async`, and `questions`) are relayed through the client's declared
+`functions.request_user_input_async` function (or its unnamespaced equivalent).
+The gateway validates the question payload against that function's schema and
+uses the normal authenticated tool continuation for the client's acknowledgement.
+The native Worker tool has already returned, so no synthetic Worker RPC reply is
+sent. A later user answer follows normal conversation continuation. Duplicate item
+IDs within a turn are delivered once. Clients without that tool, including requests
+with `tool_choice: none`, receive the questions and options as text.
+
 ## Retention and invalidation
 
 Ordinary checkpoints and ResponseBindings no longer expire by elapsed time. The former `CODEX_GATEWAY_RESPONSE_BINDING_TTL_HOURS` option is ignored. Migration reactivates only bindings previously expired automatically with the exact reason `Session TTL expired`; manually invalidated bindings stay invalid. Old expiry dates are cleared. Key active sessions include only logical conversations last used within two hours, without deleting older data. The page retains its flat Thread routing table and labels bindings as restored on demand.

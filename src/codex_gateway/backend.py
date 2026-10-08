@@ -14,6 +14,7 @@ from .tool_sessions import ToolSessions
 from .grammar_tools import call_matches_grammar
 from .schemas import BackendResult, BackendStreamEvent, ResponseRequest
 from .multimodal import dynamic_output
+from .async_questions import async_questions, question_call, question_text
 
 
 @dataclass(frozen=True)
@@ -253,6 +254,7 @@ class AppServerBackend:
                     grammar_failures = 0
                     grammar_needs_correction = False
                     specs = definitions(request)
+                    delivered_questions = set()
                     async for message in app_server.messages():
                         method, params = message.get("method"), message.get("params", {})
                         event_turn = params.get("turnId") or (params.get("turn") or {}).get("id")
@@ -283,6 +285,32 @@ class AppServerBackend:
                             await app_server.websocket.send(json.dumps({"id": message["id"], "result": {"contentItems": dynamic_output(output), "success": True}}))
                         elif message.get("id") is not None and method:
                             await app_server.reject_server_request(message)
+                        elif method == "item/completed":
+                            item = params.get("item")
+                            questions = async_questions(item)
+                            if questions is None:
+                                continue
+                            item_id = item.get("id")
+                            if not isinstance(item_id, str) or not item_id:
+                                raise ToolProtocolError("Worker async questions require an item ID")
+                            if item_id in delivered_questions:
+                                continue
+                            delivered_questions.add(item_id)
+                            call = question_call(specs, questions) if request.tool_choice != "none" else None
+                            if call is None:
+                                yield BackendStreamEvent(delta=question_text(questions), thread_id=thread_id)
+                                continue
+                            if tool_run is None:
+                                raise ToolProtocolError("Async questions require a client tool session")
+                            await self.tool_sessions.await_result(tool_run, call)
+                            input_tokens, output_tokens, cache_read_tokens, cache_write_tokens = turn_usage.counts
+                            yield BackendStreamEvent(tool_call=call, thread_id=thread_id, input_tokens=input_tokens,
+                                output_tokens=output_tokens, cache_read_tokens=cache_read_tokens,
+                                cache_write_tokens=cache_write_tokens)
+                            # The native async tool already returned accepted=true. This
+                            # notification has no RPC to reply to. Wait only for the
+                            # client's tool acknowledgement; answers arrive as user input.
+                            await self.tool_sessions.receive_result(tool_run)
                         elif method == "item/agentMessage/delta":
                             yield BackendStreamEvent(delta=params.get("delta", ""), thread_id=thread_id)
                         elif method == "thread/tokenUsage/updated":

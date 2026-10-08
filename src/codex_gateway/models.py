@@ -242,3 +242,22 @@ class GoogleAuthConfig(Base):
     client_secret: Mapped[str] = mapped_column(String(1000), default="")
     redirect_uri: Mapped[str] = mapped_column(String(1000), default="")
     trusted_domains: Mapped[str] = mapped_column(String(2000), default="")
+
+
+class DChatConfig(Base):
+    __tablename__ = "dchat_config"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    bot_id: Mapped[str] = mapped_column(String(120), default="")
+    api_client_id: Mapped[str] = mapped_column(String(500), default="")
+    api_client_secret: Mapped[str] = mapped_column(String(1000), default="")
+
+
+class WorkerNotification(Base):
+    """One durable notification per failure episode; reset when reconciled healthy."""
+    __tablename__ = "worker_notifications"
+    worker_id: Mapped[UUID] = mapped_column(ForeignKey("workers.id", ondelete="CASCADE"), primary_key=True)
+    owner_username: Mapped[str] = mapped_column(String(120))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    retry_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

@@ -1,0 +1,3710 @@
+{
+  "自助服务概览": {
+    "CN": "自助服务概览",
+    "EN": "Self-service overview"
+  },
+  "我的账户": {
+    "CN": "我的账户",
+    "EN": "My account"
+  },
+  "贡献 Worker": {
+    "CN": "贡献 Worker",
+    "EN": "Contribute Workers"
+  },
+  "用户管理": {
+    "CN": "用户管理",
+    "EN": "User management"
+  },
+  "用量详单": {
+    "CN": "用量详单",
+    "EN": "Usage details"
+  },
+  "请求详情": {
+    "CN": "请求详情",
+    "EN": "Request details"
+  },
+  "价格配置": {
+    "CN": "价格配置",
+    "EN": "Pricing"
+  },
+  "财务报表": {
+    "CN": "财务报表",
+    "EN": "Financial reports"
+  },
+  "查询与调试": {
+    "CN": "查询与调试",
+    "EN": "Explore and debug"
+  },
+  "Google 登录配置": {
+    "CN": "Google 登录配置",
+    "EN": "Google sign-in settings"
+  },
+  "启用": {
+    "CN": "启用",
+    "EN": "Enable"
+  },
+  "停用": {
+    "CN": "停用",
+    "EN": "Disable"
+  },
+  "从未使用": {
+    "CN": "从未使用",
+    "EN": "Never used"
+  },
+  "密码": {
+    "CN": "密码",
+    "EN": "Password"
+  },
+  "已生成": {
+    "CN": "已生成",
+    "EN": "Generated"
+  },
+  "未生成": {
+    "CN": "未生成",
+    "EN": "Not generated"
+  },
+  "待修改初始密码": {
+    "CN": "待修改初始密码",
+    "EN": "Initial password change required"
+  },
+  "正常": {
+    "CN": "正常",
+    "EN": "Healthy"
+  },
+  "读": {
+    "CN": "读",
+    "EN": "Read"
+  },
+  "写": {
+    "CN": "写",
+    "EN": "Write"
+  },
+  "缓存读": {
+    "CN": "缓存读",
+    "EN": "Cache read"
+  },
+  "缓存写": {
+    "CN": "缓存写",
+    "EN": "Cache write"
+  },
+  "已定价": {
+    "CN": "已定价",
+    "EN": "Priced"
+  },
+  "未定价": {
+    "CN": "未定价",
+    "EN": "Unpriced"
+  },
+  "已配置，留空保留": {
+    "CN": "已配置，留空保留",
+    "EN": "Configured; leave blank to keep"
+  },
+  "尚未配置": {
+    "CN": "尚未配置",
+    "EN": "Not configured"
+  },
+  "用户服务 · Subscription Gateway": {
+    "CN": "用户服务 · Subscription Gateway",
+    "EN": "User services · Subscription Gateway"
+  },
+  "请先修改初始密码，完成后即可使用其他功能。": {
+    "CN": "请先修改初始密码，完成后即可使用其他功能。",
+    "EN": "Change your initial password to use the other features."
+  },
+  "个人 Key 与 Quota": {
+    "CN": "个人 Key 与 Quota",
+    "EN": "Personal keys and quota"
+  },
+  "已开通厂商：": {
+    "CN": "已开通厂商：",
+    "EN": "Enabled providers:"
+  },
+  "尚未开通，请贡献 Worker 或联系管理员授权。": {
+    "CN": "尚未开通，请贡献 Worker 或联系管理员授权。",
+    "EN": "No providers enabled. Contribute a Worker or ask an administrator for access."
+  },
+  "总额度": {
+    "CN": "总额度",
+    "EN": "Total quota"
+  },
+  "管理员授予": {
+    "CN": "管理员授予",
+    "EN": "Admin grant"
+  },
+  "Worker 贡献": {
+    "CN": "Worker 贡献",
+    "EN": "Worker contribution"
+  },
+  "剩余": {
+    "CN": "剩余",
+    "EN": "Remaining"
+  },
+  "所有 Key 的模型权限由名下已正常登录的 Worker 厂商共同决定，退出登录、删除或故障时撤销。创建或启用 Key 占用一个名额，停用或删除释放名额。Worker 失效导致额度不足时，先停用最久未使用的 Key。": {
+    "CN": "所有 Key 的模型权限由名下已正常登录的 Worker 厂商共同决定，退出登录、删除或故障时撤销。创建或启用 Key 占用一个名额，停用或删除释放名额。Worker 失效导致额度不足时，先停用最久未使用的 Key。",
+    "EN": "Model access for all keys comes from your signed-in Workers. Access is revoked on sign-out, deletion or failure. Creating or enabling a key uses one slot; disabling or deleting it releases the slot. If a Worker failure reduces your quota, the least recently used keys are disabled first."
+  },
+  "创建 Key": {
+    "CN": "创建 Key",
+    "EN": "Create key"
+  },
+  "贡献 Worker 获取额度": {
+    "CN": "贡献 Worker 获取额度",
+    "EN": "Contribute a Worker to earn quota"
+  },
+  "关闭": {
+    "CN": "关闭",
+    "EN": "Close"
+  },
+  "Key 名称": {
+    "CN": "Key 名称",
+    "EN": "Key name"
+  },
+  "例如：个人电脑": {
+    "CN": "例如：个人电脑",
+    "EN": "e.g. Personal computer"
+  },
+  "创建后占用 1 个启用名额。密钥仅显示一次。": {
+    "CN": "创建后占用 1 个启用名额。密钥仅显示一次。",
+    "EN": "Uses one active-key slot. The secret is shown only once."
+  },
+  "创建": {
+    "CN": "创建",
+    "EN": "Create"
+  },
+  "Key 前缀": {
+    "CN": "Key 前缀",
+    "EN": "Key prefix"
+  },
+  "状态": {
+    "CN": "状态",
+    "EN": "Status"
+  },
+  "最近使用": {
+    "CN": "最近使用",
+    "EN": "Last used"
+  },
+  "操作": {
+    "CN": "操作",
+    "EN": "Actions"
+  },
+  "刷新 Key": {
+    "CN": "刷新 Key",
+    "EN": "Rotate key"
+  },
+  "确定删除这个 Key？旧密钥将失效，历史记录保留。": {
+    "CN": "确定删除这个 Key？旧密钥将失效，历史记录保留。",
+    "EN": "Delete this key? The old secret will stop working. History will be retained."
+  },
+  "删除": {
+    "CN": "删除",
+    "EN": "Delete"
+  },
+  "尚未创建 Key，可联系管理员或贡献付费 Worker 获取额度。": {
+    "CN": "尚未创建 Key，可联系管理员或贡献付费 Worker 获取额度。",
+    "EN": "No keys yet. Ask an administrator or contribute a paid Worker to earn quota."
+  },
+  "全部用户": {
+    "CN": "全部用户",
+    "EN": "All users"
+  },
+  "新建用户": {
+    "CN": "新建用户",
+    "EN": "New user"
+  },
+  "用户名": {
+    "CN": "用户名",
+    "EN": "Username"
+  },
+  "邮箱": {
+    "CN": "邮箱",
+    "EN": "Email"
+  },
+  "角色": {
+    "CN": "角色",
+    "EN": "Role"
+  },
+  "登录方式": {
+    "CN": "登录方式",
+    "EN": "Sign-in method"
+  },
+  "Quota（启用 / 总额）": {
+    "CN": "Quota（启用 / 总额）",
+    "EN": "Quota (active / total)"
+  },
+  "密码状态": {
+    "CN": "密码状态",
+    "EN": "Password status"
+  },
+  "创建时间": {
+    "CN": "创建时间",
+    "EN": "Created"
+  },
+  "授予": {
+    "CN": "授予",
+    "EN": "Grant"
+  },
+  "· 贡献": {
+    "CN": "· 贡献",
+    "EN": "· Contribution"
+  },
+  "编辑": {
+    "CN": "编辑",
+    "EN": "Edit"
+  },
+  "编辑 Quota": {
+    "CN": "编辑 Quota",
+    "EN": "Edit quota"
+  },
+  "Provider 权限": {
+    "CN": "Provider 权限",
+    "EN": "Provider access"
+  },
+  "暂无用户": {
+    "CN": "暂无用户",
+    "EN": "No users"
+  },
+  "用户名（邮箱仅取 @ 前的部分）": {
+    "CN": "用户名（邮箱仅取 @ 前的部分）",
+    "EN": "Username (email prefix before @)"
+  },
+  "系统生成随机初始密码，首次登录必须修改。": {
+    "CN": "系统生成随机初始密码，首次登录必须修改。",
+    "EN": "A random initial password will be generated. The user must change it at first sign-in."
+  },
+  "取消": {
+    "CN": "取消",
+    "EN": "Cancel"
+  },
+  "创建并生成密码": {
+    "CN": "创建并生成密码",
+    "EN": "Create and generate password"
+  },
+  "编辑用户 ·": {
+    "CN": "编辑用户 ·",
+    "EN": "Edit user ·"
+  },
+  "重置密码并要求下次登录修改": {
+    "CN": "重置密码并要求下次登录修改",
+    "EN": "Reset password and require a change at next sign-in"
+  },
+  "保存": {
+    "CN": "保存",
+    "EN": "Save"
+  },
+  "编辑 Quota ·": {
+    "CN": "编辑 Quota ·",
+    "EN": "Edit quota ·"
+  },
+  "管理员授予额度": {
+    "CN": "管理员授予额度",
+    "EN": "Admin-granted quota"
+  },
+  "授予额度减一": {
+    "CN": "授予额度减一",
+    "EN": "Decrease granted quota"
+  },
+  "授予额度加一": {
+    "CN": "授予额度加一",
+    "EN": "Increase granted quota"
+  },
+  "可点击加减按钮，也可直接填写。Worker 贡献": {
+    "CN": "可点击加减按钮，也可直接填写。Worker 贡献",
+    "EN": "Use the buttons or enter a value. Worker contribution:"
+  },
+  "个，另外计入总额度。调低后若额度不足，将停用最久未使用的 Key。": {
+    "CN": "个，另外计入总额度。调低后若额度不足，将停用最久未使用的 Key。",
+    "EN": "additional slots are included in the total quota. If the new quota is insufficient, the least recently used keys will be disabled."
+  },
+  "确认设置": {
+    "CN": "确认设置",
+    "EN": "Confirm"
+  },
+  "Provider 权限 ·": {
+    "CN": "Provider 权限 ·",
+    "EN": "Provider access ·"
+  },
+  "手动开启后，用户无需贡献对应 Provider 的 Worker 即可调用，该用户所有 Key 立即生效。Key 名额仍由 Quota 单独管理。": {
+    "CN": "手动开启后，用户无需贡献对应 Provider 的 Worker 即可调用，该用户所有 Key 立即生效。Key 名额仍由 Quota 单独管理。",
+    "EN": "Enabling a provider grants access immediately to all of this user's keys without requiring a Worker contribution. Key slots are managed separately through quota."
+  },
+  "额外开启": {
+    "CN": "额外开启",
+    "EN": "Also enable"
+  },
+  "关闭仅撤销管理员额外授权；用户已有 Worker 带来的 Provider 权限仍然保留。": {
+    "CN": "关闭仅撤销管理员额外授权；用户已有 Worker 带来的 Provider 权限仍然保留。",
+    "EN": "Disabling removes only the administrator's extra grant. Access earned through the user's Workers is retained."
+  },
+  "保存权限": {
+    "CN": "保存权限",
+    "EN": "Save access"
+  },
+  "请求 ID": {
+    "CN": "请求 ID",
+    "EN": "Request ID"
+  },
+  "模型": {
+    "CN": "模型",
+    "EN": "Model"
+  },
+  "开始日期（UTC）": {
+    "CN": "开始日期（UTC）",
+    "EN": "Start date (UTC)"
+  },
+  "结束日期（不含）": {
+    "CN": "结束日期（不含）",
+    "EN": "End date (exclusive)"
+  },
+  "最近请求状态": {
+    "CN": "最近请求状态",
+    "EN": "Latest request status"
+  },
+  "全部": {
+    "CN": "全部",
+    "EN": "All"
+  },
+  "失败": {
+    "CN": "失败",
+    "EN": "Failed"
+  },
+  "成功": {
+    "CN": "成功",
+    "EN": "Succeeded"
+  },
+  "查询": {
+    "CN": "查询",
+    "EN": "Search"
+  },
+  "正在加载用量详单…": {
+    "CN": "正在加载用量详单…",
+    "EN": "Loading usage details…"
+  },
+  "会话状态取最后一次请求；筛选匹配会话内请求，展开后按页加载完整会话。": {
+    "CN": "会话状态取最后一次请求；筛选匹配会话内请求，展开后按页加载完整会话。",
+    "EN": "Session status reflects the last request. Filters match requests within a session; expand a session to load its full history by page."
+  },
+  "模型价格 · USD / 1M tokens": {
+    "CN": "模型价格 · USD / 1M tokens",
+    "EN": "Model prices · USD / 1M tokens"
+  },
+  "读/写分别对应总输入/输出；缓存读、缓存写是输入 Token 的子集，分别使用自己的单价。财务报表按最新价格重算，历史请求价格快照保持不变。": {
+    "CN": "读/写分别对应总输入/输出；缓存读、缓存写是输入 Token 的子集，分别使用自己的单价。财务报表按最新价格重算，历史请求价格快照保持不变。",
+    "EN": "Read/write correspond to total input/output. Cache read and write are subsets of input tokens and have separate prices. Financial reports use the latest prices; historical request price snapshots remain unchanged."
+  },
+  "读（输入）": {
+    "CN": "读（输入）",
+    "EN": "Read (input)"
+  },
+  "写（输出）": {
+    "CN": "写（输出）",
+    "EN": "Write (output)"
+  },
+  "价格": {
+    "CN": "价格",
+    "EN": "Price"
+  },
+  "新增模型名称": {
+    "CN": "新增模型名称",
+    "EN": "New model name"
+  },
+  "新增其他模型": {
+    "CN": "新增其他模型",
+    "EN": "Add another model"
+  },
+  "新增模型": {
+    "CN": "新增模型",
+    "EN": "New model"
+  },
+  "待新增": {
+    "CN": "待新增",
+    "EN": "Pending addition"
+  },
+  "新增 / 保存": {
+    "CN": "新增 / 保存",
+    "EN": "Add / Save"
+  },
+  "配置保存到数据库，修改后立即生效。请在 Google Cloud 中登记完全相同的回调地址。": {
+    "CN": "配置保存到数据库，修改后立即生效。请在 Google Cloud 中登记完全相同的回调地址。",
+    "EN": "Settings are stored in the database and take effect immediately. Register the exact same redirect URI in Google Cloud."
+  },
+  "启用 Google 登录": {
+    "CN": "启用 Google 登录",
+    "EN": "Enable Google sign-in"
+  },
+  "回调地址": {
+    "CN": "回调地址",
+    "EN": "Redirect URI"
+  },
+  "允许的邮箱域（逗号分隔，留空允许所有已验证邮箱）": {
+    "CN": "允许的邮箱域（逗号分隔，留空允许所有已验证邮箱）",
+    "EN": "Allowed email domains (comma-separated; leave blank to allow all verified emails)"
+  },
+  "保存配置": {
+    "CN": "保存配置",
+    "EN": "Save settings"
+  },
+  "重试": {
+    "CN": "重试",
+    "EN": "Retry"
+  },
+  "操作结果": {
+    "CN": "操作结果",
+    "EN": "Result"
+  },
+  "关闭并刷新": {
+    "CN": "关闭并刷新",
+    "EN": "Close and refresh"
+  },
+  "登录 · Subscription Gateway": {
+    "CN": "登录 · Subscription Gateway",
+    "EN": "Sign in · Subscription Gateway"
+  },
+  "控制每一次": {
+    "CN": "控制每一次",
+    "EN": "Control every"
+  },
+  "模型调用。": {
+    "CN": "模型调用。",
+    "EN": "model call."
+  },
+  "管理隔离 Worker、访问密钥、账号状态与用量，一切集中在同一个控制台。": {
+    "CN": "管理隔离 Worker、访问密钥、账号状态与用量，一切集中在同一个控制台。",
+    "EN": "Manage isolated Workers, access keys, account status and usage in one console."
+  },
+  "Gateway Console": {
+    "CN": "网关控制台",
+    "EN": "Gateway console"
+  },
+  "ACCOUNT LOGIN": {
+    "CN": "账户登录",
+    "EN": "ACCOUNT SIGN-IN"
+  },
+  "欢迎回来": {
+    "CN": "欢迎回来",
+    "EN": "Welcome back"
+  },
+  "使用用户名密码或 Google 登录。": {
+    "CN": "使用用户名密码或 Google 登录。",
+    "EN": "Sign in with your username and password or Google."
+  },
+  "用户名（邮箱前缀）": {
+    "CN": "用户名（邮箱前缀）",
+    "EN": "Username (email prefix)"
+  },
+  "登录控制台": {
+    "CN": "登录控制台",
+    "EN": "Sign in to console"
+  },
+  "使用 Google 登录": {
+    "CN": "使用 Google 登录",
+    "EN": "Sign in with Google"
+  },
+  "Google 登录尚未启用": {
+    "CN": "Google 登录尚未启用",
+    "EN": "Google sign-in is not enabled"
+  },
+  "会话将在 12 小时后自动失效": {
+    "CN": "会话将在 12 小时后自动失效",
+    "EN": "Your session expires automatically after 12 hours"
+  },
+  "系统运行状态 · Subscription Gateway": {
+    "CN": "系统运行状态 · Subscription Gateway",
+    "EN": "System status · Subscription Gateway"
+  },
+  "系统运行状态": {
+    "CN": "系统运行状态",
+    "EN": "System status"
+  },
+  "APP 节点、Docker 负载与共享数据库，每 30 秒自动刷新。": {
+    "CN": "APP 节点、Docker 负载与共享数据库，每 30 秒自动刷新。",
+    "EN": "App nodes, Docker load and the shared database. Refreshes every 30 seconds."
+  },
+  "立即刷新": {
+    "CN": "立即刷新",
+    "EN": "Refresh now"
+  },
+  "正在读取运行状态…": {
+    "CN": "正在读取运行状态…",
+    "EN": "Loading system status…"
+  },
+  "共享数据库": {
+    "CN": "共享数据库",
+    "EN": "Shared database"
+  },
+  "APP 节点与 Docker 负载": {
+    "CN": "APP 节点与 Docker 负载",
+    "EN": "App nodes and Docker load"
+  },
+  "CPU 为容器采样值之和，占宿主机全部 CPU 的比例；内存为容器工作集之和，不包含宿主机其他进程。单个容器 CPU 可超过 100%。无法读取的指标显示“—”，停止的容器不计入当前负载。": {
+    "CN": "CPU 为容器采样值之和，占宿主机全部 CPU 的比例；内存为容器工作集之和，不包含宿主机其他进程。单个容器 CPU 可超过 100%。无法读取的指标显示“—”，停止的容器不计入当前负载。",
+    "EN": "CPU is the sum of container samples as a share of total host CPU. Memory is the sum of container working sets, excluding other host processes. A container may use more than 100% CPU. Unavailable metrics show “—”; stopped containers are excluded."
+  },
+  "运行控制台": {
+    "CN": "运行控制台",
+    "EN": "Operations console"
+  },
+  "Worker 管理": {
+    "CN": "Worker 管理",
+    "EN": "Worker management"
+  },
+  "Key 活动会话": {
+    "CN": "Key 活动会话",
+    "EN": "Active key sessions"
+  },
+  "请求历史": {
+    "CN": "请求历史",
+    "EN": "Request history"
+  },
+  "查看订阅池用量风险及 Worker 状态变化。": {
+    "CN": "查看订阅池用量风险及 Worker 状态变化。",
+    "EN": "Monitor subscription-pool usage risk and Worker status changes."
+  },
+  "创建、编辑、停用或删除 API Key。": {
+    "CN": "创建、编辑、停用或删除 API Key。",
+    "EN": "Create, edit, disable or delete API keys."
+  },
+  "管理系统内全部 Codex、Gemini 和 Claude Worker、归属、登录账号与运行状态。": {
+    "CN": "管理系统内全部 Codex、Gemini 和 Claude Worker、归属、登录账号与运行状态。",
+    "EN": "Manage all Codex, Gemini and Claude Workers, their owners, accounts and runtime status."
+  },
+  "查看并释放 Key 与 Worker 的会话绑定。": {
+    "CN": "查看并释放 Key 与 Worker 的会话绑定。",
+    "EN": "View and release session bindings between keys and Workers."
+  },
+  "查看系统请求记录与用量详情。": {
+    "CN": "查看系统请求记录与用量详情。",
+    "EN": "View system request records and usage details."
+  },
+  "无归属": {
+    "CN": "无归属",
+    "EN": "No owner"
+  },
+  "（已删除）": {
+    "CN": "（已删除）",
+    "EN": "(deleted)"
+  },
+  "已隔离": {
+    "CN": "已隔离",
+    "EN": "Isolated"
+  },
+  "未分配": {
+    "CN": "未分配",
+    "EN": "Unassigned"
+  },
+  "未读取账号": {
+    "CN": "未读取账号",
+    "EN": "Account not read"
+  },
+  "已登录·": {
+    "CN": "已登录·",
+    "EN": "Signed in ·"
+  },
+  "排空": {
+    "CN": "排空",
+    "EN": "Drain"
+  },
+  " · 管理员": {
+    "CN": " · 管理员",
+    "EN": " · Administrator"
+  },
+  " · 已停用": {
+    "CN": " · 已停用",
+    "EN": " · Disabled"
+  },
+  "管理控制台 · Subscription Gateway": {
+    "CN": "管理控制台 · Subscription Gateway",
+    "EN": "Admin console · Subscription Gateway"
+  },
+  "系统在线": {
+    "CN": "系统在线",
+    "EN": "System online"
+  },
+  "累计请求": {
+    "CN": "累计请求",
+    "EN": "Total requests"
+  },
+  "全部 API Keys": {
+    "CN": "全部 API Keys",
+    "EN": "All API keys"
+  },
+  "输入 Token": {
+    "CN": "输入 Token",
+    "EN": "Input tokens"
+  },
+  "历史累计": {
+    "CN": "历史累计",
+    "EN": "All time"
+  },
+  "输出 Token": {
+    "CN": "输出 Token",
+    "EN": "Output tokens"
+  },
+  "Worker 总数": {
+    "CN": "Worker 总数",
+    "EN": "Total Workers"
+  },
+  "所有已创建记录": {
+    "CN": "所有已创建记录",
+    "EN": "All created records"
+  },
+  "ACCESS CONTROL": {
+    "CN": "访问控制",
+    "EN": "ACCESS CONTROL"
+  },
+  "名称": {
+    "CN": "名称",
+    "EN": "Name"
+  },
+  "归属用户": {
+    "CN": "归属用户",
+    "EN": "Owner"
+  },
+  "调度策略": {
+    "CN": "调度策略",
+    "EN": "Scheduling"
+  },
+  "固定 ·": {
+    "CN": "固定 ·",
+    "EN": "Pinned ·"
+  },
+  "未知 Worker": {
+    "CN": "未知 Worker",
+    "EN": "Unknown Worker"
+  },
+  "自动池化": {
+    "CN": "自动池化",
+    "EN": "Automatic pool"
+  },
+  "更改归属": {
+    "CN": "更改归属",
+    "EN": "Change owner"
+  },
+  "确定删除这个 Key 吗？Key 会立即失效，活动会话会释放，请求历史会保留。": {
+    "CN": "确定删除这个 Key 吗？Key 会立即失效，活动会话会释放，请求历史会保留。",
+    "EN": "Delete this key? It will stop working immediately and active sessions will be released. Request history will be retained."
+  },
+  "还没有 API Key": {
+    "CN": "还没有 API Key",
+    "EN": "No API keys yet"
+  },
+  "THREAD BINDINGS": {
+    "CN": "会话绑定",
+    "EN": "THREAD BINDINGS"
+  },
+  "按 Thread 平铺显示当前 Worker 路由；逻辑会话链接可定位请求历史。这里只显示最近 2 小时活跃的会话，较早的绑定仍保留，释放 Thread 不会删除请求历史。": {
+    "CN": "按 Thread 平铺显示当前 Worker 路由；逻辑会话链接可定位请求历史。这里只显示最近 2 小时活跃的会话，较早的绑定仍保留，释放 Thread 不会删除请求历史。",
+    "EN": "Current Worker routes are listed by thread. Logical-session links open request history. Only sessions active in the last 2 hours are shown; older bindings are retained. Releasing a thread does not delete request history."
+  },
+  "当前定位：": {
+    "CN": "当前定位：",
+    "EN": "Current selection:"
+  },
+  "查看全部活动会话": {
+    "CN": "查看全部活动会话",
+    "EN": "View all active sessions"
+  },
+  "AUDIT LOG": {
+    "CN": "审计日志",
+    "EN": "AUDIT LOG"
+  },
+  "正在加载请求历史…": {
+    "CN": "正在加载请求历史…",
+    "EN": "Loading request history…"
+  },
+  "；每页 30 个会话，点击请求 ID 查看请求参数和计费详情。": {
+    "CN": "；每页 30 个会话，点击请求 ID 查看请求参数和计费详情。",
+    "EN": "; 30 sessions per page. Select a request ID to view its parameters and billing details."
+  },
+  "逻辑会话 ID": {
+    "CN": "逻辑会话 ID",
+    "EN": "Logical session ID"
+  },
+  "完整逻辑会话 ID / 旧 Thread ID": {
+    "CN": "完整逻辑会话 ID / 旧 Thread ID",
+    "EN": "Full logical session ID / legacy thread ID"
+  },
+  "全部 Key": {
+    "CN": "全部 Key",
+    "EN": "All keys"
+  },
+  "开发模式（无 Key）": {
+    "CN": "开发模式（无 Key）",
+    "EN": "Development mode (no key)"
+  },
+  "接口": {
+    "CN": "接口",
+    "EN": "Endpoint"
+  },
+  "例如 responses": {
+    "CN": "例如 responses",
+    "EN": "e.g. responses"
+  },
+  "开始时间": {
+    "CN": "开始时间",
+    "EN": "Start time"
+  },
+  "结束时间": {
+    "CN": "结束时间",
+    "EN": "End time"
+  },
+  "查看全部": {
+    "CN": "查看全部",
+    "EN": "View all"
+  },
+  "时间按浏览器时区": {
+    "CN": "时间按浏览器时区",
+    "EN": "Times use the browser time zone"
+  },
+  "显示和筛选，包含开始时间、不包含结束时间；显示含匹配请求的完整会话。": {
+    "CN": "显示和筛选，包含开始时间、不包含结束时间；显示含匹配请求的完整会话。",
+    "EN": "for display and filtering. The start is inclusive and the end exclusive. Full sessions containing matching requests are shown."
+  },
+  "RUNTIME": {
+    "CN": "运行实例",
+    "EN": "RUNTIME"
+  },
+  "增加 Worker": {
+    "CN": "增加 Worker",
+    "EN": "Add Worker"
+  },
+  "归属": {
+    "CN": "归属",
+    "EN": "Owner"
+  },
+  "节点": {
+    "CN": "节点",
+    "EN": "Node"
+  },
+  "登录账号 / 套餐": {
+    "CN": "登录账号 / 套餐",
+    "EN": "Account / plan"
+  },
+  "认证方式": {
+    "CN": "认证方式",
+    "EN": "Authentication"
+  },
+  "账号已用额度": {
+    "CN": "账号已用额度",
+    "EN": "Account usage"
+  },
+  "的名称": {
+    "CN": "的名称",
+    "EN": "name"
+  },
+  "编辑名称": {
+    "CN": "编辑名称",
+    "EN": "Edit name"
+  },
+  "的归属": {
+    "CN": "的归属",
+    "EN": "owner"
+  },
+  "编辑归属": {
+    "CN": "编辑归属",
+    "EN": "Edit owner"
+  },
+  "套餐：": {
+    "CN": "套餐：",
+    "EN": "Plan:"
+  },
+  "未登录": {
+    "CN": "未登录",
+    "EN": "Signed out"
+  },
+  "探测": {
+    "CN": "探测",
+    "EN": "Probe"
+  },
+  "是否退出当前账号并重新登录？退出后将重新计算贡献额度，额度不足的 Key 可能被停用。": {
+    "CN": "是否退出当前账号并重新登录？退出后将重新计算贡献额度，额度不足的 Key 可能被停用。",
+    "EN": "Sign out of this account and sign in again? Contribution quota will be recalculated and keys exceeding the quota may be disabled."
+  },
+  "重新登录": {
+    "CN": "重新登录",
+    "EN": "Sign in again"
+  },
+  "登录账号": {
+    "CN": "登录账号",
+    "EN": "Sign-in account"
+  },
+  "确定删除这个 Worker 容器吗？": {
+    "CN": "确定删除这个 Worker 容器吗？",
+    "EN": "Delete this Worker container?"
+  },
+  "还没有 Worker": {
+    "CN": "还没有 Worker",
+    "EN": "No Workers yet"
+  },
+  "创建 API Key": {
+    "CN": "创建 API Key",
+    "EN": "Create API key"
+  },
+  "例如：Raspberry Pi Workflow": {
+    "CN": "例如：Raspberry Pi Workflow",
+    "EN": "e.g. Raspberry Pi Workflow"
+  },
+  "固定 Worker": {
+    "CN": "固定 Worker",
+    "EN": "Pinned Worker"
+  },
+  "关联 Worker": {
+    "CN": "关联 Worker",
+    "EN": "Associated Worker"
+  },
+  "自动选择": {
+    "CN": "自动选择",
+    "EN": "Automatic selection"
+  },
+  "编辑 API Key": {
+    "CN": "编辑 API Key",
+    "EN": "Edit API key"
+  },
+  "修改调度策略不会移动已有会话；如需释放旧绑定，请在“Key 活动会话”中删除。": {
+    "CN": "修改调度策略不会移动已有会话；如需释放旧绑定，请在“Key 活动会话”中删除。",
+    "EN": "Changing the scheduling strategy does not move existing sessions. To release old bindings, delete them under Active key sessions."
+  },
+  "Worker 类型": {
+    "CN": "Worker 类型",
+    "EN": "Worker type"
+  },
+  "Worker 名称": {
+    "CN": "Worker 名称",
+    "EN": "Worker name"
+  },
+  "仅允许小写字母、数字和连字符，必须以字母开头。": {
+    "CN": "仅允许小写字母、数字和连字符，必须以字母开头。",
+    "EN": "Use lowercase letters, digits and hyphens only, starting with a letter."
+  },
+  "创建容器": {
+    "CN": "创建容器",
+    "EN": "Create container"
+  },
+  "编辑 Worker 名称": {
+    "CN": "编辑 Worker 名称",
+    "EN": "Edit Worker name"
+  },
+  "名称用于界面展示，不会修改 Docker 容器名称、网络地址或现有会话。": {
+    "CN": "名称用于界面展示，不会修改 Docker 容器名称、网络地址或现有会话。",
+    "EN": "This display name does not change the Docker container name, network address or existing sessions."
+  },
+  "保存名称": {
+    "CN": "保存名称",
+    "EN": "Save name"
+  },
+  "确定修改此 Worker 的归属？系统会重新计算原所有人和新所有人的 Quota，额度不足的 Key 可能被停用。": {
+    "CN": "确定修改此 Worker 的归属？系统会重新计算原所有人和新所有人的 Quota，额度不足的 Key 可能被停用。",
+    "EN": "Change this Worker's owner? Both owners' quotas will be recalculated. Keys exceeding quota may be disabled."
+  },
+  "编辑 Worker 归属": {
+    "CN": "编辑 Worker 归属",
+    "EN": "Edit Worker owner"
+  },
+  "归属账号": {
+    "CN": "归属账号",
+    "EN": "Owner account"
+  },
+  "选择归属用户": {
+    "CN": "选择归属用户",
+    "EN": "Select an owner"
+  },
+  "修改归属会重新计算原所有人和新所有人的 Quota；额度不足的 Key 可能被停用。": {
+    "CN": "修改归属会重新计算原所有人和新所有人的 Quota；额度不足的 Key 可能被停用。",
+    "EN": "Changing ownership recalculates both owners' quotas. Keys exceeding quota may be disabled."
+  },
+  "保存归属": {
+    "CN": "保存归属",
+    "EN": "Save owner"
+  },
+  "复制": {
+    "CN": "复制",
+    "EN": "Copy"
+  },
+  "打开 OpenAI 登录页面": {
+    "CN": "打开 OpenAI 登录页面",
+    "EN": "Open OpenAI sign-in"
+  },
+  "设备码": {
+    "CN": "设备码",
+    "EN": "Device code"
+  },
+  "等待登录完成…": {
+    "CN": "等待登录完成…",
+    "EN": "Waiting for sign-in…"
+  },
+  "完成": {
+    "CN": "完成",
+    "EN": "Done"
+  },
+  "历史范围": {
+    "CN": "历史范围",
+    "EN": "History range"
+  },
+  "最近 24 小时": {
+    "CN": "最近 24 小时",
+    "EN": "Last 24 hours"
+  },
+  "最近 7 天": {
+    "CN": "最近 7 天",
+    "EN": "Last 7 days"
+  },
+  "最近 30 天": {
+    "CN": "最近 30 天",
+    "EN": "Last 30 days"
+  },
+  "最近 90 天": {
+    "CN": "最近 90 天",
+    "EN": "Last 90 days"
+  },
+  "正在读取监控数据…": {
+    "CN": "正在读取监控数据…",
+    "EN": "Loading monitoring data…"
+  },
+  "当前订阅池总用量": {
+    "CN": "当前订阅池总用量",
+    "EN": "Current subscription-pool usage"
+  },
+  "配置套餐权重": {
+    "CN": "配置套餐权重",
+    "EN": "Configure plan weights"
+  },
+  "Codex 与 Gemini 独立计算。各 Provider 内按套餐权重加权，显示已用比例及剩余可用比例。": {
+    "CN": "Codex 与 Gemini 独立计算。各 Provider 内按套餐权重加权，显示已用比例及剩余可用比例。",
+    "EN": "Codex and Gemini are calculated separately. Usage and remaining capacity are weighted by plan within each provider."
+  },
+  "每小时采样，包含仍登录的 Worker（含停用及隔离），排除未登录及已删除记录；同一账号的多个 Worker 分别计入。未知套餐按权重 1；读取成功且确认不限额的窗口按用量 0% 计入，读取失败为未知。历史中尚未按 Provider 区分的采样不混入新图表。": {
+    "CN": "每小时采样，包含仍登录的 Worker（含停用及隔离），排除未登录及已删除记录；同一账号的多个 Worker 分别计入。未知套餐按权重 1；读取成功且确认不限额的窗口按用量 0% 计入，读取失败为未知。历史中尚未按 Provider 区分的采样不混入新图表。",
+    "EN": "Hourly samples include signed-in Workers, including disabled and isolated Workers, and exclude signed-out and deleted records. Workers sharing an account are counted separately. Unknown plans use weight 1. Confirmed unlimited windows count as 0% usage; failed reads are unknown. Legacy samples without a provider breakdown are excluded."
+  },
+  "Worker 状态": {
+    "CN": "Worker 状态",
+    "EN": "Worker status"
+  },
+  "分母为未删除的 Worker；停用、排空及无法归类的故障计入其他异常，登录状态沿用最近探测结果。": {
+    "CN": "分母为未删除的 Worker；停用、排空及无法归类的故障计入其他异常，登录状态沿用最近探测结果。",
+    "EN": "The denominator includes all non-deleted Workers. Disabled, draining and unclassified failures count as other issues. Sign-in status uses the latest probe."
+  },
+  "Worker 历史波动": {
+    "CN": "Worker 历史波动",
+    "EN": "Worker status history"
+  },
+  "每 10 分钟采样；中断处留空。时间按浏览器本地时区显示。": {
+    "CN": "每 10 分钟采样；中断处留空。时间按浏览器本地时区显示。",
+    "EN": "Sampled every 10 minutes; interruptions appear as gaps. Times use your browser's local time zone."
+  },
+  "登录 Gemini 订阅账号": {
+    "CN": "登录 Gemini 订阅账号",
+    "EN": "Sign in to a Gemini subscription account"
+  },
+  "正在完成登录设置，请稍候…": {
+    "CN": "正在完成登录设置，请稍候…",
+    "EN": "Finishing sign-in setup. Please wait…"
+  },
+  "打开 Google 授权页面": {
+    "CN": "打开 Google 授权页面",
+    "EN": "Open Google authorization"
+  },
+  "授权码": {
+    "CN": "授权码",
+    "EN": "Authorization code"
+  },
+  "粘贴授权页面返回的授权码": {
+    "CN": "粘贴授权页面返回的授权码",
+    "EN": "Paste the code returned by the authorization page"
+  },
+  "使用拥有订阅权益的账号完成授权。项目与许可证将在登录过程中选择。": {
+    "CN": "使用拥有订阅权益的账号完成授权。项目与许可证将在登录过程中选择。",
+    "EN": "Authorize with an account that has a subscription. Select the project and license during sign-in."
+  },
+  "确认授权": {
+    "CN": "确认授权",
+    "EN": "Confirm authorization"
+  },
+  "读取中…": {
+    "CN": "读取中…",
+    "EN": "Loading…"
+  },
+  "未记录": {
+    "CN": "未记录",
+    "EN": "Not recorded"
+  },
+  "最近请求": {
+    "CN": "最近请求",
+    "EN": "Latest requests"
+  },
+  "请求数": {
+    "CN": "请求数",
+    "EN": "Requests"
+  },
+  "总 Token": {
+    "CN": "总 Token",
+    "EN": "Total tokens"
+  },
+  "总价格（USD）": {
+    "CN": "总价格（USD）",
+    "EN": "Total price (USD)"
+  },
+  "旧记录：以 Thread / 请求 ID 标识": {
+    "CN": "旧记录：以 Thread / 请求 ID 标识",
+    "EN": "Legacy record: identified by thread / request ID"
+  },
+  "个 Worker Thread": {
+    "CN": "个 Worker Thread",
+    "EN": "Worker threads"
+  },
+  "查看活动绑定": {
+    "CN": "查看活动绑定",
+    "EN": "View active bindings"
+  },
+  "另有": {
+    "CN": "另有",
+    "EN": "Also"
+  },
+  "条未定价": {
+    "CN": "条未定价",
+    "EN": "unpriced"
+  },
+  "展开": {
+    "CN": "展开",
+    "EN": "Expand"
+  },
+  "输入": {
+    "CN": "输入",
+    "EN": "Input"
+  },
+  "输出": {
+    "CN": "输出",
+    "EN": "Output"
+  },
+  "累计耗时": {
+    "CN": "累计耗时",
+    "EN": "Total duration"
+  },
+  "总价格 USD：": {
+    "CN": "总价格 USD：",
+    "EN": "Total price USD:"
+  },
+  "（另有": {
+    "CN": "（另有",
+    "EN": "(also"
+  },
+  "条未定价）": {
+    "CN": "条未定价）",
+    "EN": "unpriced)"
+  },
+  "时间": {
+    "CN": "时间",
+    "EN": "Time"
+  },
+  "耗时": {
+    "CN": "耗时",
+    "EN": "Duration"
+  },
+  "价格（USD）": {
+    "CN": "价格（USD）",
+    "EN": "Price (USD)"
+  },
+  "关联：": {
+    "CN": "关联：",
+    "EN": "Association:"
+  },
+  "更多（剩余": {
+    "CN": "更多（剩余",
+    "EN": "More (remaining:"
+  },
+  "条）": {
+    "CN": "条）",
+    "EN": "records)"
+  },
+  "暂无请求历史": {
+    "CN": "暂无请求历史",
+    "EN": "No request history"
+  },
+  "我的近30天用量": {
+    "CN": "我的近30天用量",
+    "EN": "My usage over the last 30 days"
+  },
+  "正在加载用量…": {
+    "CN": "正在加载用量…",
+    "EN": "Loading usage…"
+  },
+  "至": {
+    "CN": "至",
+    "EN": "to"
+  },
+  "（UTC，含今天）；汇总全部个人 Key，不受详单筛选或分页影响。": {
+    "CN": "（UTC，含今天）；汇总全部个人 Key，不受详单筛选或分页影响。",
+    "EN": "(UTC, including today). Includes all personal keys, independent of detail filters and pagination."
+  },
+  "Token 总数": {
+    "CN": "Token 总数",
+    "EN": "Total tokens"
+  },
+  "参考计费金额（USD）": {
+    "CN": "参考计费金额（USD）",
+    "EN": "Estimated billing amount (USD)"
+  },
+  "条请求未定价，其 Token 已计入总数，金额未计入参考计费。": {
+    "CN": "条请求未定价，其 Token 已计入总数，金额未计入参考计费。",
+    "EN": "unpriced requests. Their tokens are included in the total, but their cost is excluded from the estimate."
+  },
+  "计费金额仅用于用量参考，订阅账号不会按照实际用量收费。": {
+    "CN": "计费金额仅用于用量参考，订阅账号不会按照实际用量收费。",
+    "EN": "Billing amounts are estimates for reference. Subscription accounts are not charged based on actual usage."
+  },
+  "Token 总数为输入与输出之和（缓存 Token 已包含在输入中）；参考金额按请求发生时的价格记录汇总。": {
+    "CN": "Token 总数为输入与输出之和（缓存 Token 已包含在输入中）；参考金额按请求发生时的价格记录汇总。",
+    "EN": "Total tokens are input plus output (cached tokens are already included in input). Estimated amounts use the prices recorded at request time."
+  },
+  "创建 Worker": {
+    "CN": "创建 Worker",
+    "EN": "Create Worker"
+  },
+  "管理 / 登录 Worker": {
+    "CN": "管理 / 登录 Worker",
+    "EN": "Manage / sign in to Worker"
+  },
+  "生成 Key": {
+    "CN": "生成 Key",
+    "EN": "Generate key"
+  },
+  "管理 Key": {
+    "CN": "管理 Key",
+    "EN": "Manage keys"
+  },
+  "开始使用": {
+    "CN": "开始使用",
+    "EN": "Get started"
+  },
+  "你好，": {
+    "CN": "你好，",
+    "EN": "Hello,"
+  },
+  "通过个人 API Key 使用本站模型服务。先贡献并登录 Worker 获取额度，再生成 Key；之后定期检查 Worker，保持服务可用。": {
+    "CN": "通过个人 API Key 使用本站模型服务。先贡献并登录 Worker 获取额度，再生成 Key；之后定期检查 Worker，保持服务可用。",
+    "EN": "Use the model services with your personal API key. Contribute and sign in to a Worker to earn quota, then generate a key. Check your Workers regularly to keep the service available."
+  },
+  "可启用 Key 总额度": {
+    "CN": "可启用 Key 总额度",
+    "EN": "Total active-key quota"
+  },
+  "剩余名额": {
+    "CN": "剩余名额",
+    "EN": "Available slots"
+  },
+  "查看用量": {
+    "CN": "查看用量",
+    "EN": "View usage"
+  },
+  "使用进度": {
+    "CN": "使用进度",
+    "EN": "Setup progress"
+  },
+  "/ 3 项已就绪": {
+    "CN": "/ 3 项已就绪",
+    "EN": "/ 3 ready"
+  },
+  "自助服务准备进度": {
+    "CN": "自助服务准备进度",
+    "EN": "Self-service setup progress"
+  },
+  "尚未创建 Worker": {
+    "CN": "尚未创建 Worker",
+    "EN": "No Worker created"
+  },
+  "已创建，等待登录": {
+    "CN": "已创建，等待登录",
+    "EN": "Created; awaiting sign-in"
+  },
+  "已登录": {
+    "CN": "已登录",
+    "EN": "Signed in"
+  },
+  "个 Worker": {
+    "CN": "个 Worker",
+    "EN": "Workers"
+  },
+  "创建 Worker 后完成账号登录，再点击探测。健康的付费账号提供 1 个 Key 名额；同一用户名下同一厂商的多个 Worker 登录同一账号只计一次，不同厂商分别计算，免费套餐不提供名额。": {
+    "CN": "创建 Worker 后完成账号登录，再点击探测。健康的付费账号提供 1 个 Key 名额；同一用户名下同一厂商的多个 Worker 登录同一账号只计一次，不同厂商分别计算，免费套餐不提供名额。",
+    "EN": "Create a Worker, sign in, then run a probe. A healthy paid account provides one key slot. Multiple Workers under the same user and provider using the same account count once. Different providers count separately; free plans provide no slots."
+  },
+  "尚未生成 Key": {
+    "CN": "尚未生成 Key",
+    "EN": "No key generated"
+  },
+  "个 Key · 启用": {
+    "CN": "个 Key · 启用",
+    "EN": "keys · Active:"
+  },
+  "个": {
+    "CN": "个",
+    "EN": "slots"
+  },
+  "当前没有可用名额，请先贡献有效 Worker，或联系管理员增加额度。": {
+    "CN": "当前没有可用名额，请先贡献有效 Worker，或联系管理员增加额度。",
+    "EN": "No slots available. Contribute a valid Worker or ask an administrator for more quota."
+  },
+  "当前 Key 均已停用，请检查额度并在我的账户中启用。": {
+    "CN": "当前 Key 均已停用，请检查额度并在我的账户中启用。",
+    "EN": "All your keys are disabled. Check your quota and enable them in My account."
+  },
+  "在我的账户中创建个人 Key，并妥善保存。创建或启用 Key 占用一个名额，停用或删除释放名额。": {
+    "CN": "在我的账户中创建个人 Key，并妥善保存。创建或启用 Key 占用一个名额，停用或删除释放名额。",
+    "EN": "Create a personal key in My account and store it securely. Creating or enabling a key uses one slot; disabling or deleting it releases the slot."
+  },
+  "定期维护": {
+    "CN": "定期维护",
+    "EN": "Regular maintenance"
+  },
+  "非常好，一切正常": {
+    "CN": "非常好，一切正常",
+    "EN": "Everything looks good"
+  },
+  "创建 Worker 后开始检查": {
+    "CN": "创建 Worker 后开始检查",
+    "EN": "Checks start after you create a Worker"
+  },
+  "有": {
+    "CN": "有",
+    "EN": "There are"
+  },
+  "个 Worker 需要处理": {
+    "CN": "个 Worker 需要处理",
+    "EN": "Workers needing attention"
+  },
+  "当前名下所有 Worker 均已登录且状态正常。请定期查看，确保账号登录和订阅持续有效。": {
+    "CN": "当前名下所有 Worker 均已登录且状态正常。请定期查看，确保账号登录和订阅持续有效。",
+    "EN": "All your Workers are signed in and healthy. Check regularly to keep their accounts and subscriptions active."
+  },
+  "系统会检测 Worker 登录和运行状态。有异常时，这里会提示需要处理的事项。": {
+    "CN": "系统会检测 Worker 登录和运行状态。有异常时，这里会提示需要处理的事项。",
+    "EN": "The system checks Worker sign-in and runtime status. Issues needing attention appear here."
+  },
+  "查看 Worker 状态": {
+    "CN": "查看 Worker 状态",
+    "EN": "View Worker status"
+  },
+  "使用说明": {
+    "CN": "使用说明",
+    "EN": "Instructions"
+  },
+  "贡献 Worker：普通用户的名称为“用户名-worker-数字”，只需填写末尾数字。名下有未登录 Worker 时，请先完成登录或删除后再创建。": {
+    "CN": "贡献 Worker：普通用户的名称为“用户名-worker-数字”，只需填写末尾数字。名下有未登录 Worker 时，请先完成登录或删除后再创建。",
+    "EN": "Contribute a Worker: standard users use “username-worker-number”; enter only the numeric suffix. If you have an unsigned-in Worker, finish signing in or delete it before creating another."
+  },
+  "生成并使用 Key：在“我的账户”生成 Key，OpenAI 兼容客户端使用本站地址加": {
+    "CN": "生成并使用 Key：在“我的账户”生成 Key，OpenAI 兼容客户端使用本站地址加",
+    "EN": "Generate and use a key: create a key in My account. OpenAI-compatible clients use this site's URL plus"
+  },
+  "，Claude Code / Anthropic SDK 使用本站根地址（不加": {
+    "CN": "，Claude Code / Anthropic SDK 使用本站根地址（不加",
+    "EN": "; Claude Code / Anthropic SDK use the site root (without"
+  },
+  "）作为 API 地址，使用": {
+    "CN": "）作为 API 地址，使用",
+    "EN": ") as the API URL, with"
+  },
+  "Authorization: Bearer 你的Key": {
+    "CN": "Authorization: Bearer 你的Key",
+    "EN": "Authorization: Bearer YOUR_KEY"
+  },
+  "认证。通过": {
+    "CN": "认证。通过",
+    "EN": "authentication. Use"
+  },
+  "查询可用模型，也可在“查询与调试”中试用。": {
+    "CN": "查询可用模型，也可在“查询与调试”中试用。",
+    "EN": "to list models, or try them in Explore and debug."
+  },
+  "维护服务：Worker 退出登录、异常或被删除会失去贡献额度。启用 Key 数量超出额度时，系统优先停用最久未使用的 Key；Worker 恢复后，请手动启用需要的 Key。": {
+    "CN": "维护服务：Worker 退出登录、异常或被删除会失去贡献额度。启用 Key 数量超出额度时，系统优先停用最久未使用的 Key；Worker 恢复后，请手动启用需要的 Key。",
+    "EN": "Keep the service available: a Worker that signs out, fails or is deleted loses its contribution quota. If active keys exceed quota, the least recently used keys are disabled first. After recovery, manually enable the keys you need."
+  },
+  "保护账号：不要公开个人 Key；需要更换时可在“我的账户”刷新 Key，旧值立即失效。密码也在“我的账户”中修改。": {
+    "CN": "保护账号：不要公开个人 Key；需要更换时可在“我的账户”刷新 Key，旧值立即失效。密码也在“我的账户”中修改。",
+    "EN": "Protect your account: keep personal keys private. Rotate a key in My account when needed; the old secret stops working immediately. You can also change your password there."
+  },
+  "会话 Thread": {
+    "CN": "会话 Thread",
+    "EN": "Session thread"
+  },
+  "当前 Worker": {
+    "CN": "当前 Worker",
+    "EN": "Current Worker"
+  },
+  "最近 Response": {
+    "CN": "最近 Response",
+    "EN": "Latest response"
+  },
+  "条活动响应绑定 ·": {
+    "CN": "条活动响应绑定 ·",
+    "EN": "active response bindings ·"
+  },
+  "确定释放这个 Worker Thread 的全部响应绑定吗？请求历史会保留。": {
+    "CN": "确定释放这个 Worker Thread 的全部响应绑定吗？请求历史会保留。",
+    "EN": "Release all response bindings for this Worker thread? Request history will be retained."
+  },
+  "释放 Thread": {
+    "CN": "释放 Thread",
+    "EN": "Release thread"
+  },
+  "确定释放这个 Key 下的全部 Thread 绑定（含两小时前的会话）吗？请求历史会保留。": {
+    "CN": "确定释放这个 Key 下的全部 Thread 绑定（含两小时前的会话）吗？请求历史会保留。",
+    "EN": "Release all thread bindings for this key, including sessions older than 2 hours? Request history will be retained."
+  },
+  "清空此 Key 全部绑定": {
+    "CN": "清空此 Key 全部绑定",
+    "EN": "Clear all bindings for this key"
+  },
+  "最近 2 小时没有活动会话绑定": {
+    "CN": "最近 2 小时没有活动会话绑定",
+    "EN": "No active session bindings in the last 2 hours"
+  },
+  "已定价部分月费": {
+    "CN": "已定价部分月费",
+    "EN": "Monthly cost of priced plans"
+  },
+  "月订阅总费用": {
+    "CN": "月订阅总费用",
+    "EN": "Total monthly subscription cost"
+  },
+  "订阅套餐 · 月费配置": {
+    "CN": "订阅套餐 · 月费配置",
+    "EN": "Subscription plans · Monthly pricing"
+  },
+  "按当前仍登录的 Worker 数量 × 套餐月费计算（USD / 月）。包含超限额及停用但仍登录的 Worker，排除已退出登录、未登录及已删除的 Worker。相同账号登录多个 Worker 时按 Worker 分别计费。连接异常沿用最近确认的登录信息。": {
+    "CN": "按当前仍登录的 Worker 数量 × 套餐月费计算（USD / 月）。包含超限额及停用但仍登录的 Worker，排除已退出登录、未登录及已删除的 Worker。相同账号登录多个 Worker 时按 Worker 分别计费。连接异常沿用最近确认的登录信息。",
+    "EN": "Calculated as currently signed-in Workers × plan monthly price (USD/month). Includes limited or disabled Workers still signed in; excludes signed-out, unsigned-in and deleted Workers. Workers sharing an account are billed separately. Connection failures retain the last confirmed sign-in information."
+  },
+  "新增套餐": {
+    "CN": "新增套餐",
+    "EN": "Add plan"
+  },
+  "配置套餐月费": {
+    "CN": "配置套餐月费",
+    "EN": "Configure monthly prices"
+  },
+  "当前已登录": {
+    "CN": "当前已登录",
+    "EN": "Currently signed in:"
+  },
+  "个 Worker ·": {
+    "CN": "个 Worker ·",
+    "EN": "Workers ·"
+  },
+  "USD / 月": {
+    "CN": "USD / 月",
+    "EN": "USD / month"
+  },
+  "尚有": {
+    "CN": "尚有",
+    "EN": "There are still"
+  },
+  "个 Worker 未定价": {
+    "CN": "个 Worker 未定价",
+    "EN": "unpriced Workers"
+  },
+  "（其中": {
+    "CN": "（其中",
+    "EN": "(including"
+  },
+  "个未识别套餐）": {
+    "CN": "个未识别套餐）",
+    "EN": "with unknown plans)"
+  },
+  "，总费用尚不完整，请补充套餐信息或月费。": {
+    "CN": "，总费用尚不完整，请补充套餐信息或月费。",
+    "EN": "; total cost is incomplete. Add the missing plan details or monthly prices."
+  },
+  "套餐名称自动从 Worker 账号检测结果收集，退出登录后仍保留供配置。当前估算随登录状态和价格变化，不代表所选历史月份的实际账单。": {
+    "CN": "套餐名称自动从 Worker 账号检测结果收集，退出登录后仍保留供配置。当前估算随登录状态和价格变化，不代表所选历史月份的实际账单。",
+    "EN": "Plan names are collected from Worker account checks and retained after sign-out. Estimates change with sign-in status and pricing; they are not actual bills for the selected historical month."
+  },
+  "套餐名称": {
+    "CN": "套餐名称",
+    "EN": "Plan name"
+  },
+  "胶囊颜色": {
+    "CN": "胶囊颜色",
+    "EN": "Badge color"
+  },
+  "月费（USD / Worker）": {
+    "CN": "月费（USD / Worker）",
+    "EN": "Monthly price (USD / Worker)"
+  },
+  "套餐权重": {
+    "CN": "套餐权重",
+    "EN": "Plan weight"
+  },
+  "已登录 Worker 数": {
+    "CN": "已登录 Worker 数",
+    "EN": "Signed-in Workers"
+  },
+  "月费小计（USD）": {
+    "CN": "月费小计（USD）",
+    "EN": "Monthly subtotal (USD)"
+  },
+  "月费": {
+    "CN": "月费",
+    "EN": "Monthly price"
+  },
+  "尚未检测到套餐，可手动新增套餐或读取 Worker 账号。": {
+    "CN": "尚未检测到套餐，可手动新增套餐或读取 Worker 账号。",
+    "EN": "No plans detected. Add a plan manually or read a Worker account."
+  },
+  "新增订阅套餐": {
+    "CN": "新增订阅套餐",
+    "EN": "Add subscription plan"
+  },
+  "模型厂商": {
+    "CN": "模型厂商",
+    "EN": "Model provider"
+  },
+  "例如 plus、pro、business": {
+    "CN": "例如 plus、pro、business",
+    "EN": "e.g. plus, pro, business"
+  },
+  "名称去除首尾空格并统一为小写；填写已有名称将更新其月费。": {
+    "CN": "名称去除首尾空格并统一为小写；填写已有名称将更新其月费。",
+    "EN": "Names are trimmed and lowercased. An existing name updates its monthly price."
+  },
+  "权重用于订阅池用量加权平均，默认 1；修改不影响历史快照。": {
+    "CN": "权重用于订阅池用量加权平均，默认 1；修改不影响历史快照。",
+    "EN": "Weights are used for subscription-pool usage averages, defaulting to 1. Changes do not affect historical snapshots."
+  },
+  "过去30天每日 Token 趋势": {
+    "CN": "过去30天每日 Token 趋势",
+    "EN": "Daily token usage over the last 30 days"
+  },
+  "按 UTC 自然日统计，包含今天；无用量日期显示为 0。": {
+    "CN": "按 UTC 自然日统计，包含今天；无用量日期显示为 0。",
+    "EN": "UTC calendar days, including today. Days without usage show 0."
+  },
+  "正在加载趋势…": {
+    "CN": "正在加载趋势…",
+    "EN": "Loading trend…"
+  },
+  "过去30天暂无 Token 用量。": {
+    "CN": "过去30天暂无 Token 用量。",
+    "EN": "No token usage in the last 30 days."
+  },
+  "查看每日 Token 数值": {
+    "CN": "查看每日 Token 数值",
+    "EN": "View daily token values"
+  },
+  "日期（UTC）": {
+    "CN": "日期（UTC）",
+    "EN": "Date (UTC)"
+  },
+  "本机": {
+    "CN": "本机",
+    "EN": "Local"
+  },
+  "API 调试": {
+    "CN": "API 调试",
+    "EN": "API debug"
+  },
+  "使用你的 Key 调用本站 API。请求经过正常认证、调度和用量记录；流式响应会实时显示。Key 仅保留在当前页面。": {
+    "CN": "使用你的 Key 调用本站 API。请求经过正常认证、调度和用量记录；流式响应会实时显示。Key 仅保留在当前页面。",
+    "EN": "Call this site's API with your key. Requests use normal authentication, scheduling and usage recording. Streaming output appears live. The key is kept only on this page."
+  },
+  "Claude · Token 估算": {
+    "CN": "Claude · Token 估算",
+    "EN": "Claude · Estimated tokens"
+  },
+  "查询模型": {
+    "CN": "查询模型",
+    "EN": "List models"
+  },
+  "可用模型": {
+    "CN": "可用模型",
+    "EN": "Available models"
+  },
+  "选择模型": {
+    "CN": "选择模型",
+    "EN": "Select a model"
+  },
+  "模型按当前账号权限显示；请求仍以填写的 Key 权限为准。没有可选模型时，请贡献对应厂商的 Worker 或联系管理员授权并配置模型。": {
+    "CN": "模型按当前账号权限显示；请求仍以填写的 Key 权限为准。没有可选模型时，请贡献对应厂商的 Worker 或联系管理员授权并配置模型。",
+    "EN": "Models reflect your account access; requests use the entered key's permissions. If no models are available, contribute a Worker for the provider or ask an administrator to grant access and configure models."
+  },
+  "流式响应": {
+    "CN": "流式响应",
+    "EN": "Streaming response"
+  },
+  "填入请求示例": {
+    "CN": "填入请求示例",
+    "EN": "Insert example request"
+  },
+  "请求 JSON": {
+    "CN": "请求 JSON",
+    "EN": "Request JSON"
+  },
+  "发送请求": {
+    "CN": "发送请求",
+    "EN": "Send request"
+  },
+  "停止请求": {
+    "CN": "停止请求",
+    "EN": "Stop request"
+  },
+  "API 响应": {
+    "CN": "API 响应",
+    "EN": "API response"
+  },
+  "管理概览": {
+    "CN": "管理概览",
+    "EN": "Admin overview"
+  },
+  "主导航": {
+    "CN": "主导航",
+    "EN": "Main navigation"
+  },
+  "用户自助服务": {
+    "CN": "用户自助服务",
+    "EN": "User self-service"
+  },
+  "系统管理": {
+    "CN": "系统管理",
+    "EN": "System administration"
+  },
+  "退出登录": {
+    "CN": "退出登录",
+    "EN": "Sign out"
+  },
+  "模型名称映射": {
+    "CN": "模型名称映射",
+    "EN": "Model name mappings"
+  },
+  "添加映射": {
+    "CN": "添加映射",
+    "EN": "Add mapping"
+  },
+  "默认直接使用用户传入的模型名，仅为需要替换的少数模型添加映射。保存后新请求立即生效；响应和计费仍使用公开模型名。实际模型留空保存可移除映射。映射只替换一次，目标模型须属于同一厂商。": {
+    "CN": "默认直接使用用户传入的模型名，仅为需要替换的少数模型添加映射。保存后新请求立即生效；响应和计费仍使用公开模型名。实际模型留空保存可移除映射。映射只替换一次，目标模型须属于同一厂商。",
+    "EN": "Requested model names are used directly by default. Add mappings only for models that need substitution. New requests use saved mappings immediately; responses and billing keep the public model name. Save an empty target to remove a mapping. Substitution happens once and must stay within the same provider."
+  },
+  "用户请求模型": {
+    "CN": "用户请求模型",
+    "EN": "Requested model"
+  },
+  "实际模型": {
+    "CN": "实际模型",
+    "EN": "Actual model"
+  },
+  "留空移除映射": {
+    "CN": "留空移除映射",
+    "EN": "Leave blank to remove mapping"
+  },
+  "尚未配置映射，直接使用用户传入的模型名。": {
+    "CN": "尚未配置映射，直接使用用户传入的模型名。",
+    "EN": "No mappings configured. Requested model names are used directly."
+  },
+  "添加模型映射": {
+    "CN": "添加模型映射",
+    "EN": "Add model mapping"
+  },
+  "保存映射": {
+    "CN": "保存映射",
+    "EN": "Save mapping"
+  },
+  "全部时间": {
+    "CN": "全部时间",
+    "EN": "All time"
+  },
+  "月份（UTC）": {
+    "CN": "月份（UTC）",
+    "EN": "Month (UTC)"
+  },
+  "查询 / 重算": {
+    "CN": "查询 / 重算",
+    "EN": "Query / Recalculate"
+  },
+  "配置模型价格": {
+    "CN": "配置模型价格",
+    "EN": "Configure model prices"
+  },
+  "· 按当前最新模型价格计算。未定价请求计入用量，不计入金额；不修改请求记录中的价格和费用快照。": {
+    "CN": "· 按当前最新模型价格计算。未定价请求计入用量，不计入金额；不修改请求记录中的价格和费用快照。",
+    "EN": "· Uses the latest model prices. Unpriced requests count toward usage but not cost. Historical request prices and cost snapshots are unchanged."
+  },
+  "总请求数": {
+    "CN": "总请求数",
+    "EN": "Total requests"
+  },
+  "含失败请求": {
+    "CN": "含失败请求",
+    "EN": "Including failed requests"
+  },
+  "读 / 写 tokens": {
+    "CN": "读 / 写 tokens",
+    "EN": "Read / write tokens"
+  },
+  "其中缓存读": {
+    "CN": "其中缓存读",
+    "EN": "Including cache read"
+  },
+  "· 缓存写": {
+    "CN": "· 缓存写",
+    "EN": "· Cache write"
+  },
+  "最新计价（USD）": {
+    "CN": "最新计价（USD）",
+    "EN": "Latest pricing (USD)"
+  },
+  "笔": {
+    "CN": "笔",
+    "EN": "requests"
+  },
+  "订阅成本 / 节约金额（USD）": {
+    "CN": "订阅成本 / 节约金额（USD）",
+    "EN": "Subscription cost / Savings (USD)"
+  },
+  "按用户 / Key 汇总": {
+    "CN": "按用户 / Key 汇总",
+    "EN": "Summary by user / key"
+  },
+  "用户归属按请求发生时记录，Key 转移后历史用量仍归原用户。缓存读/写包含在读 Token 总量中。": {
+    "CN": "用户归属按请求发生时记录，Key 转移后历史用量仍归原用户。缓存读/写包含在读 Token 总量中。",
+    "EN": "Ownership is recorded at request time. After a key transfer, historical usage stays with the original user. Cache reads/writes are included in total read tokens."
+  },
+  "用户": {
+    "CN": "用户",
+    "EN": "User"
+  },
+  "Key 名称 / ID": {
+    "CN": "Key 名称 / ID",
+    "EN": "Key name / ID"
+  },
+  "读 tokens": {
+    "CN": "读 tokens",
+    "EN": "Read tokens"
+  },
+  "写 tokens": {
+    "CN": "写 tokens",
+    "EN": "Write tokens"
+  },
+  "最新金额 USD": {
+    "CN": "最新金额 USD",
+    "EN": "Latest amount USD"
+  },
+  "未定价请求": {
+    "CN": "未定价请求",
+    "EN": "Unpriced requests"
+  },
+  "暂无用量": {
+    "CN": "暂无用量",
+    "EN": "No usage"
+  },
+  "按 Worker 汇总": {
+    "CN": "按 Worker 汇总",
+    "EN": "Summary by Worker"
+  },
+  "各 Worker 承载的请求按最新四类价格模拟 API 计价；该金额不是 Worker 实际订阅成本。": {
+    "CN": "各 Worker 承载的请求按最新四类价格模拟 API 计价；该金额不是 Worker 实际订阅成本。",
+    "EN": "Requests handled by each Worker are priced using the four latest API rates. This amount is not the Worker's actual subscription cost."
+  },
+  "月度订阅成本": {
+    "CN": "月度订阅成本",
+    "EN": "Monthly subscription cost"
+  },
+  "全部 Worker 订阅成本（USD）": {
+    "CN": "全部 Worker 订阅成本（USD）",
+    "EN": "All Worker subscription costs (USD)"
+  },
+  "保存成本": {
+    "CN": "保存成本",
+    "EN": "Save cost"
+  },
+  "连接客户端": {
+    "CN": "连接客户端",
+    "EN": "Connect a client"
+  },
+  "使用“我的账户”生成的网关 Key。模型名称从": {
+    "CN": "使用“我的账户”生成的网关 Key。模型名称从",
+    "EN": "Use a gateway key generated in My account. Get model names from"
+  },
+  "或“查询与调试”获取；只有已授权厂商的模型可调用。": {
+    "CN": "或“查询与调试”获取；只有已授权厂商的模型可调用。",
+    "EN": "or Explore and debug. Only models from authorized providers can be called."
+  },
+  "将下面的地址替换为你访问本站的根地址，不加": {
+    "CN": "将下面的地址替换为你访问本站的根地址，不加",
+    "EN": "Replace the address below with this site's root URL, without"
+  },
+  "。设置后在同一个终端启动 Claude Code，并指定本站提供的模型。": {
+    "CN": "。设置后在同一个终端启动 Claude Code，并指定本站提供的模型。",
+    "EN": ". Then start Claude Code in the same terminal and select a model available on this site."
+  },
+  "export ANTHROPIC_BASE_URL=\"https://你的网关地址\"\nexport ANTHROPIC_API_KEY=\"你的网关Key\"\nclaude --model &lt;可用的Claude模型&gt;": {
+    "CN": "export ANTHROPIC_BASE_URL=\"https://你的网关地址\"\nexport ANTHROPIC_API_KEY=\"你的网关Key\"\nclaude --model <可用的Claude模型>",
+    "EN": "export ANTHROPIC_BASE_URL=\"https://your-gateway.example.com\"\nexport ANTHROPIC_API_KEY=\"YOUR_GATEWAY_KEY\"\nclaude --model <AVAILABLE_CLAUDE_MODEL>"
+  },
+  "from anthropic import Anthropic\nimport os\n\nclient = Anthropic(\n    base_url=os.environ[\"ANTHROPIC_BASE_URL\"],\n    api_key=os.environ[\"ANTHROPIC_API_KEY\"],\n)\nmessage = client.messages.create(\n    model=\"替换为可用的Claude模型\",\n    max_tokens=1024,\n    messages=[{\"role\": \"user\", \"content\": \"你好\"}],\n)\nprint(message.content)": {
+    "CN": "from anthropic import Anthropic\nimport os\n\nclient = Anthropic(\n    base_url=os.environ[\"ANTHROPIC_BASE_URL\"],\n    api_key=os.environ[\"ANTHROPIC_API_KEY\"],\n)\nmessage = client.messages.create(\n    model=\"替换为可用的Claude模型\",\n    max_tokens=1024,\n    messages=[{\"role\": \"user\", \"content\": \"你好\"}],\n)\nprint(message.content)",
+    "EN": "from anthropic import Anthropic\nimport os\n\nclient = Anthropic(\n    base_url=os.environ[\"ANTHROPIC_BASE_URL\"],\n    api_key=os.environ[\"ANTHROPIC_API_KEY\"],\n)\nmessage = client.messages.create(\n    model=\"AVAILABLE_CLAUDE_MODEL\",\n    max_tokens=1024,\n    messages=[{\"role\": \"user\", \"content\": \"Hello\"}],\n)\nprint(message.content)"
+  },
+  "OpenAI 兼容客户端": {
+    "CN": "OpenAI 兼容客户端",
+    "EN": "OpenAI-compatible clients"
+  },
+  "Base URL 使用": {
+    "CN": "Base URL 使用",
+    "EN": "Use this Base URL:"
+  },
+  "https://你的网关地址/v1": {
+    "CN": "https://你的网关地址/v1",
+    "EN": "https://your-gateway.example.com/v1"
+  },
+  "，API Key 使用网关 Key。Responses / Chat Completions 可通过模型名称调用 Codex、Gemini 和 Claude。": {
+    "CN": "，API Key 使用网关 Key。Responses / Chat Completions 可通过模型名称调用 Codex、Gemini 和 Claude。",
+    "EN": "and use your gateway key as the API key. Responses / Chat Completions can call Codex, Gemini and Claude by model name."
+  },
+  "Claude 支持文本、图片、客户端工具、流式响应和 JSON Schema（不能与工具同时使用）。工具调用串行执行；Token 计数为估算值。max_tokens、采样与停止参数接受但不控制生成；响应头": {
+    "CN": "Claude 支持文本、图片、客户端工具、流式响应和 JSON Schema（不能与工具同时使用）。工具调用串行执行；Token 计数为估算值。max_tokens、采样与停止参数接受但不控制生成；响应头",
+    "EN": "Claude supports text, images, client tools, streaming and JSON Schema (which cannot be combined with tools). Tool calls run sequentially; token counts are estimates. max_tokens, sampling and stop parameters are accepted but do not control generation. The response header"
+  },
+  "表示使用 Worker 默认生成策略。暂不输出 thinking，也不提供服务端工具或 PDF 输入。": {
+    "CN": "表示使用 Worker 默认生成策略。暂不输出 thinking，也不提供服务端工具或 PDF 输入。",
+    "EN": "indicates the Worker's default generation policy. Thinking output, server tools and PDF input are not supported."
+  },
+  "HTTP 状态": {
+    "CN": "HTTP 状态",
+    "EN": "HTTP status"
+  },
+  "请求时间": {
+    "CN": "请求时间",
+    "EN": "Request time"
+  },
+  "请求所有人": {
+    "CN": "请求所有人",
+    "EN": "Request owner"
+  },
+  "金额（USD）": {
+    "CN": "金额（USD）",
+    "EN": "Amount (USD)"
+  },
+  "缓存读 Token": {
+    "CN": "缓存读 Token",
+    "EN": "Cache read tokens"
+  },
+  "缓存写 Token": {
+    "CN": "缓存写 Token",
+    "EN": "Cache write tokens"
+  },
+  "输入单价（USD / 1M Token）": {
+    "CN": "输入单价（USD / 1M Token）",
+    "EN": "Input price (USD / 1M tokens)"
+  },
+  "缓存读单价（USD / 1M Token）": {
+    "CN": "缓存读单价（USD / 1M Token）",
+    "EN": "Cache read price (USD / 1M tokens)"
+  },
+  "缓存写单价（USD / 1M Token）": {
+    "CN": "缓存写单价（USD / 1M Token）",
+    "EN": "Cache write price (USD / 1M tokens)"
+  },
+  "输出单价（USD / 1M Token）": {
+    "CN": "输出单价（USD / 1M Token）",
+    "EN": "Output price (USD / 1M tokens)"
+  },
+  "错误": {
+    "CN": "错误",
+    "EN": "Error"
+  },
+  "无": {
+    "CN": "无",
+    "EN": "None"
+  },
+  "未提供": {
+    "CN": "未提供",
+    "EN": "Not provided"
+  },
+  "未分配或已删除": {
+    "CN": "未分配或已删除",
+    "EN": "Unassigned or deleted"
+  },
+  "账号": {
+    "CN": "账号",
+    "EN": "Account"
+  },
+  "所有人": {
+    "CN": "所有人",
+    "EN": "Owner"
+  },
+  "逻辑会话": {
+    "CN": "逻辑会话",
+    "EN": "Logical session"
+  },
+  "未关联": {
+    "CN": "未关联",
+    "EN": "Not associated"
+  },
+  "后端 Thread": {
+    "CN": "后端 Thread",
+    "EN": "Backend thread"
+  },
+  "请求参数中未记录输入文本。": {
+    "CN": "请求参数中未记录输入文本。",
+    "EN": "No input text recorded in request parameters."
+  },
+  "未记录本次响应文本。": {
+    "CN": "未记录本次响应文本。",
+    "EN": "No response text recorded."
+  },
+  "请求元数据": {
+    "CN": "请求元数据",
+    "EN": "Request metadata"
+  },
+  "会话关联依据": {
+    "CN": "会话关联依据",
+    "EN": "Session association evidence"
+  },
+  "查看会话关联依据原始 JSON": {
+    "CN": "查看会话关联依据原始 JSON",
+    "EN": "View raw association JSON"
+  },
+  "请求观测信息": {
+    "CN": "请求观测信息",
+    "EN": "Request observations"
+  },
+  "认证字段已脱敏；代理相关请求头仅作为客户端提供的线索。": {
+    "CN": "认证字段已脱敏；代理相关请求头仅作为客户端提供的线索。",
+    "EN": "Authentication fields are redacted. Proxy headers are treated only as client-provided clues."
+  },
+  "历史请求未记录观测信息。": {
+    "CN": "历史请求未记录观测信息。",
+    "EN": "No observations recorded for this historical request."
+  },
+  "查看请求观测信息原始 JSON": {
+    "CN": "查看请求观测信息原始 JSON",
+    "EN": "View raw observation JSON"
+  },
+  "本轮对话": {
+    "CN": "本轮对话",
+    "EN": "This turn"
+  },
+  "显示截至本次请求的最近一次用户输入，以及本次实际输出。": {
+    "CN": "显示截至本次请求的最近一次用户输入，以及本次实际输出。",
+    "EN": "Shows the latest user input up to this request and its actual output."
+  },
+  "用户 · input_text": {
+    "CN": "用户 · input_text",
+    "EN": "User · input_text"
+  },
+  "助手 · output_text": {
+    "CN": "助手 · output_text",
+    "EN": "Assistant · output_text"
+  },
+  "查看请求参数原始 JSON": {
+    "CN": "查看请求参数原始 JSON",
+    "EN": "View raw request JSON"
+  },
+  "账户安全": {
+    "CN": "账户安全",
+    "EN": "Account security"
+  },
+  "修改登录密码后，其他登录会话将失效。": {
+    "CN": "修改登录密码后，其他登录会话将失效。",
+    "EN": "Changing your password invalidates other sign-in sessions."
+  },
+  "修改密码": {
+    "CN": "修改密码",
+    "EN": "Change password"
+  },
+  "当前密码": {
+    "CN": "当前密码",
+    "EN": "Current password"
+  },
+  "新密码（至少 12 位）": {
+    "CN": "新密码（至少 12 位）",
+    "EN": "New password (at least 12 characters)"
+  },
+  "确认新密码": {
+    "CN": "确认新密码",
+    "EN": "Confirm new password"
+  },
+  "保存密码": {
+    "CN": "保存密码",
+    "EN": "Save password"
+  },
+  "未登录 / 未读取": {
+    "CN": "未登录 / 未读取",
+    "EN": "Signed out / Not read"
+  },
+  "+1 额度": {
+    "CN": "+1 额度",
+    "EN": "+1 quota"
+  },
+  "账号已在其他 Worker 计入额度": {
+    "CN": "账号已在其他 Worker 计入额度",
+    "EN": "Account already counted through another Worker"
+  },
+  "不提供额度": {
+    "CN": "不提供额度",
+    "EN": "No quota contribution"
+  },
+  "未检测": {
+    "CN": "未检测",
+    "EN": "Not checked"
+  },
+  "登录": {
+    "CN": "登录",
+    "EN": "Sign in"
+  },
+  "我的 Worker": {
+    "CN": "我的 Worker",
+    "EN": "My Workers"
+  },
+  "启用且健康的付费 Worker 在全系统内按厂商和登录邮箱去重，每个账号只提供 1 个 Key 名额，不同厂商独立计算。同一账号被多个用户登录时，优先计给用户名与邮箱前缀相同的用户，否则计给先占到额度的 Worker。Worker 正常登录后，名下所有 Key 获得该厂商的调用权限；退出登录、删除或故障时撤销，仅因用量耗尽暂停时保留。免费、未登录、故障或已删除的 Worker 不提供额度；付费账号仅因用量耗尽暂停服务时保留贡献名额。系统定期检测，恢复后恢复额度，已停用的 Key 需手动启用。": {
+    "CN": "启用且健康的付费 Worker 在全系统内按厂商和登录邮箱去重，每个账号只提供 1 个 Key 名额，不同厂商独立计算。同一账号被多个用户登录时，优先计给用户名与邮箱前缀相同的用户，否则计给先占到额度的 Worker。Worker 正常登录后，名下所有 Key 获得该厂商的调用权限；退出登录、删除或故障时撤销，仅因用量耗尽暂停时保留。免费、未登录、故障或已删除的 Worker 不提供额度；付费账号仅因用量耗尽暂停服务时保留贡献名额。系统定期检测，恢复后恢复额度，已停用的 Key 需手动启用。",
+    "EN": "Enabled, healthy paid Workers are deduplicated across the system by provider and sign-in email. Each account provides one key slot; providers count separately. If multiple users share an account, the user matching the email prefix takes priority; otherwise the first contributing Worker receives the slot. A signed-in Worker grants its provider's access to all the owner's keys. Access is revoked on sign-out, deletion or failure, but retained for usage-limit pauses. Free, unsigned-in, failed or deleted Workers provide no quota. Paid accounts paused only for usage limits retain their slots. Periodic checks restore quota after recovery; disabled keys must be enabled manually."
+  },
+  "名下存在未登录或尚未确认登录的 Worker，请先登录并探测，或删除后再创建。": {
+    "CN": "名下存在未登录或尚未确认登录的 Worker，请先登录并探测，或删除后再创建。",
+    "EN": "You have a Worker whose sign-in is missing or unconfirmed. Sign in and probe it, or delete it before creating another."
+  },
+  "运行节点": {
+    "CN": "运行节点",
+    "EN": "Runtime node"
+  },
+  "套餐 / 贡献额度": {
+    "CN": "套餐 / 贡献额度",
+    "EN": "Plan / contribution quota"
+  },
+  "最近账号检测": {
+    "CN": "最近账号检测",
+    "EN": "Last account check"
+  },
+  "下次探测": {
+    "CN": "下次探测",
+    "EN": "Next probe"
+  },
+  "读取账号": {
+    "CN": "读取账号",
+    "EN": "Read account"
+  },
+  "确定删除此 Worker 容器？若该账号没有其他有效 Worker，贡献额度将撤销；额度不足的 Key 会自动停用。": {
+    "CN": "确定删除此 Worker 容器？若该账号没有其他有效 Worker，贡献额度将撤销；额度不足的 Key 会自动停用。",
+    "EN": "Delete this Worker container? If the account has no other valid Worker, its contribution quota will be revoked. Keys exceeding quota will be disabled automatically."
+  },
+  "尚未贡献 Worker": {
+    "CN": "尚未贡献 Worker",
+    "EN": "No contributed Workers yet"
+  },
+  "Worker 数字后缀": {
+    "CN": "Worker 数字后缀",
+    "EN": "Worker numeric suffix"
+  },
+  "前缀使用当前用户名，后缀仅接受 01–99 的数字。": {
+    "CN": "前缀使用当前用户名，后缀仅接受 01–99 的数字。",
+    "EN": "The prefix uses your username. The suffix must be a number from 01 to 99."
+  },
+  "自动序号已到 99，请选择尚未使用的序号。": {
+    "CN": "自动序号已到 99，请选择尚未使用的序号。",
+    "EN": "Automatic numbering has reached 99. Choose an unused number."
+  },
+  "创建后登录所选厂商的付费订阅账号并通过探测，即可获得贡献额度。": {
+    "CN": "创建后登录所选厂商的付费订阅账号并通过探测，即可获得贡献额度。",
+    "EN": "After creation, sign in with a paid subscription account for the selected provider and pass a probe to earn contribution quota."
+  },
+  "Worker 账号": {
+    "CN": "Worker 账号",
+    "EN": "Worker account"
+  },
+  "关闭请求详情": {
+    "CN": "关闭请求详情",
+    "EN": "Close request details"
+  },
+  "403 · 无权访问 · Subscription Gateway": {
+    "CN": "403 · 无权访问 · Subscription Gateway",
+    "EN": "403 · Access denied · Subscription Gateway"
+  },
+  "无权访问此页面": {
+    "CN": "无权访问此页面",
+    "EN": "Access denied"
+  },
+  "当前账号没有访问此页面或执行此操作的权限。": {
+    "CN": "当前账号没有访问此页面或执行此操作的权限。",
+    "EN": "Your account cannot access this page or perform this action."
+  },
+  "如需开通权限，请联系管理员。": {
+    "CN": "如需开通权限，请联系管理员。",
+    "EN": "Contact an administrator to request access."
+  },
+  "返回我的账户": {
+    "CN": "返回我的账户",
+    "EN": "Back to My account"
+  },
+  "使用其他账号登录": {
+    "CN": "使用其他账号登录",
+    "EN": "Sign in with another account"
+  },
+  "用户名或密码错误": {
+    "CN": "用户名或密码错误",
+    "EN": "Incorrect username or password"
+  },
+  "当前密码不正确": {
+    "CN": "当前密码不正确",
+    "EN": "Incorrect current password"
+  },
+  "两次输入的新密码不一致": {
+    "CN": "两次输入的新密码不一致",
+    "EN": "The new passwords do not match"
+  },
+  "新密码不能与当前密码相同": {
+    "CN": "新密码不能与当前密码相同",
+    "EN": "The new password must differ from the current password"
+  },
+  "密码已更新": {
+    "CN": "密码已更新",
+    "EN": "Password updated"
+  },
+  "密码已修改，其他会话已失效。": {
+    "CN": "密码已修改，其他会话已失效。",
+    "EN": "Password changed. Other sessions have been invalidated."
+  },
+  "历史范围应为 1、7、30 或 90 天": {
+    "CN": "历史范围应为 1、7、30 或 90 天",
+    "EN": "History range must be 1, 7, 30 or 90 days"
+  },
+  "未知选项类型": {
+    "CN": "未知选项类型",
+    "EN": "Unknown option type"
+  },
+  "API Key 已创建": {
+    "CN": "API Key 已创建",
+    "EN": "API key created"
+  },
+  "密钥只显示这一次，请立即复制并妥善保存。": {
+    "CN": "密钥只显示这一次，请立即复制并妥善保存。",
+    "EN": "This secret is shown only once. Copy it now and store it securely."
+  },
+  "Key 状态已更新": {
+    "CN": "Key 状态已更新",
+    "EN": "Key status updated"
+  },
+  "{v0} 已{v1}。": {
+    "CN": "{v0} 已{v1}。",
+    "EN": "{v0}: {v1}."
+  },
+  "无效的调度策略": {
+    "CN": "无效的调度策略",
+    "EN": "Invalid scheduling strategy"
+  },
+  "无效的 Worker": {
+    "CN": "无效的 Worker",
+    "EN": "Invalid Worker"
+  },
+  "固定调度必须选择一个可用 Worker": {
+    "CN": "固定调度必须选择一个可用 Worker",
+    "EN": "Pinned scheduling requires an available Worker"
+  },
+  "Key 名称不能为空": {
+    "CN": "Key 名称不能为空",
+    "EN": "Key name cannot be empty"
+  },
+  "Key 已更新": {
+    "CN": "Key 已更新",
+    "EN": "Key updated"
+  },
+  "{v0} 的名称和调度策略已保存。": {
+    "CN": "{v0} 的名称和调度策略已保存。",
+    "EN": "Name and scheduling saved for {v0}."
+  },
+  "Key 已删除": {
+    "CN": "Key 已删除",
+    "EN": "Key deleted"
+  },
+  "{v0} 已失效，活动会话已释放；请求历史仍保留。": {
+    "CN": "{v0} 已失效，活动会话已释放；请求历史仍保留。",
+    "EN": "{v0} is no longer valid. Active sessions were released; request history was retained."
+  },
+  "活动会话已清空": {
+    "CN": "活动会话已清空",
+    "EN": "Active sessions cleared"
+  },
+  "{v0} 的 {v1} 条响应绑定已释放。": {
+    "CN": "{v0} 的 {v1} 条响应绑定已释放。",
+    "EN": "Released {v1} response bindings for {v0}."
+  },
+  "Thread 绑定已释放": {
+    "CN": "Thread 绑定已释放",
+    "EN": "Thread bindings released"
+  },
+  "该 Thread 的 {v0} 条响应绑定已释放。": {
+    "CN": "该 Thread 的 {v0} 条响应绑定已释放。",
+    "EN": "Released {v0} response bindings for this thread."
+  },
+  "默认 Worker 已删除": {
+    "CN": "默认 Worker 已删除",
+    "EN": "Default Worker deleted"
+  },
+  "不支持的 Worker 类型": {
+    "CN": "不支持的 Worker 类型",
+    "EN": "Unsupported Worker type"
+  },
+  "Worker 名称必须以小写字母开头，并且只能包含小写字母、数字和连字符": {
+    "CN": "Worker 名称必须以小写字母开头，并且只能包含小写字母、数字和连字符",
+    "EN": "Worker names must start with a lowercase letter and contain only lowercase letters, digits and hyphens"
+  },
+  "Worker 已创建": {
+    "CN": "Worker 已创建",
+    "EN": "Worker created"
+  },
+  "{v0} 的容器已经创建，可在列表中登录并探测状态。": {
+    "CN": "{v0} 的容器已经创建，可在列表中登录并探测状态。",
+    "EN": "Container created for {v0}. Sign in and probe its status from the list."
+  },
+  "Worker 状态已更新": {
+    "CN": "Worker 状态已更新",
+    "EN": "Worker status updated"
+  },
+  "{v0} 当前状态：{v1}。": {
+    "CN": "{v0} 当前状态：{v1}。",
+    "EN": "Current status of {v0}: {v1}."
+  },
+  "{v0} 的容器已经不存在；活动记录已清理，历史记录仍保留用于审计。": {
+    "CN": "{v0} 的容器已经不存在；活动记录已清理，历史记录仍保留用于审计。",
+    "EN": "The container for {v0} no longer exists. Active records were cleared; history was retained for auditing."
+  },
+  "{v0} 的受管容器已删除，历史记录仍保留用于审计。": {
+    "CN": "{v0} 的受管容器已删除，历史记录仍保留用于审计。",
+    "EN": "Managed container deleted for {v0}. History was retained for auditing."
+  },
+  "Worker 已删除": {
+    "CN": "Worker 已删除",
+    "EN": "Worker deleted"
+  },
+  "Worker 推理测试通过；账户类型：{v0}；套餐：{v1}": {
+    "CN": "Worker 推理测试通过；账户类型：{v0}；套餐：{v1}",
+    "EN": "Worker inference test passed. Account type: {v0}; plan: {v1}"
+  },
+  "Worker 探测失败：{v0}": {
+    "CN": "Worker 探测失败：{v0}",
+    "EN": "Worker probe failed: {v0}"
+  },
+  "探测完成": {
+    "CN": "探测完成",
+    "EN": "Probe completed"
+  },
+  "探测失败": {
+    "CN": "探测失败",
+    "EN": "Probe failed"
+  },
+  "Codex 已登录": {
+    "CN": "Codex 已登录",
+    "EN": "Codex signed in"
+  },
+  "当前账户类型：{v0}；套餐：{v1}。无需重复登录。": {
+    "CN": "当前账户类型：{v0}；套餐：{v1}。无需重复登录。",
+    "EN": "Current account type: {v0}; plan: {v1}. No need to sign in again."
+  },
+  "登录 Codex 账号": {
+    "CN": "登录 Codex 账号",
+    "EN": "Sign in to Codex"
+  },
+  "在 OpenAI 页面输入下方设备码。此窗口会自动检测登录结果。": {
+    "CN": "在 OpenAI 页面输入下方设备码。此窗口会自动检测登录结果。",
+    "EN": "Enter the device code below on the OpenAI page. This window will automatically check sign-in status."
+  },
+  "请在我的 Worker 页面使用 {v0} 登录窗口": {
+    "CN": "请在我的 Worker 页面使用 {v0} 登录窗口",
+    "EN": "Use the {v0} sign-in dialog on the My Workers page"
+  },
+  "未登录或尚未确认登录，请登录后探测": {
+    "CN": "未登录或尚未确认登录，请登录后探测",
+    "EN": "Sign-in missing or unconfirmed. Sign in and run a probe."
+  },
+  "已停用，请联系管理员确认": {
+    "CN": "已停用，请联系管理员确认",
+    "EN": "Disabled. Contact an administrator."
+  },
+  "账号已超限额，请等待额度恢复后探测": {
+    "CN": "账号已超限额，请等待额度恢复后探测",
+    "EN": "Account usage limit reached. Wait for quota to recover, then probe."
+  },
+  "状态异常或离线，请探测并检查账号": {
+    "CN": "状态异常或离线，请探测并检查账号",
+    "EN": "Abnormal or offline. Probe and check the account."
+  },
+  "Key 仅显示一次，请妥善保存": {
+    "CN": "Key 仅显示一次，请妥善保存",
+    "EN": "This key is shown only once. Store it securely."
+  },
+  "Key 不存在": {
+    "CN": "Key 不存在",
+    "EN": "Key not found"
+  },
+  "Key 已刷新，旧值立即失效，ID 和前缀保持不变": {
+    "CN": "Key 已刷新，旧值立即失效，ID 和前缀保持不变",
+    "EN": "Key rotated. The old secret is invalid immediately; ID and prefix are unchanged."
+  },
+  "请选择已存在且启用的用户": {
+    "CN": "请选择已存在且启用的用户",
+    "EN": "Select an existing, enabled user"
+  },
+  "Key 归属已更新": {
+    "CN": "Key 归属已更新",
+    "EN": "Key owner updated"
+  },
+  "角色无效": {
+    "CN": "角色无效",
+    "EN": "Invalid role"
+  },
+  "只有 superadmin 可以管理管理员": {
+    "CN": "只有 superadmin 可以管理管理员",
+    "EN": "Only a superadmin can manage administrators"
+  },
+  "用户名已存在": {
+    "CN": "用户名已存在",
+    "EN": "Username already exists"
+  },
+  "用户 {v0} 已创建，初始密码仅显示一次，用户下次登录必须修改密码": {
+    "CN": "用户 {v0} 已创建，初始密码仅显示一次，用户下次登录必须修改密码",
+    "EN": "User {v0} created. The initial password is shown only once and must be changed at next sign-in."
+  },
+  "用户不存在": {
+    "CN": "用户不存在",
+    "EN": "User not found"
+  },
+  "不能修改自己的角色、禁用自己或重置自己的密码": {
+    "CN": "不能修改自己的角色、禁用自己或重置自己的密码",
+    "EN": "You cannot change your own role, disable yourself or reset your own password"
+  },
+  "用户已更新，旧会话已失效": {
+    "CN": "用户已更新，旧会话已失效",
+    "EN": "User updated. Previous sessions were invalidated."
+  },
+  "Provider 额外授权已更新，对用户名下所有 Key 立即生效": {
+    "CN": "Provider 额外授权已更新，对用户名下所有 Key 立即生效",
+    "EN": "Extra provider access updated. It takes effect immediately for all of the user's keys."
+  },
+  "Google 登录状态无效": {
+    "CN": "Google 登录状态无效",
+    "EN": "Invalid Google sign-in state"
+  },
+  "Google 登录已过期，请重试": {
+    "CN": "Google 登录已过期，请重试",
+    "EN": "Google sign-in expired. Please try again."
+  },
+  "Google 身份验证失败，请重试": {
+    "CN": "Google 身份验证失败，请重试",
+    "EN": "Google authentication failed. Please try again."
+  },
+  "Google 邮箱未验证或不在允许的域中": {
+    "CN": "Google 邮箱未验证或不在允许的域中",
+    "EN": "Google email is unverified or its domain is not allowed"
+  },
+  "邮箱前缀对应的用户名已存在，请联系管理员；不会自动合并账号": {
+    "CN": "邮箱前缀对应的用户名已存在，请联系管理员；不会自动合并账号",
+    "EN": "A username matching this email prefix already exists. Contact an administrator; accounts will not be merged automatically."
+  },
+  "账号创建冲突，请重试": {
+    "CN": "账号创建冲突，请重试",
+    "EN": "Account creation conflict. Please try again."
+  },
+  "账号已停用": {
+    "CN": "账号已停用",
+    "EN": "Account disabled"
+  },
+  "Google SSO 尚未启用或配置不完整，请联系管理员": {
+    "CN": "Google SSO 尚未启用或配置不完整，请联系管理员",
+    "EN": "Google SSO is not enabled or fully configured. Contact an administrator."
+  },
+  "请输入完整回调地址，路径应为 /auth/google/callback（兼容旧 /user/auth/google/callback）": {
+    "CN": "请输入完整回调地址，路径应为 /auth/google/callback（兼容旧 /user/auth/google/callback）",
+    "EN": "Enter a full redirect URI with path /auth/google/callback (legacy /user/auth/google/callback is also supported)"
+  },
+  "启用 Google 登录需要完整的 Client ID、Secret 和回调地址": {
+    "CN": "启用 Google 登录需要完整的 Client ID、Secret 和回调地址",
+    "EN": "Google sign-in requires a complete client ID, secret and redirect URI"
+  },
+  "邮箱域格式无效，请使用逗号分隔": {
+    "CN": "邮箱域格式无效，请使用逗号分隔",
+    "EN": "Invalid email-domain format. Separate domains with commas."
+  },
+  "Google 登录配置已保存，立即生效": {
+    "CN": "Google 登录配置已保存，立即生效",
+    "EN": "Google sign-in settings saved and applied immediately"
+  },
+  "请输入管理员授予额度": {
+    "CN": "请输入管理员授予额度",
+    "EN": "Enter the admin-granted quota"
+  },
+  "管理员授予额度不能超过 10000": {
+    "CN": "管理员授予额度不能超过 10000",
+    "EN": "Admin-granted quota cannot exceed 10000"
+  },
+  "管理员授予额度已设为 {v0}": {
+    "CN": "管理员授予额度已设为 {v0}",
+    "EN": "Admin-granted quota set to {v0}"
+  },
+  "，额度不足，已停用 {v0} 个最久未使用的 Key": {
+    "CN": "，额度不足，已停用 {v0} 个最久未使用的 Key",
+    "EN": ". Quota exceeded; disabled {v0} least recently used keys"
+  },
+  "Key 已启用": {
+    "CN": "Key 已启用",
+    "EN": "Key enabled"
+  },
+  "Key 已停用，额度已释放": {
+    "CN": "Key 已停用，额度已释放",
+    "EN": "Key disabled; quota released"
+  },
+  "Key 已删除，额度已释放，历史请求记录保留": {
+    "CN": "Key 已删除，额度已释放，历史请求记录保留",
+    "EN": "Key deleted; quota released; request history retained"
+  },
+  "Worker 不存在或无权访问": {
+    "CN": "Worker 不存在或无权访问",
+    "EN": "Worker not found or access denied"
+  },
+  "不支持的厂商": {
+    "CN": "不支持的厂商",
+    "EN": "Unsupported provider"
+  },
+  "名下存在未登录或尚未确认登录的 Worker，请先登录并探测，或删除后再创建": {
+    "CN": "名下存在未登录或尚未确认登录的 Worker，请先登录并探测，或删除后再创建",
+    "EN": "You have a Worker with missing or unconfirmed sign-in. Sign in and probe it, or delete it before creating another."
+  },
+  "名下 Worker 数量已达上限 {v0} 个，请删除后再创建": {
+    "CN": "名下 Worker 数量已达上限 {v0} 个，请删除后再创建",
+    "EN": "You have reached the limit of {v0} Workers. Delete one before creating another."
+  },
+  "名称前缀由当前用户名生成，只允许修改数字后缀": {
+    "CN": "名称前缀由当前用户名生成，只允许修改数字后缀",
+    "EN": "The name prefix comes from your username. Only the numeric suffix can be changed."
+  },
+  "请输入 01–99 的数字后缀，最多两位；序号用尽时请选择未使用的序号": {
+    "CN": "请输入 01–99 的数字后缀，最多两位；序号用尽时请选择未使用的序号",
+    "EN": "Enter a one- or two-digit suffix from 01 to 99. If numbering is exhausted, choose an unused number."
+  },
+  "该 Worker 序号已经使用，请选择其他数字": {
+    "CN": "该 Worker 序号已经使用，请选择其他数字",
+    "EN": "This Worker number is already in use. Choose another."
+  },
+  "该 Worker 名称已经使用，请选择其他序号": {
+    "CN": "该 Worker 名称已经使用，请选择其他序号",
+    "EN": "This Worker name is already in use. Choose another number."
+  },
+  "Worker 已创建，请登录账号后探测状态": {
+    "CN": "Worker 已创建，请登录账号后探测状态",
+    "EN": "Worker created. Sign in and probe its status."
+  },
+  "Worker 创建失败，请重试": {
+    "CN": "Worker 创建失败，请重试",
+    "EN": "Worker creation failed. Please try again."
+  },
+  "Worker 管理服务暂时不可用": {
+    "CN": "Worker 管理服务暂时不可用",
+    "EN": "Worker management service temporarily unavailable"
+  },
+  "无法读取 Worker 账号，贡献额度已撤销，请探测状态后重试": {
+    "CN": "无法读取 Worker 账号，贡献额度已撤销，请探测状态后重试",
+    "EN": "Unable to read the Worker account. Contribution quota was revoked. Probe its status and try again."
+  },
+  "账号信息已更新": {
+    "CN": "账号信息已更新",
+    "EN": "Account information updated"
+  },
+  "请选择已有且启用的用户": {
+    "CN": "请选择已有且启用的用户",
+    "EN": "Select an existing, enabled user"
+  },
+  "Worker 归属已更新": {
+    "CN": "Worker 归属已更新",
+    "EN": "Worker owner updated"
+  },
+  "Worker 名称不能为空": {
+    "CN": "Worker 名称不能为空",
+    "EN": "Worker name cannot be empty"
+  },
+  "该 Worker 名称已经使用": {
+    "CN": "该 Worker 名称已经使用",
+    "EN": "This Worker name is already in use"
+  },
+  "Worker 名称已更新": {
+    "CN": "Worker 名称已更新",
+    "EN": "Worker name updated"
+  },
+  "Worker 未登录，请先登录并探测": {
+    "CN": "Worker 未登录，请先登录并探测",
+    "EN": "Worker is not signed in. Sign in and run a probe."
+  },
+  "订阅 Worker 正在执行或登录，请稍后重试": {
+    "CN": "订阅 Worker 正在执行或登录，请稍后重试",
+    "EN": "Subscription Worker is running or signing in. Please try again later."
+  },
+  "官方 CLI 暂未返回额度，请稍后重试": {
+    "CN": "官方 CLI 暂未返回额度，请稍后重试",
+    "EN": "The official CLI has not returned quota yet. Please try again later."
+  },
+  "订阅 Worker 额度查询暂时不可用": {
+    "CN": "订阅 Worker 额度查询暂时不可用",
+    "EN": "Subscription Worker quota lookup temporarily unavailable"
+  },
+  "该厂商尚不支持额度查询": {
+    "CN": "该厂商尚不支持额度查询",
+    "EN": "This provider does not support quota lookup yet"
+  },
+  "暂时无法读取账号额度，请稍后重试": {
+    "CN": "暂时无法读取账号额度，请稍后重试",
+    "EN": "Account quota is temporarily unavailable. Please try again later."
+  },
+  "仅管理员可以管理其他用户的 Worker": {
+    "CN": "仅管理员可以管理其他用户的 Worker",
+    "EN": "Only administrators can manage other users' Workers"
+  },
+  "Worker 正忙，请等待当前操作结束": {
+    "CN": "Worker 正忙，请等待当前操作结束",
+    "EN": "Worker is busy. Wait for the current operation to finish."
+  },
+  "订阅 Worker 登录操作未完成，请稍后重试": {
+    "CN": "订阅 Worker 登录操作未完成，请稍后重试",
+    "EN": "Subscription Worker sign-in is incomplete. Please try again later."
+  },
+  "订阅 Worker 服务暂时不可用": {
+    "CN": "订阅 Worker 服务暂时不可用",
+    "EN": "Subscription Worker service temporarily unavailable"
+  },
+  "用户已退出订阅账号登录": {
+    "CN": "用户已退出订阅账号登录",
+    "EN": "User signed out of the subscription account"
+  },
+  "已退出订阅账号，贡献额度已重新计算，已有会话已失效": {
+    "CN": "已退出订阅账号，贡献额度已重新计算，已有会话已失效",
+    "EN": "Signed out. Contribution quota was recalculated and existing sessions were invalidated."
+  },
+  "需要管理员权限": {
+    "CN": "需要管理员权限",
+    "EN": "Administrator access required"
+  },
+  "登录已过期": {
+    "CN": "登录已过期",
+    "EN": "Sign-in expired"
+  },
+  "请先修改初始密码": {
+    "CN": "请先修改初始密码",
+    "EN": "Change your initial password first"
+  },
+  "用户名仅支持字母、数字、点、下划线、加号和连字符，最长 120 位": {
+    "CN": "用户名仅支持字母、数字、点、下划线、加号和连字符，最长 120 位",
+    "EN": "Username allows letters, digits, dots, underscores, plus signs and hyphens, up to 120 characters"
+  },
+  "登录尝试过于频繁，请稍后再试": {
+    "CN": "登录尝试过于频繁，请稍后再试",
+    "EN": "Too many sign-in attempts. Please try again later."
+  },
+  "Quota 不足，请停用其他 Key、贡献有效付费 Worker 或联系管理员增加额度": {
+    "CN": "Quota 不足，请停用其他 Key、贡献有效付费 Worker 或联系管理员增加额度",
+    "EN": "Insufficient quota. Disable another key, contribute a valid paid Worker or ask an administrator for more quota."
+  },
+  "套餐颜色必须是六位十六进制色值": {
+    "CN": "套餐颜色必须是六位十六进制色值",
+    "EN": "Plan color must be a six-digit hexadecimal color"
+  },
+  "{v0}日期格式应为 YYYY-MM-DD": {
+    "CN": "{v0}日期格式应为 YYYY-MM-DD",
+    "EN": "{v0} date must use YYYY-MM-DD"
+  },
+  "开始": {
+    "CN": "开始",
+    "EN": "Start"
+  },
+  "结束": {
+    "CN": "结束",
+    "EN": "End"
+  },
+  "请求不存在": {
+    "CN": "请求不存在",
+    "EN": "Request not found"
+  },
+  "模型名称不能为空": {
+    "CN": "模型名称不能为空",
+    "EN": "Model name cannot be empty"
+  },
+  "模型名称不能包含空白或控制字符": {
+    "CN": "模型名称不能包含空白或控制字符",
+    "EN": "Model name cannot contain whitespace or control characters"
+  },
+  "模型映射不能跨厂商": {
+    "CN": "模型映射不能跨厂商",
+    "EN": "Model mappings cannot cross providers"
+  },
+  "模型映射已保存，新请求立即生效": {
+    "CN": "模型映射已保存，新请求立即生效",
+    "EN": "Model mapping saved. New requests use it immediately."
+  },
+  "模型映射已移除，直接使用用户传入的模型名": {
+    "CN": "模型映射已移除，直接使用用户传入的模型名",
+    "EN": "Model mapping removed. Requested model names will be used directly."
+  },
+  "开发 / 未归属": {
+    "CN": "开发 / 未归属",
+    "EN": "Development / Unassigned"
+  },
+  "开发 Key / 未知 Key": {
+    "CN": "开发 Key / 未知 Key",
+    "EN": "Development key / Unknown key"
+  },
+  "未分配 Worker": {
+    "CN": "未分配 Worker",
+    "EN": "Unassigned Worker"
+  },
+  "月份格式应为 YYYY-MM": {
+    "CN": "月份格式应为 YYYY-MM",
+    "EN": "Month must use YYYY-MM"
+  },
+  "本月按当前已登录 Worker × 最新套餐月费自动重算": {
+    "CN": "本月按当前已登录 Worker × 最新套餐月费自动重算",
+    "EN": "This month is recalculated from currently signed-in Workers × latest plan prices"
+  },
+  "历史已录入成本 + 本月实时成本；历史未录入月份未计入": {
+    "CN": "历史已录入成本 + 本月实时成本；历史未录入月份未计入",
+    "EN": "Recorded historical costs + current live cost; historical months without recorded costs are excluded"
+  },
+  "所选月份手工录入的历史成本": {
+    "CN": "所选月份手工录入的历史成本",
+    "EN": "Manually recorded historical cost for the selected month"
+  },
+  "套餐未定价": {
+    "CN": "套餐未定价",
+    "EN": "Plan unpriced"
+  },
+  "未录入": {
+    "CN": "未录入",
+    "EN": "Not recorded"
+  },
+  "金额必须为 0 至 999999999 的有限数字": {
+    "CN": "金额必须为 0 至 999999999 的有限数字",
+    "EN": "Amount must be a finite number from 0 to 999999999"
+  },
+  "价格已保存，财务报表按最新价格重算；请求记录中的历史快照保持不变": {
+    "CN": "价格已保存，财务报表按最新价格重算；请求记录中的历史快照保持不变",
+    "EN": "Prices saved. Financial reports use the latest prices; historical request snapshots remain unchanged."
+  },
+  "不支持的套餐厂商": {
+    "CN": "不支持的套餐厂商",
+    "EN": "Unsupported plan provider"
+  },
+  "套餐名称不能为空": {
+    "CN": "套餐名称不能为空",
+    "EN": "Plan name cannot be empty"
+  },
+  "套餐权重必须大于 0，最多六位小数": {
+    "CN": "套餐权重必须大于 0，最多六位小数",
+    "EN": "Plan weight must be positive with at most six decimal places"
+  },
+  "套餐月费、权重及胶囊颜色已保存，权重从下一次用量采样生效": {
+    "CN": "套餐月费、权重及胶囊颜色已保存，权重从下一次用量采样生效",
+    "EN": "Plan price, weight and badge color saved. The weight applies from the next usage sample."
+  },
+  "月份无效": {
+    "CN": "月份无效",
+    "EN": "Invalid month"
+  },
+  "当月订阅成本已保存": {
+    "CN": "当月订阅成本已保存",
+    "EN": "Subscription cost saved for this month"
+  },
+  "关联方式": {
+    "CN": "关联方式",
+    "EN": "Association method"
+  },
+  "版本": {
+    "CN": "版本",
+    "EN": "Version"
+  },
+  "客户端 Thread": {
+    "CN": "客户端 Thread",
+    "EN": "Client thread"
+  },
+  "安装标识": {
+    "CN": "安装标识",
+    "EN": "Installation IDs"
+  },
+  "客户端来源": {
+    "CN": "客户端来源",
+    "EN": "Client sources"
+  },
+  "Thread 来源": {
+    "CN": "Thread 来源",
+    "EN": "Thread sources"
+  },
+  "轮次标识": {
+    "CN": "轮次标识",
+    "EN": "Turn IDs"
+  },
+  "会话标识": {
+    "CN": "会话标识",
+    "EN": "Session IDs"
+  },
+  "自动续用": {
+    "CN": "自动续用",
+    "EN": "Automatic resume"
+  },
+  "会话类型": {
+    "CN": "会话类型",
+    "EN": "Session type"
+  },
+  "父请求": {
+    "CN": "父请求",
+    "EN": "Parent request"
+  },
+  "执行决策": {
+    "CN": "执行决策",
+    "EN": "Execution decision"
+  },
+  "执行结果": {
+    "CN": "执行结果",
+    "EN": "Execution result"
+  },
+  "拒绝原因": {
+    "CN": "拒绝原因",
+    "EN": "Rejection reason"
+  },
+  "历史匹配观测": {
+    "CN": "历史匹配观测",
+    "EN": "Historical match observations"
+  },
+  "模式": {
+    "CN": "模式",
+    "EN": "Mode"
+  },
+  "结果": {
+    "CN": "结果",
+    "EN": "Result"
+  },
+  "候选请求": {
+    "CN": "候选请求",
+    "EN": "Candidate requests"
+  },
+  "动作": {
+    "CN": "动作",
+    "EN": "Action"
+  },
+  "原因": {
+    "CN": "原因",
+    "EN": "Reason"
+  },
+  "输出摘要": {
+    "CN": "输出摘要",
+    "EN": "Output digest"
+  },
+  "客户端工具调用": {
+    "CN": "客户端工具调用",
+    "EN": "Client tool calls"
+  },
+  "用量结算": {
+    "CN": "用量结算",
+    "EN": "Usage accounting"
+  },
+  "执行轮次": {
+    "CN": "执行轮次",
+    "EN": "Execution run"
+  },
+  "最终用量": {
+    "CN": "最终用量",
+    "EN": "Final usage"
+  },
+  "原始观测用量": {
+    "CN": "原始观测用量",
+    "EN": "Raw observed usage"
+  },
+  "已由此请求结算": {
+    "CN": "已由此请求结算",
+    "EN": "Accounted for by this request"
+  },
+  "缓存读取 Token": {
+    "CN": "缓存读取 Token",
+    "EN": "Cache read tokens"
+  },
+  "缓存写入 Token": {
+    "CN": "缓存写入 Token",
+    "EN": "Cache write tokens"
+  },
+  "独立请求": {
+    "CN": "独立请求",
+    "EN": "Independent request"
+  },
+  "标识冲突": {
+    "CN": "标识冲突",
+    "EN": "Identifier conflict"
+  },
+  "客户端显式 Thread": {
+    "CN": "客户端显式 Thread",
+    "EN": "Explicit client thread"
+  },
+  "上一条响应": {
+    "CN": "上一条响应",
+    "EN": "Previous response"
+  },
+  "历史 Thread": {
+    "CN": "历史 Thread",
+    "EN": "Legacy thread"
+  },
+  "已完成": {
+    "CN": "已完成",
+    "EN": "Completed"
+  },
+  "等待客户端工具": {
+    "CN": "等待客户端工具",
+    "EN": "Waiting for client tools"
+  },
+  "续用": {
+    "CN": "续用",
+    "EN": "Resume"
+  },
+  "新建": {
+    "CN": "新建",
+    "EN": "New"
+  },
+  "是": {
+    "CN": "是",
+    "EN": "Yes"
+  },
+  "否": {
+    "CN": "否",
+    "EN": "No"
+  },
+  "HTTP 方法": {
+    "CN": "HTTP 方法",
+    "EN": "HTTP method"
+  },
+  "协议": {
+    "CN": "协议",
+    "EN": "Protocol"
+  },
+  "HTTP 版本": {
+    "CN": "HTTP 版本",
+    "EN": "HTTP version"
+  },
+  "接收时间": {
+    "CN": "接收时间",
+    "EN": "Received at"
+  },
+  "网关请求 ID": {
+    "CN": "网关请求 ID",
+    "EN": "Gateway request ID"
+  },
+  "本次响应未包含文本（可能为工具调用）。": {
+    "CN": "本次响应未包含文本（可能为工具调用）。",
+    "EN": "This response contains no text (possibly a tool call)."
+  },
+  "页码必须为正整数": {
+    "CN": "页码必须为正整数",
+    "EN": "Page number must be a positive integer"
+  },
+  "无限制": {
+    "CN": "无限制",
+    "EN": "Unlimited"
+  },
+  "账号额度": {
+    "CN": "账号额度",
+    "EN": "Account quota"
+  },
+  "语言": {
+    "CN": "语言",
+    "EN": "Language"
+  },
+  "登录状态已失效，请刷新页面重新登录": {
+    "CN": "登录状态已失效，请刷新页面重新登录",
+    "EN": "Your session expired. Refresh the page to sign in again."
+  },
+  "加载失败，请重试": {
+    "CN": "加载失败，请重试",
+    "EN": "Loading failed. Please try again."
+  },
+  "共 {v0} 条请求，聚合为 {v1} 个会话": {
+    "CN": "共 {v0} 条请求，聚合为 {v1} 个会话",
+    "EN": "{v0} requests grouped into {v1} sessions"
+  },
+  "模型（最近请求）": {
+    "CN": "模型（最近请求）",
+    "EN": "Model (latest request)"
+  },
+  "已删除": {
+    "CN": "已删除",
+    "EN": "Deleted"
+  },
+  "加载请求": {
+    "CN": "加载请求",
+    "EN": "Load requests"
+  },
+  "正在加载…": {
+    "CN": "正在加载…",
+    "EN": "Loading…"
+  },
+  "更多（剩余 {v0} 条）": {
+    "CN": "更多（剩余 {v0} 条）",
+    "EN": "More ({v0} remaining)"
+  },
+  "重试加载": {
+    "CN": "重试加载",
+    "EN": "Retry loading"
+  },
+  "收起": {
+    "CN": "收起",
+    "EN": "Collapse"
+  },
+  "上一页": {
+    "CN": "上一页",
+    "EN": "Previous"
+  },
+  "下一页": {
+    "CN": "下一页",
+    "EN": "Next"
+  },
+  "第 {v0} / {v1} 页": {
+    "CN": "第 {v0} / {v1} 页",
+    "EN": "Page {v0} / {v1}"
+  },
+  "请求历史加载失败": {
+    "CN": "请求历史加载失败",
+    "EN": "Failed to load request history"
+  },
+  "操作失败": {
+    "CN": "操作失败",
+    "EN": "Operation failed"
+  },
+  "登录成功": {
+    "CN": "登录成功",
+    "EN": "Signed in successfully"
+  },
+  "尚未检测到登录，继续等待…": {
+    "CN": "尚未检测到登录，继续等待…",
+    "EN": "Sign-in not detected yet. Still waiting…"
+  },
+  "，稍后重试…": {
+    "CN": "，稍后重试…",
+    "EN": ". Retrying shortly…"
+  },
+  "等待超时，请完成登录后手动探测 Worker。": {
+    "CN": "等待超时，请完成登录后手动探测 Worker。",
+    "EN": "Timed out. Finish signing in, then probe the Worker manually."
+  },
+  "操作完成": {
+    "CN": "操作完成",
+    "EN": "Operation completed"
+  },
+  "编辑归属 · {v0}": {
+    "CN": "编辑归属 · {v0}",
+    "EN": "Edit owner · {v0}"
+  },
+  "已复制": {
+    "CN": "已复制",
+    "EN": "Copied"
+  },
+  "处理中…": {
+    "CN": "处理中…",
+    "EN": "Processing…"
+  },
+  "你好，请简短介绍自己。": {
+    "CN": "你好，请简短介绍自己。",
+    "EN": "Hello, please briefly introduce yourself."
+  },
+  "Claude 原生接口：Token 计数为估算；生成长度、采样及停止参数使用 Worker 默认策略。": {
+    "CN": "Claude 原生接口：Token 计数为估算；生成长度、采样及停止参数使用 Worker 默认策略。",
+    "EN": "Claude native API: token counts are estimates. Generation length, sampling and stop parameters use the Worker's default policy."
+  },
+  "编辑 JSON 可测试图片、工具和其他参数。修改接口后，点击“填入请求示例”可替换当前内容。": {
+    "CN": "编辑 JSON 可测试图片、工具和其他参数。修改接口后，点击“填入请求示例”可替换当前内容。",
+    "EN": "Edit the JSON to test images, tools and other parameters. After changing the endpoint, select “Insert example request” to replace the current content."
+  },
+  "替换当前请求 JSON？": {
+    "CN": "替换当前请求 JSON？",
+    "EN": "Replace the current request JSON?"
+  },
+  "请求中…": {
+    "CN": "请求中…",
+    "EN": "Requesting…"
+  },
+  "响应内容为空": {
+    "CN": "响应内容为空",
+    "EN": "Empty response body"
+  },
+  "响应超过 2 MiB，已停止读取，请使用 SDK 获取完整响应": {
+    "CN": "响应超过 2 MiB，已停止读取，请使用 SDK 获取完整响应",
+    "EN": "Response exceeded 2 MiB. Reading stopped; use an SDK to receive the full response."
+  },
+  "请求已停止": {
+    "CN": "请求已停止",
+    "EN": "Request stopped"
+  },
+  "登录操作未完成，请重试": {
+    "CN": "登录操作未完成，请重试",
+    "EN": "Sign-in incomplete. Please try again."
+  },
+  "授权会话剩余约 ": {
+    "CN": "授权会话剩余约 ",
+    "EN": "Authorization session time remaining: approximately "
+  },
+  " 分钟": {
+    "CN": " 分钟",
+    "EN": " minutes"
+  },
+  "登录 ": {
+    "CN": "登录 ",
+    "EN": "Sign in to "
+  },
+  " 订阅账号": {
+    "CN": " 订阅账号",
+    "EN": " subscription account"
+  },
+  "请选择账号的登录方式。": {
+    "CN": "请选择账号的登录方式。",
+    "EN": "Select the account's sign-in method."
+  },
+  "登录成功，推理测试通过": {
+    "CN": "登录成功，推理测试通过",
+    "EN": "Signed in; inference test passed"
+  },
+  "登录成功，推理测试未通过": {
+    "CN": "登录成功，推理测试未通过",
+    "EN": "Signed in; inference test failed"
+  },
+  "账号已连接，等待自动探测。": {
+    "CN": "账号已连接，等待自动探测。",
+    "EN": "Account connected. Waiting for an automatic probe."
+  },
+  "订阅套餐": {
+    "CN": "订阅套餐",
+    "EN": "Subscription plan"
+  },
+  "项目": {
+    "CN": "项目",
+    "EN": "Project"
+  },
+  "重新探测账号": {
+    "CN": "重新探测账号",
+    "EN": "Probe account again"
+  },
+  "重新开始登录": {
+    "CN": "重新开始登录",
+    "EN": "Restart sign-in"
+  },
+  "正在等待登录服务响应…": {
+    "CN": "正在等待登录服务响应…",
+    "EN": "Waiting for the sign-in service…"
+  },
+  "无法读取有效的授权链接，请关闭后重新登录。": {
+    "CN": "无法读取有效的授权链接，请关闭后重新登录。",
+    "EN": "No valid authorization link found. Close this dialog and sign in again."
+  },
+  "正在确认 Worker 工作区，请稍候…": {
+    "CN": "正在确认 Worker 工作区，请稍候…",
+    "EN": "Confirming the Worker workspace. Please wait…"
+  },
+  "正在确认 Worker 工作区": {
+    "CN": "正在确认 Worker 工作区",
+    "EN": "Confirming the Worker workspace"
+  },
+  "正在完成登录设置": {
+    "CN": "正在完成登录设置",
+    "EN": "Finishing sign-in setup"
+  },
+  "登录服务正在处理工作区信任确认。": {
+    "CN": "登录服务正在处理工作区信任确认。",
+    "EN": "The sign-in service is confirming workspace trust."
+  },
+  "登录服务正在处理条款确认。": {
+    "CN": "登录服务正在处理条款确认。",
+    "EN": "The sign-in service is confirming the terms."
+  },
+  "授权码已提交，正在等待登录结果…": {
+    "CN": "授权码已提交，正在等待登录结果…",
+    "EN": "Authorization code submitted. Waiting for sign-in…"
+  },
+  "正在退出当前账号…": {
+    "CN": "正在退出当前账号…",
+    "EN": "Signing out of the current account…"
+  },
+  "正在安全退出原账号…": {
+    "CN": "正在安全退出原账号…",
+    "EN": "Securely signing out of the previous account…"
+  },
+  "打开 ": {
+    "CN": "打开 ",
+    "EN": "Open "
+  },
+  " 授权页面": {
+    "CN": " 授权页面",
+    "EN": " authorization page"
+  },
+  "使用 Claude 付费订阅账号完成授权，再粘贴授权码。": {
+    "CN": "使用 Claude 付费订阅账号完成授权，再粘贴授权码。",
+    "EN": "Authorize with a paid Claude subscription account, then paste the authorization code."
+  },
+  "正在启动登录…": {
+    "CN": "正在启动登录…",
+    "EN": "Starting sign-in…"
+  },
+  "正在启动登录服务…": {
+    "CN": "正在启动登录服务…",
+    "EN": "Starting the sign-in service…"
+  },
+  "正在重新探测账号…": {
+    "CN": "正在重新探测账号…",
+    "EN": "Probing the account again…"
+  },
+  "探测已完成": {
+    "CN": "探测已完成",
+    "EN": "Probe completed"
+  },
+  "正在完成登录并测试模型访问，请稍候…": {
+    "CN": "正在完成登录并测试模型访问，请稍候…",
+    "EN": "Finishing sign-in and testing model access. Please wait…"
+  },
+  "搜索 Key 名称、ID 或归属用户": {
+    "CN": "搜索 Key 名称、ID 或归属用户",
+    "EN": "Search by key name, ID or owner"
+  },
+  "搜索 Key": {
+    "CN": "搜索 Key",
+    "EN": "Search keys"
+  },
+  "没有匹配的 Key": {
+    "CN": "没有匹配的 Key",
+    "EN": "No matching keys"
+  },
+  "结束时间必须晚于开始时间": {
+    "CN": "结束时间必须晚于开始时间",
+    "EN": "End time must be after start time"
+  },
+  "已显示全部": {
+    "CN": "已显示全部",
+    "EN": "All items shown"
+  },
+  "无法读取状态，请检查连接或重新登录。": {
+    "CN": "无法读取状态，请检查连接或重新登录。",
+    "EN": "Unable to load status. Check your connection or sign in again."
+  },
+  "只读副本": {
+    "CN": "只读副本",
+    "EN": "Read-only replica"
+  },
+  "主库在线": {
+    "CN": "主库在线",
+    "EN": "Primary database online"
+  },
+  "未找到容器": {
+    "CN": "未找到容器",
+    "EN": "Container not found"
+  },
+  "无法读取": {
+    "CN": "无法读取",
+    "EN": "Unavailable"
+  },
+  " · 当前接入节点": {
+    "CN": " · 当前接入节点",
+    "EN": " · Current entry node"
+  },
+  "在线": {
+    "CN": "在线",
+    "EN": "Online"
+  },
+  "异常 / 降级": {
+    "CN": "异常 / 降级",
+    "EN": "Abnormal / Degraded"
+  },
+  "不可用": {
+    "CN": "不可用",
+    "EN": "Unavailable"
+  },
+  "允许调度": {
+    "CN": "允许调度",
+    "EN": "Scheduling enabled"
+  },
+  "已停用": {
+    "CN": "已停用",
+    "EN": "Disabled"
+  },
+  "（已过期）": {
+    "CN": "（已过期）",
+    "EN": "(expired)"
+  },
+  " 核": {
+    "CN": " 核",
+    "EN": " cores"
+  },
+  "Docker 内存 / ": {
+    "CN": "Docker 内存 / ",
+    "EN": "Docker memory / "
+  },
+  "容器运行 / 停止": {
+    "CN": "容器运行 / 停止",
+    "EN": "Containers running / stopped"
+  },
+  "Worker / 活跃连接": {
+    "CN": "Worker / 活跃连接",
+    "EN": "Workers / active connections"
+  },
+  "负载采样：": {
+    "CN": "负载采样：",
+    "EN": "Load sampled:"
+  },
+  "无法读取该节点的 Docker 负载。该节点 Worker 可能暂时不可用。": {
+    "CN": "无法读取该节点的 Docker 负载。该节点 Worker 可能暂时不可用。",
+    "EN": "Unable to read this node's Docker load. Its Workers may be temporarily unavailable."
+  },
+  "没有 Worker": {
+    "CN": "没有 Worker",
+    "EN": "No Workers"
+  },
+  "· Worker 管理：": {
+    "CN": "· Worker 管理：",
+    "EN": "· Worker manager:"
+  },
+  "心跳：": {
+    "CN": "心跳：",
+    "EN": "Heartbeat:"
+  },
+  "调度状态": {
+    "CN": "调度状态",
+    "EN": "Scheduling status"
+  },
+  "容器状态": {
+    "CN": "容器状态",
+    "EN": "Container status"
+  },
+  "内存": {
+    "CN": "内存",
+    "EN": "Memory"
+  },
+  "没有已注册的 APP 节点。": {
+    "CN": "没有已注册的 APP 节点。",
+    "EN": "No registered app nodes."
+  },
+  "最后刷新：": {
+    "CN": "最后刷新：",
+    "EN": "Last refreshed:"
+  },
+  " 页面保留上次数据，请以刷新时间为准。": {
+    "CN": " 页面保留上次数据，请以刷新时间为准。",
+    "EN": " Previous data is retained. Check the refresh time."
+  },
+  "正在加载请求详情…": {
+    "CN": "正在加载请求详情…",
+    "EN": "Loading request details…"
+  },
+  "暂无历史采样": {
+    "CN": "暂无历史采样",
+    "EN": "No historical samples"
+  },
+  "订阅池用量历史折线图": {
+    "CN": "订阅池用量历史折线图",
+    "EN": "Subscription-pool usage history line chart"
+  },
+  "Worker 状态历史折线图": {
+    "CN": "Worker 状态历史折线图",
+    "EN": "Worker status history line chart"
+  },
+  " 个": {
+    "CN": " 个",
+    "EN": " items"
+  },
+  "此范围已有采样，但尚无有效额度数据": {
+    "CN": "此范围已有采样，但尚无有效额度数据",
+    "EN": "Samples exist in this range, but no valid quota data is available"
+  },
+  "Worker 状态分布，共 {v0} 个，详见图例": {
+    "CN": "Worker 状态分布，共 {v0} 个，详见图例",
+    "EN": "Worker status distribution: {v0} Workers. See legend for details."
+  },
+  "综合风险": {
+    "CN": "综合风险",
+    "EN": "Overall risk"
+  },
+  "5 小时窗口": {
+    "CN": "5 小时窗口",
+    "EN": "5-hour window"
+  },
+  "周窗口": {
+    "CN": "周窗口",
+    "EN": "Weekly window"
+  },
+  "暂无数据": {
+    "CN": "暂无数据",
+    "EN": "No data"
+  },
+  "可用用量未知": {
+    "CN": "可用用量未知",
+    "EN": "Available usage unknown"
+  },
+  "剩余可用 {v0}%": {
+    "CN": "剩余可用 {v0}%",
+    "EN": "{v0}% remaining"
+  },
+  "有效覆盖 {v0} / {v1} 个 Worker · 权重覆盖 {v2}%": {
+    "CN": "有效覆盖 {v0} / {v1} 个 Worker · 权重覆盖 {v2}%",
+    "EN": "Coverage: {v0} / {v1} Workers · Weighted coverage: {v2}%"
+  },
+  "数据已过期 · ": {
+    "CN": "数据已过期 · ",
+    "EN": "Data expired · "
+  },
+  "{v0}采样：{v1} · 未知套餐 {v2} 个 Worker": {
+    "CN": "{v0}采样：{v1} · 未知套餐 {v2} 个 Worker",
+    "EN": "{v0}Sampled: {v1} · Unknown plans: {v2} Workers"
+  },
+  "等待首次按 Provider 采样": {
+    "CN": "等待首次按 Provider 采样",
+    "EN": "Waiting for the first sample by provider"
+  },
+  "状态更新于 {v0}": {
+    "CN": "状态更新于 {v0}",
+    "EN": "Status updated at {v0}"
+  },
+  "监控读取失败，将自动重试": {
+    "CN": "监控读取失败，将自动重试",
+    "EN": "Failed to load monitoring data. Retrying automatically."
+  },
+  "未知页面模板": {
+    "CN": "未知页面模板",
+    "EN": "Unknown page template"
+  },
+  "共 ": {
+    "CN": "共 ",
+    "EN": "Total: "
+  },
+  " 条，第 ": {
+    "CN": " 条，第 ",
+    "EN": " records, page "
+  },
+  " 页": {
+    "CN": " 页",
+    "EN": " pages"
+  },
+  "搜索用户": {
+    "CN": "搜索用户",
+    "EN": "Search users"
+  },
+  "搜索 Worker": {
+    "CN": "搜索 Worker",
+    "EN": "Search Workers"
+  },
+  "更多选项": {
+    "CN": "更多选项",
+    "EN": "More options"
+  },
+  " 个选项": {
+    "CN": " 个选项",
+    "EN": " options"
+  },
+  "页面布局加载失败": {
+    "CN": "页面布局加载失败",
+    "EN": "Failed to load page layout"
+  },
+  "列表分页": {
+    "CN": "列表分页",
+    "EN": "List pagination"
+  },
+  "用户汇总分页": {
+    "CN": "用户汇总分页",
+    "EN": "User summary pagination"
+  },
+  "Worker 汇总分页": {
+    "CN": "Worker 汇总分页",
+    "EN": "Worker summary pagination"
+  },
+  "订阅套餐分页": {
+    "CN": "订阅套餐分页",
+    "EN": "Subscription plan pagination"
+  },
+  "交互脚本加载失败，请刷新页面": {
+    "CN": "交互脚本加载失败，请刷新页面",
+    "EN": "Failed to load interactive scripts. Refresh the page."
+  },
+  "刷新重试": {
+    "CN": "刷新重试",
+    "EN": "Refresh and retry"
+  },
+  "已保存": {
+    "CN": "已保存",
+    "EN": "Saved"
+  },
+  "未保存": {
+    "CN": "未保存",
+    "EN": "Unsaved"
+  },
+  "保存中…": {
+    "CN": "保存中…",
+    "EN": "Saving…"
+  },
+  "保存失败，请检查价格": {
+    "CN": "保存失败，请检查价格",
+    "EN": "Save failed. Check the prices."
+  },
+  "有新修改未保存": {
+    "CN": "有新修改未保存",
+    "EN": "New changes have not been saved"
+  },
+  "登录 Worker": {
+    "CN": "登录 Worker",
+    "EN": "Sign in to Worker"
+  },
+  "正在读取 Worker…": {
+    "CN": "正在读取 Worker…",
+    "EN": "Reading Worker…"
+  },
+  "Worker 操作失败": {
+    "CN": "Worker 操作失败",
+    "EN": "Worker operation failed"
+  },
+  "账号：{v0}\n类型：{v1}\n套餐：{v2}": {
+    "CN": "账号：{v0}\n类型：{v1}\n套餐：{v2}",
+    "EN": "Account: {v0}\nType: {v1}\nPlan: {v2}"
+  },
+  "过去30天每日 Token 用量折线图，精确数值见下方表格": {
+    "CN": "过去30天每日 Token 用量折线图，精确数值见下方表格",
+    "EN": "Daily token usage over the last 30 days. Exact values are in the table below."
+  },
+  "{v0}已用额度": {
+    "CN": "{v0}已用额度",
+    "EN": "{v0} usage"
+  },
+  "{v0}：已用 {v1}%": {
+    "CN": "{v0}：已用 {v1}%",
+    "EN": "{v0}: {v1}% used"
+  },
+  "无限制，已用 0%": {
+    "CN": "无限制，已用 0%",
+    "EN": "Unlimited, 0% used"
+  },
+  "重置：{v0}": {
+    "CN": "重置：{v0}",
+    "EN": "Resets: {v0}"
+  },
+  "读取失败": {
+    "CN": "读取失败",
+    "EN": "Failed to read"
+  },
+  "5 小时": {
+    "CN": "5 小时",
+    "EN": "5 hours"
+  },
+  "额度读取失败": {
+    "CN": "额度读取失败",
+    "EN": "Failed to read quota"
+  },
+  "Admin Console": {
+    "CN": "管理控制台",
+    "EN": "Admin console"
+  },
+  "User Console": {
+    "CN": "用户控制台",
+    "EN": "User console"
+  },
+  "OPERATIONS": {
+    "CN": "运行概览",
+    "EN": "OPERATIONS"
+  },
+  "SUBSCRIPTION POOL": {
+    "CN": "订阅池",
+    "EN": "SUBSCRIPTION POOL"
+  },
+  "WORKER HEALTH": {
+    "CN": "Worker 健康状态",
+    "EN": "WORKER HEALTH"
+  },
+  "INFRASTRUCTURE": {
+    "CN": "基础设施",
+    "EN": "INFRASTRUCTURE"
+  },
+  "EDIT CREDENTIAL": {
+    "CN": "编辑密钥",
+    "EN": "EDIT CREDENTIAL"
+  },
+  "NEW CREDENTIAL": {
+    "CN": "新建密钥",
+    "EN": "NEW CREDENTIAL"
+  },
+  "NEW RUNTIME": {
+    "CN": "新建运行实例",
+    "EN": "NEW RUNTIME"
+  },
+  "RESULT": {
+    "CN": "操作结果",
+    "EN": "RESULT"
+  },
+  "WORKER NAME": {
+    "CN": "Worker 名称",
+    "EN": "WORKER NAME"
+  },
+  "WORKER OWNER": {
+    "CN": "Worker 归属",
+    "EN": "WORKER OWNER"
+  },
+  "Client ID": {
+    "CN": "客户端 ID",
+    "EN": "Client ID"
+  },
+  "Client Secret": {
+    "CN": "客户端密钥",
+    "EN": "Client secret"
+  },
+  "user": {
+    "CN": "普通用户",
+    "EN": "User"
+  },
+  "admin": {
+    "CN": "管理员",
+    "EN": "Administrator"
+  },
+  "superadmin": {
+    "CN": "超级管理员",
+    "EN": "Super administrator"
+  },
+  "ready": {
+    "CN": "就绪",
+    "EN": "Ready"
+  },
+  "busy": {
+    "CN": "忙碌",
+    "EN": "Busy"
+  },
+  "error": {
+    "CN": "异常",
+    "EN": "Error"
+  },
+  "offline": {
+    "CN": "离线",
+    "EN": "Offline"
+  },
+  "完全正常": {
+    "CN": "完全正常",
+    "EN": "Healthy"
+  },
+  "登录 · 超限隔离": {
+    "CN": "登录 · 超限隔离",
+    "EN": "Signed in · Usage limited"
+  },
+  "登录 · 服务异常隔离": {
+    "CN": "登录 · 服务异常隔离",
+    "EN": "Signed in · Service failure"
+  },
+  "其他异常": {
+    "CN": "其他异常",
+    "EN": "Other issues"
+  },
+  "时间格式无效，请提供带时区的时间": {
+    "CN": "时间格式无效，请提供带时区的时间",
+    "EN": "Invalid time. Include a time zone."
+  },
+  "共 {total} 条，第 {page} / {pages} 页": {
+    "CN": "共 {total} 条，第 {page} / {pages} 页",
+    "EN": "{total} records · Page {page} / {pages}"
+  },
+  "共 {total} 个选项": {
+    "CN": "共 {total} 个选项",
+    "EN": "{total} options"
+  },
+  "Client IP": {
+    "CN": "客户端 IP",
+    "EN": "Client IP"
+  },
+  "Client Address": {
+    "CN": "客户端地址",
+    "EN": "Client address"
+  },
+  "Path": {
+    "CN": "路径",
+    "EN": "Path"
+  },
+  "编辑 {worker} 的名称": {
+    "CN": "编辑 {worker} 的名称",
+    "EN": "Edit name of {worker}"
+  },
+  "编辑 {worker} 的归属": {
+    "CN": "编辑 {worker} 的归属",
+    "EN": "Edit owner of {worker}"
+  },
+  "API Key": {
+    "CN": "API Key",
+    "EN": "API Key"
+  },
+  "API Keys": {
+    "CN": "API Keys",
+    "EN": "API Keys"
+  },
+  "Anthropic Python SDK": {
+    "CN": "Anthropic Python SDK",
+    "EN": "Anthropic Python SDK"
+  },
+  "Chat Completions": {
+    "CN": "Chat Completions",
+    "EN": "Chat Completions"
+  },
+  "Claude": {
+    "CN": "Claude",
+    "EN": "Claude"
+  },
+  "Claude / Claude Code": {
+    "CN": "Claude / Claude Code",
+    "EN": "Claude / Claude Code"
+  },
+  "Claude Code": {
+    "CN": "Claude Code",
+    "EN": "Claude Code"
+  },
+  "Claude ·": {
+    "CN": "Claude ·",
+    "EN": "Claude ·"
+  },
+  "Claude · Messages": {
+    "CN": "Claude · Messages",
+    "EN": "Claude · Messages"
+  },
+  "GEMINI": {
+    "CN": "GEMINI",
+    "EN": "GEMINI"
+  },
+  "Gemini": {
+    "CN": "Gemini",
+    "EN": "Gemini"
+  },
+  "Gemini / Antigravity": {
+    "CN": "Gemini / Antigravity",
+    "EN": "Gemini / Antigravity"
+  },
+  "Key": {
+    "CN": "Key",
+    "EN": "Key"
+  },
+  "Key / ID": {
+    "CN": "Key / ID",
+    "EN": "Key / ID"
+  },
+  "OpenAI": {
+    "CN": "OpenAI",
+    "EN": "OpenAI"
+  },
+  "OpenAI / Codex": {
+    "CN": "OpenAI / Codex",
+    "EN": "OpenAI / Codex"
+  },
+  "Responses": {
+    "CN": "Responses",
+    "EN": "Responses"
+  },
+  "SUBSCRIPTION GATEWAY": {
+    "CN": "SUBSCRIPTION GATEWAY",
+    "EN": "SUBSCRIPTION GATEWAY"
+  },
+  "Subscription Gateway": {
+    "CN": "Subscription Gateway",
+    "EN": "Subscription Gateway"
+  },
+  "Thread：": {
+    "CN": "Thread：",
+    "EN": "Thread:"
+  },
+  "Token": {
+    "CN": "Token",
+    "EN": "Token"
+  },
+  "Worker": {
+    "CN": "Worker",
+    "EN": "Worker"
+  },
+  "Worker / ID": {
+    "CN": "Worker / ID",
+    "EN": "Worker / ID"
+  },
+  "Worker Thread：": {
+    "CN": "Worker Thread：",
+    "EN": "Worker Thread:"
+  },
+  "Workers": {
+    "CN": "Workers",
+    "EN": "Workers"
+  },
+  "D-Chat 配置": {
+    "CN": "D-Chat 配置",
+    "EN": "D-Chat settings"
+  },
+  "启用 D-Chat": {
+    "CN": "启用 D-Chat",
+    "EN": "Enable D-Chat"
+  },
+  "启用 D-Chat 需要完整的 Bot ID、Client ID 和 Secret": {
+    "CN": "启用 D-Chat 需要完整的 Bot ID、Client ID 和 Secret",
+    "EN": "Enabling D-Chat requires a Bot ID, Client ID and Secret"
+  },
+  "D-Chat 配置已保存，立即生效": {
+    "CN": "D-Chat 配置已保存，立即生效",
+    "EN": "D-Chat settings saved and applied"
+  },
+  "固定使用 US 服务器。启用后，Worker 异常会通过 D-Chat 通知归属用户。": {
+    "CN": "固定使用 US 服务器。启用后，Worker 异常会通过 D-Chat 通知归属用户。",
+    "EN": "Uses the US server. When enabled, D-Chat notifies owners about Worker failures."
+  },
+  "calendar.weekdays.short": {
+    "CN": "日,一,二,三,四,五,六",
+    "EN": "Sun,Mon,Tue,Wed,Thu,Fri,Sat"
+  },
+  "calendar.weekdays.long": {
+    "CN": "星期日,星期一,星期二,星期三,星期四,星期五,星期六",
+    "EN": "Sunday,Monday,Tuesday,Wednesday,Thursday,Friday,Saturday"
+  },
+  "calendar.months.short": {
+    "CN": "1月,2月,3月,4月,5月,6月,7月,8月,9月,10月,11月,12月",
+    "EN": "Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec"
+  },
+  "calendar.months.long": {
+    "CN": "一月,二月,三月,四月,五月,六月,七月,八月,九月,十月,十一月,十二月",
+    "EN": "January,February,March,April,May,June,July,August,September,October,November,December"
+  },
+  "calendar.range": {
+    "CN": " 至 ",
+    "EN": " to "
+  },
+  "calendar.week": {
+    "CN": "周",
+    "EN": "Wk"
+  },
+  "calendar.scroll": {
+    "CN": "滚动调整",
+    "EN": "Scroll to increment"
+  },
+  "calendar.toggle": {
+    "CN": "点击切换",
+    "EN": "Click to toggle"
+  },
+  "calendar.year": {
+    "CN": "年份",
+    "EN": "Year"
+  },
+  "calendar.month": {
+    "CN": "月份",
+    "EN": "Month"
+  },
+  "calendar.hour": {
+    "CN": "小时",
+    "EN": "Hour"
+  },
+  "calendar.minute": {
+    "CN": "分钟",
+    "EN": "Minute"
+  },
+  "calendar.am_pm": {
+    "CN": "上午,下午",
+    "EN": "AM,PM"
+  },
+  "calendar.clear": {
+    "CN": "清除",
+    "EN": "Clear"
+  },
+  "calendar.close": {
+    "CN": "关闭",
+    "EN": "Close"
+  },
+  "calendar.previous": {
+    "CN": "上个月",
+    "EN": "Previous month"
+  },
+  "calendar.next": {
+    "CN": "下个月",
+    "EN": "Next month"
+  }
+}

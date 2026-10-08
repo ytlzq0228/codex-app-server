@@ -14,6 +14,8 @@ from codex_gateway.display import money,tokens
 from codex_gateway.subscriptions import plan_pill_style,DEFAULT_PLAN_COLOR
 root=Path('src/codex_gateway')
 env=Environment(loader=FileSystemLoader(root/'templates'),autoescape=True)
+from codex_gateway.i18n import t
+env.globals.update(t=t, lang='CN', html_lang='zh-CN')
 env.filters.update(money=money,tokens=tokens)
 workers=[]
 for i,provider in enumerate(['codex','gemini','claude']):

@@ -1,4 +1,5 @@
 """Enabled-key capacity. All quota mutations serialize before reading capacity."""
+from .i18n import t
 from sqlalchemy import and_, or_, func, select, text
 from fastapi import HTTPException
 from .models import ApiKey, ContributionCredit, User, Worker, WorkerStatus
@@ -126,7 +127,7 @@ async def ensure_capacity(db, username, exclude_key_id=None):
     await quota_lock(db)
     user = await db.scalar(select(User).where(User.username == username).execution_options(populate_existing=True))
     if not user or not user.enabled:
-        raise HTTPException(400, "请选择已存在且启用的用户")
+        raise HTTPException(400, t('请选择已存在且启用的用户'))
     # Claims normally move in reconcile_worker; re-sync here so capacity never
     # depends on a Worker change that skipped reconciliation.
     for owner in sorted(await sync_credits(db) - {username}):
@@ -138,7 +139,7 @@ async def ensure_capacity(db, username, exclude_key_id=None):
         same = await db.scalar(select(ApiKey.id).where(ApiKey.id == exclude_key_id, ApiKey.owner_username == username, ApiKey.enabled.is_(True), ApiKey.deleted_at.is_(None)))
         used -= bool(same)
     if used >= quota['total']:
-        raise HTTPException(409, "Quota 不足，请停用其他 Key、贡献有效付费 Worker 或联系管理员增加额度")
+        raise HTTPException(409, t('Quota 不足，请停用其他 Key、贡献有效付费 Worker 或联系管理员增加额度'))
     return user
 
 
@@ -147,6 +148,8 @@ async def reconcile_worker(db, worker, previous_owner=None):
     await db.flush()
     from .subscriptions import remember_plan
     await remember_plan(db, worker.plan_type, worker.provider or "codex")
+    from .notifications import stage_worker_notification
+    await stage_worker_notification(db, worker)
     changed = await sync_credits(db, claimant=worker)
     for owner in sorted({name for name in (worker.owner_username, previous_owner, *changed) if name}):
         await enforce_quota(db, owner)

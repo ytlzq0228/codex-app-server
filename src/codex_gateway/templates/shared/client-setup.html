@@ -1,21 +1,7 @@
-<section class="panel"><h2>连接客户端</h2>
-<p>使用“我的账户”生成的网关 Key。模型名称从 <code>GET /v1/models</code> 或“查询与调试”获取；只有已授权厂商的模型可调用。</p>
-<h3>Claude Code</h3><p>将下面的地址替换为你访问本站的根地址，不加 <code>/v1</code>。设置后在同一个终端启动 Claude Code，并指定本站提供的模型。</p>
-<pre>export ANTHROPIC_BASE_URL="https://你的网关地址"
-export ANTHROPIC_API_KEY="你的网关Key"
-claude --model &lt;可用的Claude模型&gt;</pre>
-<h3>Anthropic Python SDK</h3><pre>from anthropic import Anthropic
-import os
-
-client = Anthropic(
-    base_url=os.environ["ANTHROPIC_BASE_URL"],
-    api_key=os.environ["ANTHROPIC_API_KEY"],
-)
-message = client.messages.create(
-    model="替换为可用的Claude模型",
-    max_tokens=1024,
-    messages=[{"role": "user", "content": "你好"}],
-)
-print(message.content)</pre>
-<h3>OpenAI 兼容客户端</h3><p>Base URL 使用 <code>https://你的网关地址/v1</code>，API Key 使用网关 Key。Responses / Chat Completions 可通过模型名称调用 Codex、Gemini 和 Claude。</p>
-<p class="muted">Claude 支持文本、图片、客户端工具、流式响应和 JSON Schema（不能与工具同时使用）。工具调用串行执行；Token 计数为估算值。max_tokens、采样与停止参数接受但不控制生成；响应头 <code>x-gateway-generation-policy: worker-defaults</code> 表示使用 Worker 默认生成策略。暂不输出 thinking，也不提供服务端工具或 PDF 输入。</p></section>
+<section class="panel"><h2>{{ t('连接客户端') }}</h2>
+<p>{{ t('使用“我的账户”生成的网关 Key。模型名称从') }} <code>GET /v1/models</code> {{ t('或“查询与调试”获取；只有已授权厂商的模型可调用。') }}</p>
+<h3>{{ t('Claude Code') }}</h3><p>{{ t('将下面的地址替换为你访问本站的根地址，不加') }} <code>/v1</code>{{ t('。设置后在同一个终端启动 Claude Code，并指定本站提供的模型。') }}</p>
+<pre>{{ t('export ANTHROPIC_BASE_URL="https://你的网关地址"\nexport ANTHROPIC_API_KEY="你的网关Key"\nclaude --model &lt;可用的Claude模型&gt;') }}</pre>
+<h3>{{ t('Anthropic Python SDK') }}</h3><pre>{{ t('from anthropic import Anthropic\nimport os\n\nclient = Anthropic(\n    base_url=os.environ["ANTHROPIC_BASE_URL"],\n    api_key=os.environ["ANTHROPIC_API_KEY"],\n)\nmessage = client.messages.create(\n    model="替换为可用的Claude模型",\n    max_tokens=1024,\n    messages=[{"role": "user", "content": "你好"}],\n)\nprint(message.content)') }}</pre>
+<h3>{{ t('OpenAI 兼容客户端') }}</h3><p>{{ t('Base URL 使用') }} <code>{{ t('https://你的网关地址/v1') }}</code>{{ t('，API Key 使用网关 Key。Responses / Chat Completions 可通过模型名称调用 Codex、Gemini 和 Claude。') }}</p>
+<p class="muted">{{ t('Claude 支持文本、图片、客户端工具、流式响应和 JSON Schema（不能与工具同时使用）。工具调用串行执行；Token 计数为估算值。max_tokens、采样与停止参数接受但不控制生成；响应头') }} <code>x-gateway-generation-policy: worker-defaults</code> {{ t('表示使用 Worker 默认生成策略。暂不输出 thinking，也不提供服务端工具或 PDF 输入。') }}</p></section>

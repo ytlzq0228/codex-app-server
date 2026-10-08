@@ -1,3 +1,4 @@
+from .i18n import t
 import hmac
 from dataclasses import dataclass
 
@@ -26,7 +27,7 @@ async def require_admin(request: Request, settings: Settings = Depends(get_setti
     from .user_auth import require_user
     identity = await require_user(request, db)
     if request.state.user.role not in {"admin", "superadmin"}:
-        raise HTTPException(403, "需要管理员权限")
+        raise HTTPException(403, t('需要管理员权限'))
     return identity
 
 

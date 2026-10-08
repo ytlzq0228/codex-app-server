@@ -1,4 +1,5 @@
 """Database-backed browser sessions; only a digest of the cookie is stored."""
+from .i18n import t
 import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -47,9 +48,9 @@ async def require_user(request: Request, db: AsyncSession = Depends(get_session)
     user = await db.get(User, stored.username) if stored else None
     if not stored or not user or not user.enabled or stored.expires_at <= datetime.now(timezone.utc) or stored.session_version != user.session_version:
         if request.method != "GET" or request.headers.get("x-requested-with") == "XMLHttpRequest":
-            raise HTTPException(401, "登录已过期")
+            raise HTTPException(401, t('登录已过期'))
         raise HTTPException(303, headers={"Location": "/auth/login?next=" + quote(request.url.path, safe="/")})
     if user.must_change_password and request.url.path not in {"/user/account", "/user/account/data", "/user/account/password", "/auth/logout", "/user/logout"}:
-        raise HTTPException(403 if request.method != "GET" else 303, "请先修改初始密码", headers={"Location": "/user/account"})
+        raise HTTPException(403 if request.method != "GET" else 303, t('请先修改初始密码'), headers={"Location": "/user/account"})
     request.state.user = user
     return AdminSession(user.username, stored.csrf_token, stored.session_version)

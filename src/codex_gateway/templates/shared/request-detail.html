@@ -1,36 +1,36 @@
 {% macro fields(rows, extra_class='') -%}
-<dl class="request-fields{{ ' ' ~ extra_class if extra_class else '' }}">{% for label, value in rows %}<div><dt>{{ label }}</dt><dd>{{ '—' if loading else (value if value is not none else '未记录') }}</dd></div>{% endfor %}</dl>
+<dl class="request-fields{{ ' ' ~ extra_class if extra_class else '' }}">{% for label, value in rows %}<div><dt>{{ label }}</dt><dd>{{ '—' if loading else (value if value is not none else t('未记录')) }}</dd></div>{% endfor %}</dl>
 {%- endmacro %}
 <section class="panel request-detail">
-  <h2>请求元数据</h2>
+  <h2>{{ t('请求元数据') }}</h2>
   {{ fields([
-    ('请求 ID', record.request_id), ('模型', record.model), ('接口', record.endpoint), ('HTTP 状态', record.status_code),
-    ('请求时间', record.created_at.isoformat() if not loading else ''), ('耗时', (record.duration_ms|string) ~ ' ms'),
-    ('请求所有人', record.owner_username or '未记录'), ('金额（USD）', record.cost_usd|money if record.cost_usd is not none else '未定价'),
-    ('输入 Token', record.input_tokens|tokens), ('缓存读 Token', record.cache_read_tokens|tokens),
-    ('缓存写 Token', record.cache_write_tokens|tokens), ('输出 Token', record.output_tokens|tokens),
-    ('输入单价（USD / 1M Token）', record.input_price|money), ('缓存读单价（USD / 1M Token）', record.cache_read_price|money),
-    ('缓存写单价（USD / 1M Token）', record.cache_write_price|money), ('输出单价（USD / 1M Token）', record.output_price|money),
-    ('错误', record.error_code or '无'), ('Previous Response', record.previous_response_id or '未提供')
+    (t('请求 ID'), record.request_id), (t('模型'), record.model), (t('接口'), record.endpoint), (t('HTTP 状态'), record.status_code),
+    (t('请求时间'), record.created_at.isoformat() if not loading else ''), (t('耗时'), (record.duration_ms|string) ~ ' ms'),
+    (t('请求所有人'), record.owner_username or t('未记录')), (t('金额（USD）'), record.cost_usd|money if record.cost_usd is not none else t('未定价')),
+    (t('输入 Token'), record.input_tokens|tokens), (t('缓存读 Token'), record.cache_read_tokens|tokens),
+    (t('缓存写 Token'), record.cache_write_tokens|tokens), (t('输出 Token'), record.output_tokens|tokens),
+    (t('输入单价（USD / 1M Token）'), record.input_price|money), (t('缓存读单价（USD / 1M Token）'), record.cache_read_price|money),
+    (t('缓存写单价（USD / 1M Token）'), record.cache_write_price|money), (t('输出单价（USD / 1M Token）'), record.output_price|money),
+    (t('错误'), record.error_code or t('无')), ('Previous Response', record.previous_response_id or t('未提供'))
   ], 'request-metadata-fields') }}
   {% if show_worker %}
-  <h3>Worker</h3>
-  {{ fields([('名称', worker.name if worker else '未分配或已删除'),
-             ('账号', (worker.account_email or '未记录') if worker else '未记录'),
-             ('所有人', (worker.owner_username or '未记录') if worker else '未记录')]) }}
+  <h3>{{ t('Worker') }}</h3>
+  {{ fields([(t('名称'), worker.name if worker else t('未分配或已删除')),
+             (t('账号'), (worker.account_email or t('未记录')) if worker else t('未记录')),
+             (t('所有人'), (worker.owner_username or t('未记录')) if worker else t('未记录'))]) }}
   {% endif %}
-  <h3>会话关联依据</h3>
-  {{ fields([('逻辑会话', record.logical_conversation_id or '未关联'), ('后端 Thread', record.thread_id or '未记录')] + evidence_fields) }}
-  <details class="request-json"><summary>查看会话关联依据原始 JSON</summary><pre>{{ correlation }}</pre></details>
-  <h3>请求观测信息</h3>
-  <p class="muted">认证字段已脱敏；代理相关请求头仅作为客户端提供的线索。</p>
-  {% if observation_fields %}{{ fields(observation_fields) }}{% elif not loading %}<p class="muted">历史请求未记录观测信息。</p>{% endif %}
-  <details class="request-json"><summary>查看请求观测信息原始 JSON</summary><pre>{{ observation }}</pre></details>
-  <h3>本轮对话</h3>
-  <p class="muted">显示截至本次请求的最近一次用户输入，以及本次实际输出。</p>
+  <h3>{{ t('会话关联依据') }}</h3>
+  {{ fields([(t('逻辑会话'), record.logical_conversation_id or t('未关联')), (t('后端 Thread'), record.thread_id or t('未记录'))] + evidence_fields) }}
+  <details class="request-json"><summary>{{ t('查看会话关联依据原始 JSON') }}</summary><pre>{{ correlation }}</pre></details>
+  <h3>{{ t('请求观测信息') }}</h3>
+  <p class="muted">{{ t('认证字段已脱敏；代理相关请求头仅作为客户端提供的线索。') }}</p>
+  {% if observation_fields %}{{ fields(observation_fields) }}{% elif not loading %}<p class="muted">{{ t('历史请求未记录观测信息。') }}</p>{% endif %}
+  <details class="request-json"><summary>{{ t('查看请求观测信息原始 JSON') }}</summary><pre>{{ observation }}</pre></details>
+  <h3>{{ t('本轮对话') }}</h3>
+  <p class="muted">{{ t('显示截至本次请求的最近一次用户输入，以及本次实际输出。') }}</p>
   <div class="request-conversation">
-    <div class="request-bubble request-input"><span>用户 · input_text</span><p>{{ last_texts.get('input_text', '请求参数中未记录输入文本。') }}</p></div>
-    <div class="request-bubble request-output"><span>助手 · output_text</span><p>{{ last_texts.get('output_text', '未记录本次响应文本。') }}</p></div>
+    <div class="request-bubble request-input"><span>{{ t('用户 · input_text') }}</span><p>{{ last_texts.get('input_text', t('请求参数中未记录输入文本。')) }}</p></div>
+    <div class="request-bubble request-output"><span>{{ t('助手 · output_text') }}</span><p>{{ last_texts.get('output_text', t('未记录本次响应文本。')) }}</p></div>
   </div>
-  <details class="request-json"><summary>查看请求参数原始 JSON</summary><pre>{{ params }}</pre></details>
+  <details class="request-json"><summary>{{ t('查看请求参数原始 JSON') }}</summary><pre>{{ params }}</pre></details>
 </section>

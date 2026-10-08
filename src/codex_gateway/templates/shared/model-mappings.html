@@ -1,13 +1,13 @@
-<section class="panel"><div class="section-head"><h2>模型名称映射</h2><button {% if loading %}disabled{% endif %} type="button" class="button button-primary" data-modal-open="add-model-mapping">添加映射</button></div>
-<p>默认直接使用用户传入的模型名，仅为需要替换的少数模型添加映射。保存后新请求立即生效；响应和计费仍使用公开模型名。实际模型留空保存可移除映射。映射只替换一次，目标模型须属于同一厂商。</p>
-<div class="table-wrap"><table><thead><tr><th>用户请求模型</th><th>实际模型</th><th>操作</th></tr></thead><tbody>
+<section class="panel"><div class="section-head"><h2>{{ t('模型名称映射') }}</h2><button {% if loading %}disabled{% endif %} type="button" class="button button-primary" data-modal-open="add-model-mapping">{{ t('添加映射') }}</button></div>
+<p>{{ t('默认直接使用用户传入的模型名，仅为需要替换的少数模型添加映射。保存后新请求立即生效；响应和计费仍使用公开模型名。实际模型留空保存可移除映射。映射只替换一次，目标模型须属于同一厂商。') }}</p>
+<div class="table-wrap"><table><thead><tr><th>{{ t('用户请求模型') }}</th><th>{{ t('实际模型') }}</th><th>{{ t('操作') }}</th></tr></thead><tbody>
 {% for item in mapping_rows %}{% set mapping_form = 'model-mapping-' ~ loop.index %}
-<tr><td>{{ item.model }}</td><td><input {% if loading %}disabled{% endif %} form="{{ mapping_form }}" aria-label="{{ item.model }} 实际模型" name="upstream_model" maxlength="120" value="{{ item.upstream_model }}" placeholder="留空移除映射"></td>
-<td><form id="{{ mapping_form }}" data-portal action="/admin/model-mappings" method="post">{{ csrf() }}<input type="hidden" name="model" value="{{ item.model }}"><button {% if loading %}disabled{% endif %} class="button button-small">保存</button></form></td></tr>
-{% else %}<tr><td colspan="3" class="empty">尚未配置映射，直接使用用户传入的模型名。</td></tr>{% endfor %}
+<tr><td>{{ item.model }}</td><td><input {% if loading %}disabled{% endif %} form="{{ mapping_form }}" aria-label="{{ item.model }} {{ t('实际模型') }}" name="upstream_model" maxlength="120" value="{{ item.upstream_model }}" placeholder="{{ t('留空移除映射') }}"></td>
+<td><form id="{{ mapping_form }}" data-portal action="/admin/model-mappings" method="post">{{ csrf() }}<input type="hidden" name="model" value="{{ item.model }}"><button {% if loading %}disabled{% endif %} class="button button-small">{{ t('保存') }}</button></form></td></tr>
+{% else %}<tr><td colspan="3" class="empty">{{ t('尚未配置映射，直接使用用户传入的模型名。') }}</td></tr>{% endfor %}
 </tbody></table></div></section>
-<dialog id="add-model-mapping" class="app-modal" aria-labelledby="add-model-mapping-title"><div class="dialog-head"><h2 id="add-model-mapping-title">添加模型映射</h2><button type="button" class="icon-button" data-modal-close aria-label="关闭">×</button></div>
+<dialog id="add-model-mapping" class="app-modal" aria-labelledby="add-model-mapping-title"><div class="dialog-head"><h2 id="add-model-mapping-title">{{ t('添加模型映射') }}</h2><button type="button" class="icon-button" data-modal-close aria-label="{{ t('关闭') }}">×</button></div>
 <form data-portal action="/admin/model-mappings" method="post" class="stack-form">{{ csrf() }}
-<label>用户请求模型<input {% if loading %}disabled{% endif %} name="model" maxlength="120" placeholder="gemini-3.1-flash-lite-preview" required autofocus></label>
-<label>实际模型<input {% if loading %}disabled{% endif %} name="upstream_model" maxlength="120" placeholder="gemini-3.6-flash-high" required></label>
-<p data-form-error role="alert" hidden></p><div class="dialog-actions"><button type="button" class="button" data-modal-close>取消</button><button {% if loading %}disabled{% endif %} type="submit" class="button button-primary">保存映射</button></div></form></dialog>
+<label>{{ t('用户请求模型') }}<input {% if loading %}disabled{% endif %} name="model" maxlength="120" placeholder="gemini-3.1-flash-lite-preview" required autofocus></label>
+<label>{{ t('实际模型') }}<input {% if loading %}disabled{% endif %} name="upstream_model" maxlength="120" placeholder="gemini-3.6-flash-high" required></label>
+<p data-form-error role="alert" hidden></p><div class="dialog-actions"><button type="button" class="button" data-modal-close>{{ t('取消') }}</button><button {% if loading %}disabled{% endif %} type="submit" class="button button-primary">{{ t('保存映射') }}</button></div></form></dialog>

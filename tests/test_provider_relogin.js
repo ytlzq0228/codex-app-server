@@ -17,14 +17,14 @@ class FormData {
 }
 const actions = [];
 let failures = 2;
-const context = {document:{getElementById:element, querySelector:element, querySelectorAll:()=>[form]},
+const context = {I18n:{ready:Promise.resolve(),t:name=>name}, document:{getElementById:element, querySelector:element, querySelectorAll:()=>[form]},
   FormData, URL, URLSearchParams, confirm:()=>true, location:{reload(){}}, setTimeout(){}, clearTimeout(){},
   fetch:async url => {
     const action = url.split('/').pop(); actions.push(action);
     if (action === 'logout' && failures-- > 0) return {ok:false,status:503,json:async()=>({detail:'offline'})};
     return {ok:true,json:async()=>action==='start' ? {session_id:'session',error:'test ends here'} : {}};
   }};
-vm.runInNewContext(fs.readFileSync('src/codex_gateway/static/gemini-login.js','utf8'),context);
+await vm.runInNewContext(fs.readFileSync('src/codex_gateway/static/gemini-login.js','utf8'),context);
 
   await form.listeners.submit({preventDefault(){}});
   assert.deepEqual(actions,['logout']);

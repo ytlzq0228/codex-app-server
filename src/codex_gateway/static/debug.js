@@ -1,3 +1,5 @@
+(async () => {
+  await globalThis.I18n.ready;
 (() => {
   const form = document.getElementById('debug-form');
   if (!form) return;
@@ -9,8 +11,8 @@
     const name = model.value;
     if (endpoint.value === '/v1/models') return '';
     const request = endpoint.value === '/v1/responses'
-      ? {model: name, input: '你好，请简短介绍自己。', stream: stream.checked}
-      : {model: name, messages: [{role: 'user', content: '你好，请简短介绍自己。'}]};
+      ? {model: name, input: globalThis.I18n.t("你好，请简短介绍自己。"), stream: stream.checked}
+      : {model: name, messages: [{role: 'user', content: globalThis.I18n.t("你好，请简短介绍自己。")}]};
     if (endpoint.value === '/v1/messages') request.max_tokens = 1024;
     if (endpoint.value !== '/v1/messages/count_tokens') request.stream = stream.checked;
     return JSON.stringify(request, null, 2);
@@ -24,13 +26,13 @@
     model.disabled = listing; stream.disabled = listing || endpoint.value.endsWith('/count_tokens');
     document.getElementById('debug-body-label').hidden = listing;
     document.getElementById('debug-help').textContent = native
-      ? 'Claude 原生接口：Token 计数为估算；生成长度、采样及停止参数使用 Worker 默认策略。'
-      : '编辑 JSON 可测试图片、工具和其他参数。修改接口后，点击“填入请求示例”可替换当前内容。';
+      ? globalThis.I18n.t("Claude 原生接口：Token 计数为估算；生成长度、采样及停止参数使用 Worker 默认策略。")
+      : globalThis.I18n.t("编辑 JSON 可测试图片、工具和其他参数。修改接口后，点击“填入请求示例”可替换当前内容。");
     if (!body.value || body.value === generated) body.value = generated = example();
   }
   endpoint.addEventListener('change', update); model.addEventListener('change', update); stream.addEventListener('change', update);
   document.getElementById('debug-example').onclick = () => {
-    if (body.value && body.value !== generated && !confirm('替换当前请求 JSON？')) return;
+    if (body.value && body.value !== generated && !confirm(globalThis.I18n.t("替换当前请求 JSON？"))) return;
     body.value = generated = example();
   };
   stop.onclick = () => active?.abort();
@@ -39,7 +41,7 @@
     active?.abort(); const controller = new AbortController(); active = controller;
     const current = () => active === controller;
     const target = endpoint.value, listing = target === '/v1/models';
-    output.textContent = ''; headers.textContent = ''; status.textContent = '请求中…'; stop.disabled = false;
+    output.textContent = ''; headers.textContent = ''; status.textContent = globalThis.I18n.t("请求中…"); stop.disabled = false;
     const started = performance.now();
     let reader;
     try {
@@ -51,7 +53,7 @@
       status.textContent = 'HTTP ' + response.status;
       headers.textContent = ['x-request-id', 'x-gateway-model', 'x-gateway-generation-policy', 'x-gateway-token-count']
         .filter(name => response.headers.has(name)).map(name => name + ': ' + response.headers.get(name)).join('\n');
-      if (!response.body) throw new Error('响应内容为空');
+      if (!response.body) throw new Error(globalThis.I18n.t("响应内容为空"));
       reader = response.body.getReader(); const decoder = new TextDecoder();
       let size = 0;
       while (true) {
@@ -59,17 +61,19 @@
         if (!current()) return;
         if (done) break;
         size += value.byteLength;
-        if (size > 2 * 1024 * 1024) { controller.abort(); throw new Error('响应超过 2 MiB，已停止读取，请使用 SDK 获取完整响应'); }
+        if (size > 2 * 1024 * 1024) { controller.abort(); throw new Error(globalThis.I18n.t("响应超过 2 MiB，已停止读取，请使用 SDK 获取完整响应")); }
         output.textContent += decoder.decode(value, {stream: true});
       }
       output.textContent += decoder.decode();
       status.textContent += ' · ' + Math.round(performance.now() - started) + ' ms';
     } catch (error) {
-      if (current()) status.textContent = error.name === 'AbortError' ? '请求已停止' : error.message;
+      if (current()) status.textContent = error.name === 'AbortError' ? globalThis.I18n.t("请求已停止") : error.message;
     } finally {
       reader?.releaseLock();
       if (current()) { active = null; stop.disabled = true; }
     }
   });
   update();
+})();
+
 })();

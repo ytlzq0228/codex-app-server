@@ -1,3 +1,4 @@
+from .i18n import t
 """Shared, owner-scoped conversation pagination for admin and user history."""
 from decimal import Decimal
 
@@ -86,7 +87,7 @@ async def conversation_history(db, *, owner=None, page=1, page_size=30, filters=
             'identity': identity, 'thread_id': conversation_id, 'conversation_id': conversation_id,
             'logical': bool(usage.logical_conversation_id), 'thread_ids': [],
             'active_url': history_link(conversation_id, usage.api_key_id, usage.endpoint or 'unknown').replace('/admin/history?', '/admin/sessions?'), 'endpoint': usage.endpoint or 'unknown',
-            'key_name': key_name or '已删除', 'latest_at': latest_at, 'latest_model': usage.model, 'requests': [],
+            'key_name': key_name or t('已删除'), 'latest_at': latest_at, 'latest_model': usage.model, 'requests': [],
             'input_tokens': 0, 'output_tokens': 0, 'duration_ms': 0,
             'cost_usd': Decimal(0), 'unpriced_count': 0,
         })
@@ -154,10 +155,10 @@ def history_time_filters(start='', end=''):
                 raise ValueError('timezone required')
             bounds.append(parsed.astimezone(timezone.utc))
         except (ValueError, OverflowError):
-            raise HTTPException(400, '时间格式无效，请提供带时区的时间')
+            raise HTTPException(400, t('时间格式无效，请提供带时区的时间'))
     start_at, end_at = bounds
     if start_at and end_at and start_at >= end_at:
-        raise HTTPException(400, '结束时间必须晚于开始时间')
+        raise HTTPException(400, t('结束时间必须晚于开始时间'))
     filters = []
     if start_at:
         filters.append(UsageRecord.created_at >= start_at)

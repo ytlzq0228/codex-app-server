@@ -88,7 +88,7 @@ async def connect_app_server(url: str, token: str, timeout: float = 300.0, ping_
     )
     session = AppServerSession(websocket, timeout)
     try:
-        await session.call("initialize", {"clientInfo": {"name": "codex_gateway", "title": "Codex Gateway", "version": "0.3.0"}, "capabilities": {"experimentalApi": True}})
+        await session.call("initialize", {"clientInfo": {"name": "codex_gateway", "title": "Subscription Gateway", "version": "0.3.0"}, "capabilities": {"experimentalApi": True}})
         await session.notify("initialized")
     except Exception:
         await session.close()

@@ -1,4 +1,5 @@
 """Readable projections of stored request data; never changes forwarding data."""
+from .i18n import t
 
 LABELS = {
     'method': '关联方式', 'version': '版本', 'client_thread_ids': '客户端 Thread',
@@ -25,17 +26,17 @@ def readable_fields(value, prefix=''):
         return []
     rows = []
     for key, item in value.items():
-        label = prefix + LABELS.get(key, key)
+        label = prefix + t(LABELS.get(key, key))
         if isinstance(item, dict):
             rows.extend(readable_fields(item, label + ' · '))
             continue
         def display(part):
             if part is None or part == '':
-                return '未记录'
+                return t('未记录')
             if isinstance(part, bool):
-                return '是' if part else '否'
-            return VALUES.get(str(part), str(part))
-        rows.append((label, '、'.join(display(part) for part in item) or '未记录'
+                return t('是') if part else t('否')
+            return t(VALUES[str(part)]) if str(part) in VALUES else str(part)
+        rows.append((label, '、'.join(display(part) for part in item) or t('未记录')
                      if isinstance(item, list) else display(item)))
     return rows
 
@@ -50,12 +51,12 @@ def observation_fields(value):
     if isinstance(address, list) and len(address) == 2:
         host, port = address
         address = f'[{host}]:{port}' if ':' in str(host) else f'{host}:{port}'
-    return [(label, item if item is not None and item != '' else '未记录') for label, item in [
-        ('Client IP', value.get('client_ip')), ('Client Address', address),
-        ('User-Agent', ' / '.join(agents)), ('Path', value.get('path')),
-        ('HTTP 方法', value.get('method')), ('协议', value.get('scheme')),
-        ('HTTP 版本', value.get('http_version')), ('接收时间', value.get('received_at')),
-        ('网关请求 ID', value.get('gateway_request_id')),
+    return [(label, item if item is not None and item != '' else t('未记录')) for label, item in [
+        (t('Client IP'), value.get('client_ip')), (t('Client Address'), address),
+        ('User-Agent', ' / '.join(agents)), (t('Path'), value.get('path')),
+        (t('HTTP 方法'), value.get('method')), (t('协议'), value.get('scheme')),
+        (t('HTTP 版本'), value.get('http_version')), (t('接收时间'), value.get('received_at')),
+        (t('网关请求 ID'), value.get('gateway_request_id')),
     ]]
 
 
@@ -100,7 +101,7 @@ async def request_texts(db, record):
     texts = last_texts(record.request_params)
     texts.pop('output_text', None)
     if record.response_text is not None:
-        texts['output_text'] = record.response_text or '本次响应未包含文本（可能为工具调用）。'
+        texts['output_text'] = record.response_text or t('本次响应未包含文本（可能为工具调用）。')
     # Responses tool continuations may carry only function_call_output. Walk
     # explicit parent links, scoped to the same owner and API key.
     prior = record

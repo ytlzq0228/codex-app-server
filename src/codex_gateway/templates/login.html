@@ -1,35 +1,35 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
+<html lang="{{ html_lang }}">
+<head><link rel="stylesheet" href="/static/i18n.css"><script src="/static/i18n.js"></script><link rel="icon" type="image/svg+xml" href="/static/logo.svg">
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>登录 · Codex Gateway</title>
+  <title>{{ t('登录 · Subscription Gateway') }}</title>
   <link rel="stylesheet" href="/static/admin.css">
 </head>
 <body class="login-page">
   <main class="login-shell">
     <section class="login-brand">
-      <div class="brand-mark">C</div>
-      <p class="eyebrow">CODEX APP SERVER</p>
-      <h1>控制每一次<br>模型调用。</h1>
-      <p>管理隔离 Worker、访问密钥、账号状态与用量，一切集中在同一个控制台。</p>
-      <div class="login-signal"><span></span> Gateway Console</div>
+      <img class="brand-mark" src="/static/logo.svg" alt="{{ t('Subscription Gateway') }}" width="40" height="40">
+      <p class="eyebrow">{{ t('SUBSCRIPTION GATEWAY') }}</p>
+      <h1>{{ t('控制每一次') }}<br>{{ t('模型调用。') }}</h1>
+      <p>{{ t('管理隔离 Worker、访问密钥、账号状态与用量，一切集中在同一个控制台。') }}</p>
+      <div class="login-signal"><span></span> {{ t('Gateway Console') }}</div>
     </section>
-    <section class="login-card">
+    <section class="login-card">{% include 'shared/language-switch.html' %}
       <div>
-        <p class="eyebrow">ACCOUNT LOGIN</p>
-        <h2>欢迎回来</h2>
-        <p class="muted">使用用户名密码或 Google 登录。</p>
+        <p class="eyebrow">{{ t('ACCOUNT LOGIN') }}</p>
+        <h2>{{ t('欢迎回来') }}</h2>
+        <p class="muted">{{ t('使用用户名密码或 Google 登录。') }}</p>
       </div>
       {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
       <form method="post" action="/auth/login" class="stack-form">
         <input type="hidden" name="next" value="{{ next }}">
-        <label>用户名（邮箱前缀）<input name="username" autocomplete="username" required autofocus></label>
-        <label>密码<input type="password" name="password" autocomplete="current-password" required></label>
-        <button class="button button-primary button-wide" type="submit">登录控制台</button>
+        <label>{{ t('用户名（邮箱前缀）') }}<input name="username" autocomplete="username" required autofocus></label>
+        <label>{{ t('密码') }}<input type="password" name="password" autocomplete="current-password" required></label>
+        <button class="button button-primary button-wide" type="submit">{{ t('登录控制台') }}</button>
       </form>
-      {% if google_enabled %}<a class="button button-wide" href="/auth/google">使用 Google 登录</a>{% else %}<button class="button button-wide" disabled>Google 登录尚未启用</button>{% endif %}
-      <p class="login-foot">会话将在 12 小时后自动失效</p>
+      {% if google_enabled %}<a class="button button-wide" href="/auth/google">{{ t('使用 Google 登录') }}</a>{% else %}<button class="button button-wide" disabled>{{ t('Google 登录尚未启用') }}</button>{% endif %}
+      <p class="login-foot">{{ t('会话将在 12 小时后自动失效') }}</p>
     </section>
   </main>
 </body>

@@ -59,9 +59,9 @@ def test_last_texts_supports_responses_and_chat_without_tool_or_system_text():
 def test_readable_observation_and_nested_evidence():
     fields = dict(observation_fields({'client_address': ['::1', 1234],
         'headers': [{'name': 'User-Agent', 'value': 'test-client'}], 'path': '/v1/responses'}))
-    assert fields['Client Address'] == '[::1]:1234'
+    assert fields['客户端地址'] == '[::1]:1234'
     assert fields['User-Agent'] == 'test-client'
-    assert fields['Client IP'] == '未记录'
+    assert fields['客户端 IP'] == '未记录'
     assert readable_fields({'method': 'explicit_client_thread', 'auto_resume': False,
                             'execution': {'action': 'resume'}}) == [
         ('关联方式', '客户端显式 Thread'), ('自动续用', '否'), ('执行决策 · 动作', '续用')]
@@ -76,6 +76,8 @@ def test_detail_template_escapes_text_and_collapses_raw_data_without_worker_ids(
         cost_usd=None, input_price=None, output_price=None, cache_read_price=None,
         cache_write_price=None, error_code=None, previous_response_id='prior',
         logical_conversation_id=None, thread_id=None, worker_id='private-worker-id')
+    from codex_gateway.i18n import t
+    env.globals['t'] = t
     html = env.get_template('shared/request-detail.html').render(record=record,
         worker=SimpleNamespace(name='worker-a', account_email='a@example.com', owner_username='alice'),
         evidence_fields=[], observation_fields=[], last_texts={'input_text': '<script>alert(1)</script>'},

@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="zh-CN">
-<head>
+<html lang="{{ html_lang }}">
+<head><link rel="stylesheet" href="/static/i18n.css"><script src="/static/i18n.js"></script><link rel="icon" type="image/svg+xml" href="/static/logo.svg">
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>403 · 无权访问 · Codex Gateway</title>
+  <title>{{ t('403 · 无权访问 · Subscription Gateway') }}</title>
   <link rel="stylesheet" href="/static/admin.css">
   <style>
     .error-shell{min-height:100vh;display:grid;place-items:center;padding:24px}
@@ -18,11 +18,11 @@
 </head>
 <body>
   <main class="error-shell"><section class="panel error-card" aria-labelledby="error-title">
-    <div class="brand-mark" aria-hidden="true">C</div>
+    <img class="brand-mark" src="/static/logo.svg" width="48" height="48" alt="{{ t('Subscription Gateway') }}">
     <p class="error-code">403</p>
-    <h1 id="error-title">无权访问此页面</h1>
-    <p class="muted">当前账号没有访问此页面或执行此操作的权限。<br>如需开通权限，请联系管理员。</p>
-    <div class="error-actions"><a class="button button-primary" href="/user/account">返回我的账户</a><a class="button" href="/auth/login">使用其他账号登录</a></div>
-  </section></main>
+    <h1 id="error-title">{{ t('无权访问此页面') }}</h1>
+    <p class="muted">{{ t('当前账号没有访问此页面或执行此操作的权限。') }}<br>{{ t('如需开通权限，请联系管理员。') }}</p>
+    <div class="error-actions"><a class="button button-primary" href="/user/account">{{ t('返回我的账户') }}</a><a class="button" href="/auth/login">{{ t('使用其他账号登录') }}</a></div>
+  {% include 'shared/language-switch.html' %}</section></main>
 </body>
 </html>

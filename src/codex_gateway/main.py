@@ -109,6 +109,8 @@ async def lifespan(app: FastAPI):
             await enforce_quota(session, username)
         await session.commit()
     app.state.backend = MockBackend() if settings.backend == "mock" else ProviderBackend(settings)
+    from .notifications import notification_loop
+    notification_task = asyncio.create_task(notification_loop(), name="worker-notifications")
     recovery_task = asyncio.create_task(worker_recovery_loop(), name="worker-recovery")
     contribution_task = asyncio.create_task(account_monitor_loop(), name="worker-contributions") if settings.backend != "mock" else None
     from .monitoring import monitoring_loop
@@ -118,6 +120,8 @@ async def lifespan(app: FastAPI):
     from .cluster import heartbeat_loop
     node_task = asyncio.create_task(heartbeat_loop(app.state.backend, settings), name="node-heartbeat") if settings.node_id else None
     yield
+    notification_task.cancel()
+    await asyncio.gather(notification_task, return_exceptions=True)
     if node_task:
         node_task.cancel()
         await asyncio.gather(node_task, return_exceptions=True)
@@ -137,14 +141,18 @@ async def lifespan(app: FastAPI):
 
 PACKAGE_ROOT = Path(__file__).resolve().parent
 
-app = FastAPI(title="Codex App Server Gateway", version="0.4.0", lifespan=lifespan,
+app = FastAPI(title="Subscription Gateway", version="0.4.0", lifespan=lifespan,
               docs_url=None, redoc_url=None, openapi_url=None)
-app.state.templates = Jinja2Templates(directory=PACKAGE_ROOT / "templates")
+from .i18n import LanguageMiddleware, template_context
+app.add_middleware(LanguageMiddleware)
+app.state.templates = Jinja2Templates(directory=PACKAGE_ROOT / "templates", context_processors=[template_context])
 app.state.templates.env.filters.update(money=money, tokens=tokens)
 app.mount("/static", StaticFiles(directory=PACKAGE_ROOT / "static"), name="static")
 app.include_router(admin_auth_router)
 app.include_router(admin_user_router)
 app.include_router(admin_router)
+from .dchat_admin import router as dchat_admin_router
+app.include_router(dchat_admin_router)
 from .infra import router as infra_router
 app.include_router(infra_router)
 from .self_service import router as self_service_router

@@ -1,10 +1,12 @@
+(async () => {
+  await globalThis.I18n.ready;
 document.querySelectorAll('[data-toggle-history]').forEach(button => {
   button.setAttribute('aria-expanded', 'false');
   button.setAttribute('aria-controls', button.dataset.toggleHistory);
   button.addEventListener('click', () => {
     const detail = document.getElementById(button.dataset.toggleHistory);
     detail.hidden = !detail.hidden;
-    button.textContent = detail.hidden ? '展开' : '收起';
+    button.textContent = detail.hidden ? globalThis.I18n.t("展开") : globalThis.I18n.t("收起");
     button.setAttribute('aria-expanded', String(!detail.hidden));
   });
 });
@@ -20,7 +22,7 @@ document.querySelectorAll('[data-history-more]').forEach(button => {
   const update = () => {
     const remaining = hiddenRows().length;
     button.hidden = remaining === 0;
-    button.textContent = remaining ? `更多（剩余 ${remaining} 条）` : '已显示全部';
+    button.textContent = remaining ? globalThis.I18n.t("更多（剩余 {v0} 条）", undefined, {v0:remaining}) : globalThis.I18n.t("已显示全部");
   };
   button.addEventListener('click', () => {
     hiddenRows().slice(0, batchSize).forEach(row => { row.hidden = false; });
@@ -28,3 +30,5 @@ document.querySelectorAll('[data-history-more]').forEach(button => {
   });
   update();
 });
+
+})();

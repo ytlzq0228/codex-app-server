@@ -10,12 +10,14 @@ from playwright.sync_api import expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1] / "src/codex_gateway"
 env = Environment(loader=FileSystemLoader(ROOT / "templates"), autoescape=True)
+from codex_gateway.i18n import t
+env.globals.update(t=t, lang='CN', html_lang='zh-CN')
 debug = env.get_template("shared/debug.html").render(debug_models=[
     {"id": "gpt-test", "provider": "codex"},
     {"id": "claude-test", "provider": "claude"},
 ])
 login = env.get_template("shared/gemini-login.html").render()
-html = """<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+html = """<!doctype html><html lang="zh-CN"><head><script src="/static/i18n.js"></script><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="stylesheet" href="/static/admin.css"><link rel="stylesheet" href="/static/portal.css">
 <link rel="stylesheet" href="/static/modals.css"><script src="/static/modals.js" defer></script>
 </head><body><main class="content">""" + debug + """

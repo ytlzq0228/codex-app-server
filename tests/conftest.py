@@ -21,3 +21,17 @@ def mock_workspace_manager(monkeypatch):
         return await original(client, url, **kwargs)
 
     monkeypatch.setattr(httpx.AsyncClient, "put", put)
+
+
+@pytest.fixture(autouse=True)
+def chinese_browser_default(monkeypatch):
+    """Existing UI fixtures model a Chinese browser; language tests override it."""
+    from starlette.testclient import TestClient
+    original = TestClient.__init__
+
+    def init(self, *args, **kwargs):
+        headers = dict(kwargs.pop("headers", None) or {})
+        headers.setdefault("accept-language", "zh-CN")
+        return original(self, *args, headers=headers, **kwargs)
+
+    monkeypatch.setattr(TestClient, "__init__", init)

@@ -1,4 +1,5 @@
 """Durable aggregate snapshots for state that cannot be rebuilt from request events."""
+from .i18n import t
 import asyncio
 import logging
 import math
@@ -176,7 +177,7 @@ async def monitoring_data(db, days):
                              .order_by(MetricSnapshot.bucket_at.desc()).limit(1))
     def serialize(row):
         return {'at': row.bucket_at.isoformat(), 'observed_at': row.observed_at.isoformat(), 'data': row.payload}
-    return {'states': state_counts((await db.scalars(select(Worker))).all()), 'labels': STATES,
+    return {'states': state_counts((await db.scalars(select(Worker))).all()), 'labels': {key: t(label) for key, label in STATES.items()},
             'current_usage': serialize(latest) if latest else None,
             'history': {metric: [serialize(r) for r in rows if r.metric == metric]
                         for metric in ('worker_states', 'subscription_usage')}}

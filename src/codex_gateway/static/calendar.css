@@ -1,0 +1,6 @@
+.flatpickr-calendar{font-family:inherit;border:1px solid #d4e1d9;border-radius:12px;box-shadow:0 12px 36px #10251b26}
+.flatpickr-day.selected,.flatpickr-day.selected:hover,.flatpickr-monthSelect-month.selected{background:#16734a;border-color:#16734a}
+.calendar-actions{display:flex;justify-content:space-between;gap:8px;padding:8px 12px;border-top:1px solid #dde3df}
+.calendar-actions button{font:inherit;font-size:12px;color:#16734a;background:transparent;border:0;border-radius:5px;padding:5px 8px;cursor:pointer}
+.calendar-actions button:hover{background:#e7f4ed}
+.flatpickr-prev-month:focus-visible,.flatpickr-next-month:focus-visible,.calendar-actions button:focus-visible{outline:2px solid #16734a;outline-offset:1px}

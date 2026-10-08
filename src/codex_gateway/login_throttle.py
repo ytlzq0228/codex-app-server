@@ -6,6 +6,7 @@ credential stuffing that spreads a few guesses over many accounts. A successful
 login clears both, so a legitimate user is never locked out by a noisy neighbour
 behind the same address.
 """
+from .i18n import t
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException
@@ -47,7 +48,7 @@ async def guard(db, keys):
     if not locked:
         return
     retry = max(1, int((max(locked) - instant).total_seconds()))
-    raise HTTPException(429, "登录尝试过于频繁，请稍后再试", headers={"Retry-After": str(retry)})
+    raise HTTPException(429, t('登录尝试过于频繁，请稍后再试'), headers={"Retry-After": str(retry)})
 
 
 async def record_failure(db, keys):

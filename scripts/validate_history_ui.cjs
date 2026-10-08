@@ -11,6 +11,8 @@ from jinja2 import Environment,FileSystemLoader
 from codex_gateway.display import money,tokens
 root=Path('src/codex_gateway')
 e=Environment(loader=FileSystemLoader(root/'templates'),autoescape=True)
+from codex_gateway.i18n import t
+e.globals.update(t=t, lang='CN', html_lang='zh-CN')
 e.filters.update(money=money,tokens=tokens)
 print(e.get_template('admin/dashboard.html').render(page='history',history_keys=[],csrf_token='test',request=S(query_params={},state=S(user=S(role='admin')))))
 `],{cwd:root,encoding:'utf8'});

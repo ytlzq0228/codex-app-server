@@ -1,3 +1,4 @@
+from .i18n import t
 from .page_data import data_page, page_response, paginate, paginate_list
 import re
 from datetime import datetime, timedelta, timezone
@@ -71,7 +72,7 @@ async def login(
         return templates(request).TemplateResponse(
             request,
             "login.html",
-            {"next": safe_next_url(next), "error": "用户名或密码错误", "google_enabled": bool(google and google.enabled)},
+            {"next": safe_next_url(next), "error": t('用户名或密码错误'), "google_enabled": bool(google and google.enabled)},
             status_code=401,
         )
     await clear_login_failures(session, attempt)
@@ -93,15 +94,15 @@ async def change_password(
     verify_csrf(request, admin, csrf_token)
     user = await session.get(User, admin.username)
     if not user or (user.password_hash and not verify_password(current_password, user.password_hash)):
-        raise HTTPException(400, "当前密码不正确")
+        raise HTTPException(400, t('当前密码不正确'))
     if new_password != confirm_password:
-        raise HTTPException(400, "两次输入的新密码不一致")
+        raise HTTPException(400, t('两次输入的新密码不一致'))
     if new_password == current_password:
-        raise HTTPException(400, "新密码不能与当前密码相同")
+        raise HTTPException(400, t('新密码不能与当前密码相同'))
     user.password_hash = hash_password(new_password)
     user.session_version += 1
     user.must_change_password = False
-    return await issue_session(session, user, settings, result("密码已更新", "密码已修改，其他会话已失效。"), request)
+    return await issue_session(session, user, settings, result(t('密码已更新'), t('密码已修改，其他会话已失效。')), request)
 
 
 @auth_router.post("/logout")
@@ -182,6 +183,9 @@ async def render_admin_page(request: Request, page: str, history_page: int, admi
                   for g in groups for item in g["threads"]]
         routes, context["pagination"] = paginate_list(routes, request)
         context["session_routes"] = routes
+    if page == "admin_workers":
+        from .dchat import display_names
+        context["display_names"] = await display_names(session, [u["username"] for u in context["users"]])
     return page_response(request, "admin/dashboard.html", context)
 
 
@@ -193,7 +197,7 @@ async def dashboard(request: Request, admin: AdminSession = Depends(require_admi
 @router.get("/monitoring")
 async def overview_monitoring(days: int = 7, admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     if days not in (1, 7, 30, 90):
-        raise HTTPException(400, "历史范围应为 1、7、30 或 90 天")
+        raise HTTPException(400, t('历史范围应为 1、7、30 或 90 天'))
     from .monitoring import monitoring_data
     return JSONResponse(await monitoring_data(session, days), headers={"Cache-Control": "no-store"})
 
@@ -249,7 +253,9 @@ async def page_options(kind: str, request: Request, search: str = "", page: int 
         if search:
             query = query.where(User.username.contains(search, autoescape=True))
         rows, pagination = await paginate(session, query, request)
-        options = [{"value": u.username, "label": u.username, "enabled": u.enabled} for u in rows]
+        from .dchat import display_names
+        names = await display_names(session, [u.username for u in rows])
+        options = [{"value": u.username, "label": names[u.username], "enabled": u.enabled} for u in rows]
     elif kind == "workers":
         query = select(Worker).where(Worker.endpoint != "removed://worker", Worker.enabled.is_(True)).order_by(Worker.name, Worker.id)
         if search:
@@ -257,7 +263,7 @@ async def page_options(kind: str, request: Request, search: str = "", page: int 
         rows, pagination = await paginate(session, query, request)
         options = [{"value": str(w.id), "label": w.name, "enabled": w.enabled} for w in rows]
     else:
-        raise HTTPException(404, "未知选项类型")
+        raise HTTPException(404, t('未知选项类型'))
     return history_json({"options": options, "pagination": pagination})
 
 
@@ -280,7 +286,7 @@ async def create_key(
     record = ApiKey(owner_username=admin.username, name=name, prefix=prefix, key_hash=hash_api_key(raw_key, settings.key_pepper.get_secret_value()), scheduling_mode=scheduling_mode, pinned_worker_id=pinned_id)
     session.add(record)
     await session.commit()
-    return result("API Key 已创建", "密钥只显示这一次，请立即复制并妥善保存。", secret=raw_key, key_id=str(record.id))
+    return result(t('API Key 已创建'), t('密钥只显示这一次，请立即复制并妥善保存。'), secret=raw_key, key_id=str(record.id))
 
 
 @router.post("/keys/{key_id}/toggle")
@@ -294,20 +300,20 @@ async def toggle_key(request: Request, key_id: UUID, csrf_token: str = Form(...)
         await ensure_capacity(session, record.owner_username)
     record.enabled = not record.enabled
     await session.commit()
-    return result("Key 状态已更新", f"{record.name} 已{'启用' if record.enabled else '停用'}。")
+    return result(t('Key 状态已更新'), t('{v0} 已{v1}。', v0=f'{record.name}', v1=t('启用' if record.enabled else '停用')))
 
 
 async def validate_key_schedule(session: AsyncSession, scheduling_mode: str, pinned_worker_id: str) -> UUID | None:
     if scheduling_mode not in {"pooled", "pinned"}:
-        raise HTTPException(400, "无效的调度策略")
+        raise HTTPException(400, t('无效的调度策略'))
     try:
         pinned_id = UUID(pinned_worker_id) if pinned_worker_id else None
     except ValueError as exc:
-        raise HTTPException(400, "无效的 Worker") from exc
+        raise HTTPException(400, t('无效的 Worker')) from exc
     if scheduling_mode == "pinned":
         worker = await session.get(Worker, pinned_id) if pinned_id else None
         if not worker or not worker.enabled or worker.endpoint == "removed://worker":
-            raise HTTPException(400, "固定调度必须选择一个可用 Worker")
+            raise HTTPException(400, t('固定调度必须选择一个可用 Worker'))
         return pinned_id
     return None
 
@@ -329,11 +335,11 @@ async def edit_key(
         raise HTTPException(404, "API key not found")
     record.name = name.strip()
     if not record.name:
-        raise HTTPException(400, "Key 名称不能为空")
+        raise HTTPException(400, t('Key 名称不能为空'))
     record.scheduling_mode = scheduling_mode
     record.pinned_worker_id = await validate_key_schedule(session, scheduling_mode, pinned_worker_id)
     await session.commit()
-    return result("Key 已更新", f"{record.name} 的名称和调度策略已保存。")
+    return result(t('Key 已更新'), t('{v0} 的名称和调度策略已保存。', v0=f'{record.name}'))
 
 
 @router.post("/keys/{key_id}/delete")
@@ -348,7 +354,7 @@ async def delete_key(request: Request, key_id: UUID, csrf_token: str = Form(...)
     from .binding_lifecycle import invalidate_bindings
     await invalidate_bindings(session, api_key_id=key_id, reason="key_deleted")
     await session.commit()
-    return result("Key 已删除", f"{record.name} 已失效，活动会话已释放；请求历史仍保留。")
+    return result(t('Key 已删除'), t('{v0} 已失效，活动会话已释放；请求历史仍保留。', v0=f'{record.name}'))
 
 
 @router.post("/keys/{key_id}/sessions/clear")
@@ -360,7 +366,7 @@ async def clear_key_sessions(request: Request, key_id: UUID, csrf_token: str = F
     from .binding_lifecycle import invalidate_bindings
     deleted = await invalidate_bindings(session, api_key_id=key_id, reason="administrator_released")
     await session.commit()
-    return result("活动会话已清空", f"{record.name} 的 {deleted} 条响应绑定已释放。")
+    return result(t('活动会话已清空'), t('{v0} 的 {v1} 条响应绑定已释放。', v0=f'{record.name}', v1=f'{deleted}'))
 
 
 @router.post("/sessions/{response_id}/delete")
@@ -372,7 +378,7 @@ async def delete_active_session(request: Request, response_id: str, csrf_token: 
     from .binding_lifecycle import invalidate_bindings
     deleted = await invalidate_bindings(session, api_key_id=binding.api_key_id, thread_id=binding.thread_id, reason="administrator_released")
     await session.commit()
-    return result("Thread 绑定已释放", f"该 Thread 的 {deleted} 条响应绑定已释放。")
+    return result(t('Thread 绑定已释放'), t('该 Thread 的 {v0} 条响应绑定已释放。', v0=f'{deleted}'))
 
 
 async def default_worker(session: AsyncSession, settings: Settings) -> Worker:
@@ -382,7 +388,7 @@ async def default_worker(session: AsyncSession, settings: Settings) -> Worker:
         session.add(worker)
         await session.flush()
     if worker.endpoint == "removed://worker":
-        raise HTTPException(404, "默认 Worker 已删除")
+        raise HTTPException(404, t('默认 Worker 已删除'))
     return worker
 
 
@@ -390,10 +396,10 @@ async def default_worker(session: AsyncSession, settings: Settings) -> Worker:
 async def create_worker(request: Request, name: str = Form(min_length=1, max_length=48), provider: str = Form("codex"), csrf_token: str = Form(...), admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
     verify_csrf(request, admin, csrf_token)
     if provider not in {"codex", "gemini", "claude"}:
-        raise HTTPException(400, "不支持的 Worker 类型")
+        raise HTTPException(400, t('不支持的 Worker 类型'))
     name = name.strip().lower().replace("_", "-")
     if not WORKER_NAME_RE.fullmatch(name):
-        raise HTTPException(400, "Worker 名称必须以小写字母开头，并且只能包含小写字母、数字和连字符")
+        raise HTTPException(400, t('Worker 名称必须以小写字母开头，并且只能包含小写字母、数字和连字符'))
     from .cluster import select_node
     node_id, manager_url = await select_node(session, settings)
     if await session.scalar(select(Worker.id).where(Worker.name == name)):
@@ -404,7 +410,7 @@ async def create_worker(request: Request, name: str = Form(min_length=1, max_len
             name=name, container_name=name, endpoint="provisioning://worker", status=WorkerStatus.offline)
         session.add(worker)
         await provision(session, worker, settings, manager_url)
-        return result("Worker 已创建", f"{name} 的容器已经创建，可在列表中登录并探测状态。")
+        return result(t('Worker 已创建'), t('{v0} 的容器已经创建，可在列表中登录并探测状态。', v0=f'{name}'))
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(f"{manager_url}/workers", json={"name": name, "provider": provider}, headers={"Authorization": f"Bearer {settings.manager_token.get_secret_value()}"})
     if response.status_code >= 400:
@@ -417,7 +423,7 @@ async def create_worker(request: Request, name: str = Form(min_length=1, max_len
     data = response.json()
     session.add(Worker(node_id=node_id, provider=provider, owner_username=admin.username, name=name, container_name=data["name"], endpoint=data["endpoint"], status=WorkerStatus.offline))
     await session.commit()
-    return result("Worker 已创建", f"{name} 的容器已经创建，可在列表中登录并探测状态。")
+    return result(t('Worker 已创建'), t('{v0} 的容器已经创建，可在列表中登录并探测状态。', v0=f'{name}'))
 
 
 @router.post("/workers/{worker_id}/state")
@@ -436,7 +442,7 @@ async def toggle_worker_state(request: Request, worker_id: UUID, csrf_token: str
         worker.retry_after = None
     await reconcile_worker(session, worker)
     await session.commit()
-    return result("Worker 状态已更新", f"{worker.name} 当前状态：{worker.status.value}。")
+    return result(t('Worker 状态已更新'), t('{v0} 当前状态：{v1}。', v0=f'{worker.name}', v1=t(worker.status.value)))
 
 
 @router.post("/workers/{worker_id}/delete")
@@ -471,11 +477,11 @@ async def delete_worker(request: Request, worker_id: UUID, csrf_token: str = For
     await reconcile_worker(session, worker)
     await session.commit()
     message = (
-        f"{original_name} 的容器已经不存在；活动记录已清理，历史记录仍保留用于审计。"
+        t('{v0} 的容器已经不存在；活动记录已清理，历史记录仍保留用于审计。', v0=f'{original_name}')
         if container_was_missing
-        else f"{original_name} 的受管容器已删除，历史记录仍保留用于审计。"
+        else t('{v0} 的受管容器已删除，历史记录仍保留用于审计。', v0=f'{original_name}')
     )
-    return result("Worker 已删除", message)
+    return result(t('Worker 已删除'), message)
 
 
 async def probe_worker_record(worker: Worker, session: AsyncSession, settings: Settings) -> dict:
@@ -503,11 +509,11 @@ async def probe_worker_record(worker: Worker, session: AsyncSession, settings: S
         worker.quarantined_at = None
         worker.retry_after = None
         logged_in = True
-        message = f"Worker 推理测试通过；账户类型：{worker.auth_mode}；套餐：{worker.plan_type or '—'}"
+        message = t('Worker 推理测试通过；账户类型：{v0}；套餐：{v1}', v0=f'{worker.auth_mode}', v1=f"{worker.plan_type or '—'}")
         ok = True
     except Exception as exc:
         worker.status = WorkerStatus.error
-        message = f"Worker 探测失败：{exc}"
+        message = t('Worker 探测失败：{v0}', v0=f'{exc}')
         kind = exc.kind if isinstance(exc, WorkerFailure) else classify_worker_failure(str(exc))
         if kind == "logged_out":
             await update_account(worker, None)
@@ -520,7 +526,7 @@ async def probe_worker_record(worker: Worker, session: AsyncSession, settings: S
         logged_in = bool(worker.auth_mode)
     await reconcile_worker(session, worker)
     await session.commit()
-    return {"title": "探测完成" if ok else "探测失败", "message": message, "ok": ok, "logged_in": logged_in, "auth_mode": worker.auth_mode, "plan_type": worker.plan_type}
+    return {"title": t('探测完成') if ok else t('探测失败'), "message": message, "ok": ok, "logged_in": logged_in, "auth_mode": worker.auth_mode, "plan_type": worker.plan_type}
 
 
 @router.post("/workers/probe")
@@ -545,7 +551,7 @@ async def login_worker_endpoint(endpoint: str, settings: Settings, *, force: boo
             account_response = await app_server.call("account/read", {"refreshToken": False})
             account = account_response.get("account") or {}
             if account and not force:
-                return {"title": "Codex 已登录", "message": f"当前账户类型：{account.get('type') or 'chatgpt'}；套餐：{account.get('planType') or '—'}。无需重复登录。", "logged_in": True}
+                return {"title": t('Codex 已登录'), "message": t('当前账户类型：{v0}；套餐：{v1}。无需重复登录。', v0=f"{account.get('type') or 'chatgpt'}", v1=f"{account.get('planType') or '—'}"), "logged_in": True}
             if force:
                 await app_server.call("account/logout", None)
                 if on_logout:
@@ -553,12 +559,12 @@ async def login_worker_endpoint(endpoint: str, settings: Settings, *, force: boo
             response = await app_server.call("account/login/start", {"type": "chatgptDeviceCode"})
     except AppServerError as exc:
         raise HTTPException(502, str(exc)) from exc
-    return {"title": "登录 Codex 账号", "message": "在 OpenAI 页面输入下方设备码。此窗口会自动检测登录结果。", "login_url": response.get("verificationUrl", ""), "user_code": response.get("userCode", ""), "logged_in": False, "poll_url": poll_url}
+    return {"title": t('登录 Codex 账号'), "message": t('在 OpenAI 页面输入下方设备码。此窗口会自动检测登录结果。'), "login_url": response.get("verificationUrl", ""), "user_code": response.get("userCode", ""), "logged_in": False, "poll_url": poll_url}
 
 
 async def relogin_worker_record(worker, session, settings, *, force, poll_url):
     if (worker.provider or "codex") in {"gemini", "claude"}:
-        return {"message": f"请在我的 Worker 页面使用 {worker.provider.title()} 登录窗口", "provider": worker.provider}
+        return {"message": t('请在我的 Worker 页面使用 {v0} 登录窗口', v0=f'{worker.provider.title()}'), "provider": worker.provider}
     logged_out = False
 
     async def record_logout():

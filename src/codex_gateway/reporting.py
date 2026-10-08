@@ -1,3 +1,4 @@
+from .i18n import t
 from .page_data import data_page, page_response, paginate, paginate_list, page_number
 """Usage inspection and historical price snapshots, independent of forwarding."""
 from datetime import datetime, timezone
@@ -43,7 +44,7 @@ def date_boundary(value, label):
     try:
         return datetime.strptime(value, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     except ValueError:
-        raise HTTPException(400, f"{label}日期格式应为 YYYY-MM-DD")
+        raise HTTPException(400, t('{v0}日期格式应为 YYYY-MM-DD', v0=f'{label}'))
 
 
 @data_page(router, "/user/usage", "account.html", "usage")
@@ -54,9 +55,9 @@ async def usage(request: Request, q: str = "", model: str = "", status: str = ""
     if model:
         filters.append(UsageRecord.model == model)
     if start:
-        filters.append(UsageRecord.created_at >= date_boundary(start, "开始"))
+        filters.append(UsageRecord.created_at >= date_boundary(start, t('开始')))
     if end:
-        filters.append(UsageRecord.created_at < date_boundary(end, "结束"))
+        filters.append(UsageRecord.created_at < date_boundary(end, t('结束')))
     history = await conversation_history(db,
         owner=request.state.user.username if request.state.user.role == "user" else None,
         page=page_number(request), filters=filters, status=status, summaries_only=True)
@@ -86,7 +87,7 @@ async def usage_requests(request: Request, conversation: str, key_id: str, endpo
 async def detail(request: Request, request_id: str, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     record = await db.scalar(usage_query(request.state.user).where(UsageRecord.request_id == request_id))
     if not record:
-        raise HTTPException(404, "请求不存在")
+        raise HTTPException(404, t('请求不存在'))
     show_worker = shows_worker(request.state.user)
     worker = await db.get(Worker, record.worker_id) if show_worker and record.worker_id else None
     return render(request, identity, page="detail", record=record, worker=worker, show_worker=show_worker,
@@ -120,7 +121,7 @@ async def model_mapping(request: Request, model: str = Form(..., min_length=1, m
     verify_csrf(request, identity, csrf_token)
     model, upstream_model = model.strip(), upstream_model.strip()
     if not model:
-        raise HTTPException(400, "模型名称不能为空")
+        raise HTTPException(400, t('模型名称不能为空'))
     if not upstream_model:
         record = await db.get(ModelMapping, model)
         if record:
@@ -128,14 +129,14 @@ async def model_mapping(request: Request, model: str = Form(..., min_length=1, m
     else:
         settings = get_settings()
         if any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in model + upstream_model):
-            raise HTTPException(400, "模型名称不能包含空白或控制字符")
+            raise HTTPException(400, t('模型名称不能包含空白或控制字符'))
         if provider_for(upstream_model) != provider_for(model):
-            raise HTTPException(400, "模型映射不能跨厂商")
+            raise HTTPException(400, t('模型映射不能跨厂商'))
         statement = insert(ModelMapping).values(model=model, upstream_model=upstream_model)
         await db.execute(statement.on_conflict_do_update(index_elements=[ModelMapping.model],
                                                        set_={"upstream_model": upstream_model}))
     await db.commit()
-    return {"message": "模型映射已保存，新请求立即生效" if upstream_model else "模型映射已移除，直接使用用户传入的模型名"}
+    return {"message": t('模型映射已保存，新请求立即生效') if upstream_model else t('模型映射已移除，直接使用用户传入的模型名')}
 
 
 def summarize_latest(rows, prices):
@@ -148,8 +149,8 @@ def summarize_latest(rows, prices):
         owner, key_id, key_name, worker_id, worker_name, model, count, inp, out, cache_read, cache_write = row
         price = prices.get(model)
         amount = priced_amount(inp, out, cache_read, cache_write, price) if price else Decimal(0)
-        key_group = users.setdefault((owner, key_id), {**empty(), "owner": owner or "开发 / 未归属", "key_id": str(key_id) if key_id else "—", "name": key_name or "开发 Key / 未知 Key"})
-        worker_group = workers.setdefault(worker_id, {**empty(), "name": worker_name or "未分配 Worker", "worker_id": str(worker_id) if worker_id else "—"})
+        key_group = users.setdefault((owner, key_id), {**empty(), "owner": owner or t('开发 / 未归属'), "key_id": str(key_id) if key_id else "—", "name": key_name or t('开发 Key / 未知 Key')})
+        worker_group = workers.setdefault(worker_id, {**empty(), "name": worker_name or t('未分配 Worker'), "worker_id": str(worker_id) if worker_id else "—"})
         for group in (total, key_group, worker_group):
             group["requests"] += count
             group["input_tokens"] += inp
@@ -171,7 +172,7 @@ async def financial_reports(request: Request, month: str = "", identity=Depends(
     query = query.outerjoin(ApiKey, UsageRecord.api_key_id == ApiKey.id).outerjoin(Worker, UsageRecord.worker_id == Worker.id)
     if month != "all":
         if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month) or not 1 <= int(month[:4]) <= 9998:
-            raise HTTPException(400, "月份格式应为 YYYY-MM")
+            raise HTTPException(400, t('月份格式应为 YYYY-MM'))
         first = datetime.strptime(month, "%Y-%m").replace(tzinfo=timezone.utc)
         end = first.replace(year=first.year+1, month=1) if first.month == 12 else first.replace(month=first.month+1)
         query = query.where(UsageRecord.created_at >= first, UsageRecord.created_at < end)
@@ -184,16 +185,16 @@ async def financial_reports(request: Request, month: str = "", identity=Depends(
     live_cost = subscriptions["total"] if not subscriptions["unpriced"] else None
     if month == current_month:
         cost_amount = live_cost
-        cost_note = "本月按当前已登录 Worker × 最新套餐月费自动重算"
+        cost_note = t('本月按当前已登录 Worker × 最新套餐月费自动重算')
     elif month == "all":
         historical = await db.scalar(select(func.sum(SubscriptionCost.amount)).where(SubscriptionCost.month < current_month))
         cost_amount = (historical or Decimal(0)) + live_cost if live_cost is not None else None
-        cost_note = "历史已录入成本 + 本月实时成本；历史未录入月份未计入"
+        cost_note = t('历史已录入成本 + 本月实时成本；历史未录入月份未计入')
     else:
         cost = await db.get(SubscriptionCost, month)
         cost_amount = cost.amount if cost else None
-        cost_note = "所选月份手工录入的历史成本"
-    cost_missing = "套餐未定价" if month in (current_month, "all") else "未录入"
+        cost_note = t('所选月份手工录入的历史成本')
+    cost_missing = t('套餐未定价') if month in (current_month, "all") else t('未录入')
     await db.commit()
     user_rows, user_pagination = paginate_list(user_rows, request, name="users_page")
     worker_rows, worker_pagination = paginate_list(worker_rows, request, name="workers_page")
@@ -205,7 +206,7 @@ async def financial_reports(request: Request, month: str = "", identity=Depends(
 
 def valid_amount(value):
     if not value.is_finite() or value < 0 or value > Decimal("999999999"):
-        raise HTTPException(400, "金额必须为 0 至 999999999 的有限数字")
+        raise HTTPException(400, t('金额必须为 0 至 999999999 的有限数字'))
     return value
 
 
@@ -214,7 +215,7 @@ async def price(request: Request, model: str = Form(..., min_length=1, max_lengt
     verify_csrf(request, identity, csrf_token)
     model = model.strip()
     if not model:
-        raise HTTPException(400, "模型名称不能为空")
+        raise HTTPException(400, t('模型名称不能为空'))
     record = await db.get(ModelPrice, model)
     if not record:
         from .providers import provider_for
@@ -224,23 +225,23 @@ async def price(request: Request, model: str = Form(..., min_length=1, max_lengt
     record.cache_read_price = valid_amount(cache_read_price if cache_read_price is not None else input_price)
     record.cache_write_price = valid_amount(cache_write_price if cache_write_price is not None else input_price)
     await db.commit()
-    return {"message": "价格已保存，财务报表按最新价格重算；请求记录中的历史快照保持不变"}
+    return {"message": t('价格已保存，财务报表按最新价格重算；请求记录中的历史快照保持不变')}
 
 
 @router.post("/admin/subscription-plans")
 async def subscription_plan(request: Request, provider: str = Form("codex"), name: str = Form(..., min_length=1, max_length=120), monthly_price: Decimal = Form(...), weight: Decimal = Form(Decimal("1")), color: str | None = Form(None, max_length=7), csrf_token: str = Form(...), identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
     verify_csrf(request, identity, csrf_token)
     if provider not in {"codex", "gemini", "claude"}:
-        raise HTTPException(400, "不支持的套餐厂商")
+        raise HTTPException(400, t('不支持的套餐厂商'))
     name = normalize_plan(name)
     if ":" not in name:
         name = plan_key(name, provider)
     if not name:
-        raise HTTPException(400, "套餐名称不能为空")
+        raise HTTPException(400, t('套餐名称不能为空'))
     amount = valid_amount(monthly_price)
     weight = valid_amount(weight)
     if weight <= 0 or weight.as_tuple().exponent < -6:
-        raise HTTPException(400, "套餐权重必须大于 0，最多六位小数")
+        raise HTTPException(400, t('套餐权重必须大于 0，最多六位小数'))
     values = {'name': name, 'monthly_price': amount, 'weight': weight}
     updates = {'monthly_price': amount, 'weight': weight}
     if color is not None:
@@ -251,21 +252,21 @@ async def subscription_plan(request: Request, provider: str = Form("codex"), nam
     await db.execute(insert(SubscriptionPlan).values(**values).on_conflict_do_update(
         index_elements=['name'], set_=updates))
     await db.commit()
-    return {"message": "套餐月费、权重及胶囊颜色已保存，权重从下一次用量采样生效"}
+    return {"message": t('套餐月费、权重及胶囊颜色已保存，权重从下一次用量采样生效')}
 
 
 @router.post("/admin/subscription-cost")
 async def subscription_cost(request: Request, month: str = Form(...), amount: Decimal = Form(...), csrf_token: str = Form(...), identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
     verify_csrf(request, identity, csrf_token)
     if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", month):
-        raise HTTPException(400, "月份无效")
+        raise HTTPException(400, t('月份无效'))
     record = await db.get(SubscriptionCost, month)
     if not record:
         record = SubscriptionCost(month=month)
         db.add(record)
     record.amount = valid_amount(amount)
     await db.commit()
-    return {"message": "当月订阅成本已保存"}
+    return {"message": t('当月订阅成本已保存')}
 
 
 @data_page(router, "/user/debug", "account.html", "debug")

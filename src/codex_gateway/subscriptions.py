@@ -1,4 +1,5 @@
 """Current monthly subscription estimates, separate from historical actual costs."""
+from .i18n import t
 from decimal import Decimal
 import re
 from sqlalchemy import select
@@ -15,7 +16,7 @@ def normalize_plan(name):
 
 def normalize_plan_color(color):
     if not isinstance(color, str) or not PLAN_COLOR_RE.fullmatch(color.strip()):
-        raise ValueError('套餐颜色必须是六位十六进制色值')
+        raise ValueError(t('套餐颜色必须是六位十六进制色值'))
     return color.strip().lower()
 
 

@@ -9,8 +9,11 @@ from playwright.sync_api import sync_playwright
 from codex_gateway.page_data import shell_context
 from codex_gateway.display import money, tokens
 ROOT=Path(__file__).resolve().parents[1] / "src/codex_gateway"
-def run(fixtures):
+def run(fixtures, lang="CN"):
     env=Environment(loader=FileSystemLoader(ROOT / "templates"), autoescape=select_autoescape())
+    from codex_gateway.i18n import t
+    env.globals.update(t=lambda name, **params: t(name, lang, **params),
+                       lang=lang, html_lang='zh-CN' if lang == 'CN' else 'en')
     env.filters.update(money=money, tokens=tokens)
     errors=[]
     fixtures["/user/usage/fixture-request"] = {
@@ -91,5 +94,6 @@ def run(fixtures):
 if __name__=="__main__":
     parser=argparse.ArgumentParser()
     parser.add_argument("fixtures",type=Path)
+    parser.add_argument("--lang", choices=["CN", "EN"], default="CN")
     args=parser.parse_args()
-    run(json.loads(args.fixtures.read_text()))
+    run(json.loads(args.fixtures.read_text()), args.lang)

@@ -1,3 +1,4 @@
+from .i18n import t
 from .page_data import data_page, page_response, paginate, paginate_list
 """Owner-scoped worker management; Docker credentials never reach the browser."""
 import re
@@ -35,7 +36,7 @@ async def owned_worker(request, db, worker_id, *, lock=True, allow_admin_all=Fal
         query = query.with_for_update()
     worker = await db.scalar(query.execution_options(populate_existing=True))
     if not worker:
-        raise HTTPException(404, "Worker 不存在或无权访问")
+        raise HTTPException(404, t('Worker 不存在或无权访问'))
     return worker
 
 
@@ -85,7 +86,7 @@ async def workers_page(request: Request, identity=Depends(require_user), db: Asy
 async def contribute_worker(request: Request, name: str = Form("", max_length=80), provider: str = Form("codex"), suffix: str = Form(""), csrf_token: str = Form(...), identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     verify_csrf(request, identity, csrf_token)
     if provider not in {"codex", "gemini", "claude"}:
-        raise HTTPException(400, "不支持的厂商")
+        raise HTTPException(400, t('不支持的厂商'))
     # Names passed to Docker are server-generated, preventing name collisions or
     # access to another owner's retained Docker volumes.
     container_name = "contrib-" + uuid4().hex
@@ -95,18 +96,18 @@ async def contribute_worker(request: Request, name: str = Form("", max_length=80
     existing = (await db.scalars(select(Worker).where(
         Worker.owner_username == identity.username, Worker.endpoint != "removed://worker"))).all()
     if any(awaiting_login(worker) for worker in existing):
-        raise HTTPException(409, "名下存在未登录或尚未确认登录的 Worker，请先登录并探测，或删除后再创建")
+        raise HTTPException(409, t('名下存在未登录或尚未确认登录的 Worker，请先登录并探测，或删除后再创建'))
     # Each Worker is a container: cap how many one account can ask the manager to run.
     if len(existing) >= settings.max_workers_per_user:
-        raise HTTPException(409, f"名下 Worker 数量已达上限 {settings.max_workers_per_user} 个，请删除后再创建")
+        raise HTTPException(409, t('名下 Worker 数量已达上限 {v0} 个，请删除后再创建', v0=f'{settings.max_workers_per_user}'))
     if name:
-        raise HTTPException(400, "名称前缀由当前用户名生成，只允许修改数字后缀")
+        raise HTTPException(400, t('名称前缀由当前用户名生成，只允许修改数字后缀'))
     suffix = suffix or await next_worker_suffix(db, identity.username)
     if not re.fullmatch(r"[0-9]{1,2}", suffix) or not 1 <= int(suffix) <= 99:
-        raise HTTPException(400, "请输入 01–99 的数字后缀，最多两位；序号用尽时请选择未使用的序号")
+        raise HTTPException(400, t('请输入 01–99 的数字后缀，最多两位；序号用尽时请选择未使用的序号'))
     label = f"{identity.username}-worker-{int(suffix):02d}"
     if await db.scalar(select(Worker.id).where(Worker.name == label)):
-        raise HTTPException(409, "该 Worker 序号已经使用，请选择其他数字")
+        raise HTTPException(409, t('该 Worker 序号已经使用，请选择其他数字'))
     from .cluster import select_node
     node_id, manager_url = await select_node(db, settings)
     worker = Worker(node_id=node_id, provider=provider, owner_username=identity.username, name=label,
@@ -116,24 +117,24 @@ async def contribute_worker(request: Request, name: str = Form("", max_length=80
         await db.flush()
     except IntegrityError:
         await db.rollback()
-        raise HTTPException(409, "该 Worker 名称已经使用，请选择其他序号")
+        raise HTTPException(409, t('该 Worker 名称已经使用，请选择其他序号'))
     if settings.node_id:
         from .cluster import provision
         await provision(db, worker, settings, manager_url)
-        return {"message": "Worker 已创建，请登录账号后探测状态", "worker_id": str(worker.id)}
+        return {"message": t('Worker 已创建，请登录账号后探测状态'), "worker_id": str(worker.id)}
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(manager_url + "/workers", json={"name": container_name, "provider": provider},
                 headers={"Authorization": "Bearer " + settings.manager_token.get_secret_value()})
         if response.status_code >= 400:
-            raise HTTPException(502, "Worker 创建失败，请重试")
+            raise HTTPException(502, t('Worker 创建失败，请重试'))
         if settings.node_id:
             worker.endpoint = response.json()["endpoint"]
         await db.commit()
     except httpx.HTTPError:
         await db.rollback()
-        raise HTTPException(502, "Worker 管理服务暂时不可用")
-    return {"message": "Worker 已创建，请登录账号后探测状态", "worker_id": str(worker.id)}
+        raise HTTPException(502, t('Worker 管理服务暂时不可用'))
+    return {"message": t('Worker 已创建，请登录账号后探测状态'), "worker_id": str(worker.id)}
 
 
 @router.post("/user/workers/{worker_id}/login")
@@ -179,8 +180,8 @@ async def contributor_account(request: Request, worker_id: UUID, csrf_token: str
             await update_account(worker, None)
         await reconcile_worker(db, worker)
         await db.commit()
-        raise HTTPException(502, "无法读取 Worker 账号，贡献额度已撤销，请探测状态后重试")
-    return {"message": "账号信息已更新", "account": {"email": worker.account_email, "type": worker.auth_mode, "plan": worker.plan_type}, "logged_in": bool(account)}
+        raise HTTPException(502, t('无法读取 Worker 账号，贡献额度已撤销，请探测状态后重试'))
+    return {"message": t('账号信息已更新'), "account": {"email": worker.account_email, "type": worker.auth_mode, "plan": worker.plan_type}, "logged_in": bool(account)}
 
 
 @router.post("/user/workers/{worker_id}/delete")
@@ -198,12 +199,12 @@ async def transfer_worker(request: Request, worker_id: UUID, username: str = For
     username = username.strip()
     user = await db.get(User, username)
     if not user or not user.enabled:
-        raise HTTPException(400, "请选择已有且启用的用户")
+        raise HTTPException(400, t('请选择已有且启用的用户'))
     old_owner = worker.owner_username
     worker.owner_username = username
     await reconcile_worker(db, worker, old_owner)
     await db.commit()
-    return {"message": "Worker 归属已更新"}
+    return {"message": t('Worker 归属已更新')}
 
 
 @router.post("/admin/workers/{worker_id}/name")
@@ -212,17 +213,17 @@ async def rename_worker(request: Request, worker_id: UUID, name: str = Form(...,
     worker = await owned_worker(request, db, worker_id, allow_admin_all=True)
     name = name.strip()
     if not name:
-        raise HTTPException(400, "Worker 名称不能为空")
+        raise HTTPException(400, t('Worker 名称不能为空'))
     duplicate = await db.scalar(select(Worker.id).where(Worker.name == name, Worker.id != worker.id))
     if duplicate:
-        raise HTTPException(409, "该 Worker 名称已经使用")
+        raise HTTPException(409, t('该 Worker 名称已经使用'))
     worker.name = name
     try:
         await db.commit()
     except IntegrityError:
         await db.rollback()
-        raise HTTPException(409, "该 Worker 名称已经使用")
-    return {"message": "Worker 名称已更新"}
+        raise HTTPException(409, t('该 Worker 名称已经使用'))
+    return {"message": t('Worker 名称已更新')}
 
 
 async def refresh_worker_account(worker_id):
@@ -296,7 +297,7 @@ async def account_monitor_loop():
 async def read_worker_rate_limits(worker: Worker, db: AsyncSession):
     if worker.provider in {"gemini", "claude"}:
         if not worker.auth_mode or worker.failure_kind == "logged_out":
-            raise HTTPException(409, "Worker 未登录，请先登录并探测")
+            raise HTTPException(409, t('Worker 未登录，请先登录并探测'))
         from .gemini_backend import worker_rpc
         endpoint, provider = worker.endpoint, worker.provider
         await db.rollback()
@@ -306,15 +307,15 @@ async def read_worker_rate_limits(worker: Worker, db: AsyncSession):
             return summarize_windows(payload) if provider == "claude" else provider_usage(payload)
         except httpx.HTTPStatusError as exc:
             raise HTTPException(409 if exc.response.status_code == 409 else 502,
-                                "订阅 Worker 正在执行或登录，请稍后重试" if exc.response.status_code == 409 else "官方 CLI 暂未返回额度，请稍后重试")
+                                t('订阅 Worker 正在执行或登录，请稍后重试') if exc.response.status_code == 409 else t('官方 CLI 暂未返回额度，请稍后重试'))
         except httpx.HTTPError:
-            raise HTTPException(502, "订阅 Worker 额度查询暂时不可用")
+            raise HTTPException(502, t('订阅 Worker 额度查询暂时不可用'))
     if (worker.provider or "codex") != "codex":
-        raise HTTPException(400, "该厂商尚不支持额度查询")
+        raise HTTPException(400, t('该厂商尚不支持额度查询'))
     from .rate_limits import summarize_windows
     endpoint = worker.endpoint
     if not worker.auth_mode or worker.failure_kind == 'logged_out':
-        raise HTTPException(409, 'Worker 未登录，请先登录并探测')
+        raise HTTPException(409, t('Worker 未登录，请先登录并探测'))
     # Release the read transaction before waiting on the external Worker.
     await db.rollback()
     settings = get_settings()
@@ -323,7 +324,7 @@ async def read_worker_rate_limits(worker: Worker, db: AsyncSession):
             payload = await server.call('account/rateLimits/read', {'excludeResetCreditDetails': True})
         return summarize_windows(payload)
     except Exception:
-        raise HTTPException(502, '暂时无法读取账号额度，请稍后重试')
+        raise HTTPException(502, t('暂时无法读取账号额度，请稍后重试'))
 
 
 @router.post('/user/workers/{worker_id}/rate-limits')
@@ -351,7 +352,7 @@ async def gemini_login_action(request: Request, worker_id: UUID, action: str,
     verify_csrf(request, identity, csrf_token)
     admin_path = request.url.path.startswith("/admin/")
     if admin_path and not is_admin(request):
-        raise HTTPException(403, "仅管理员可以管理其他用户的 Worker")
+        raise HTTPException(403, t('仅管理员可以管理其他用户的 Worker'))
     worker = await owned_worker(request, db, worker_id, allow_admin_all=admin_path)
     if worker.provider not in {"gemini", "claude"} or action not in {"start", "status", "input", "logout"}:
         raise HTTPException(400, "Invalid login operation")
@@ -361,17 +362,17 @@ async def gemini_login_action(request: Request, worker_id: UUID, action: str,
                                    {"session_id": session_id, "action": key, "code": code, "menu_id": menu_id})
     except httpx.HTTPStatusError as exc:
         raise HTTPException(409 if exc.response.status_code == 409 else 502,
-                            "Worker 正忙，请等待当前操作结束" if exc.response.status_code == 409 else "订阅 Worker 登录操作未完成，请稍后重试")
+                            t('Worker 正忙，请等待当前操作结束') if exc.response.status_code == 409 else t('订阅 Worker 登录操作未完成，请稍后重试'))
     except httpx.HTTPError:
-        raise HTTPException(502, "订阅 Worker 服务暂时不可用")
+        raise HTTPException(502, t('订阅 Worker 服务暂时不可用'))
     if action == "logout":
         await update_account(worker, None, force_invalidate=True)
         worker.status = WorkerStatus.offline
         worker.failure_kind = "logged_out"
-        worker.failure_reason = "用户已退出订阅账号登录"
+        worker.failure_reason = t('用户已退出订阅账号登录')
         await reconcile_worker(db, worker)
         await db.commit()
-        return {**payload, "message": "已退出订阅账号，贡献额度已重新计算，已有会话已失效"}
+        return {**payload, "message": t('已退出订阅账号，贡献额度已重新计算，已有会话已失效')}
     if payload.get("logged_in") and payload.get("account"):
         await update_account(worker, payload["account"])
         worker.status = WorkerStatus.offline

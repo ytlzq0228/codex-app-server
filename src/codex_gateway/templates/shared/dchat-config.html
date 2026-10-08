@@ -1,0 +1,12 @@
+<section class="panel">
+<p>{{ t('固定使用 US 服务器。启用后，Worker 异常会通过 D-Chat 通知归属用户。') }}</p>
+<form data-portal action="/admin/dchat" method="post" class="stack-form">
+{{ csrf() }}
+<label><input {% if loading %}disabled{% endif %} type="checkbox" name="enabled" value="true" {{ 'checked' if config and config.enabled }}>{{ t('启用 D-Chat') }}</label>
+<label>Bot ID<input {% if loading %}disabled{% endif %} name="bot_id" maxlength="120" value="{{ config.bot_id if config else '' }}"></label>
+<label>{{ t('Client ID') }}<input {% if loading %}disabled{% endif %} name="api_client_id" maxlength="500" value="{{ config.api_client_id if config else '' }}"></label>
+<label>{{ t('Client Secret') }}<input {% if loading %}disabled{% endif %} type="password" name="api_client_secret" maxlength="1000" autocomplete="new-password" placeholder="{{ t('已配置，留空保留') if config and config.has_secret else t('尚未配置') }}"></label>
+<p data-form-error role="alert" hidden></p>
+<button {% if loading %}disabled{% endif %} class="button button-primary">{{ t('保存配置') }}</button>
+</form>
+</section>

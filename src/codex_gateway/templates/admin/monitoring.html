@@ -1,17 +1,17 @@
 <link rel="stylesheet" href="/static/monitoring.css">
 {% if not loading %}<script defer src="/static/monitoring.js"></script>{% endif %}
 <div id="monitoring">
-  <div class="section-head"><label>历史范围 <select {% if loading %}disabled{% endif %} id="monitor-days"><option value="1">最近 24 小时</option><option value="7" selected>最近 7 天</option><option value="30">最近 30 天</option><option value="90">最近 90 天</option></select></label><span id="monitor-status" role="status">正在读取监控数据…</span></div>
+  <div class="section-head"><label>{{ t('历史范围') }} <select {% if loading %}disabled{% endif %} id="monitor-days"><option value="1">{{ t('最近 24 小时') }}</option><option value="7" selected>{{ t('最近 7 天') }}</option><option value="30">{{ t('最近 30 天') }}</option><option value="90">{{ t('最近 90 天') }}</option></select></label><span id="monitor-status" role="status">{{ t('正在读取监控数据…') }}</span></div>
   <section class="panel">
-    <div class="section-head"><div><p class="eyebrow">SUBSCRIPTION POOL</p><h2>当前订阅池总用量</h2></div><a href="/admin/finance">配置套餐权重</a></div>
-    <p class="muted">Codex 与 Gemini 独立计算。各 Provider 内按套餐权重加权，显示已用比例及剩余可用比例。</p>
+    <div class="section-head"><div><p class="eyebrow">{{ t('SUBSCRIPTION POOL') }}</p><h2>{{ t('当前订阅池总用量') }}</h2></div><a href="/admin/finance">{{ t('配置套餐权重') }}</a></div>
+    <p class="muted">{{ t('Codex 与 Gemini 独立计算。各 Provider 内按套餐权重加权，显示已用比例及剩余可用比例。') }}</p>
     {% for provider, label in [('codex', 'Codex'), ('gemini', 'Gemini'), ('claude', 'Claude')] %}
     <section class="monitor-provider" aria-labelledby="monitor-{{ provider }}-title"><h3 id="monitor-{{ provider }}-title">{{ label }}</h3><div id="monitor-usage-{{ provider }}" class="monitor-metrics"></div><div id="monitor-chart-{{ provider }}" class="monitor-chart"></div></section>
     {% endfor %}
-    <p class="muted">每小时采样，包含仍登录的 Worker（含停用及隔离），排除未登录及已删除记录；同一账号的多个 Worker 分别计入。未知套餐按权重 1；读取成功且确认不限额的窗口按用量 0% 计入，读取失败为未知。历史中尚未按 Provider 区分的采样不混入新图表。</p>
+    <p class="muted">{{ t('每小时采样，包含仍登录的 Worker（含停用及隔离），排除未登录及已删除记录；同一账号的多个 Worker 分别计入。未知套餐按权重 1；读取成功且确认不限额的窗口按用量 0% 计入，读取失败为未知。历史中尚未按 Provider 区分的采样不混入新图表。') }}</p>
   </section>
   <section class="panel monitor-health-panel">
-    <div class="monitor-health-current"><div class="section-head"><div><p class="eyebrow">WORKER HEALTH</p><h2>Worker 状态</h2></div></div><div id="monitor-pie" class="monitor-pie-layout"></div><p class="muted">分母为未删除的 Worker；停用、排空及无法归类的故障计入其他异常，登录状态沿用最近探测结果。</p></div>
-    <div class="monitor-health-history"><div class="section-head"><div><h2>Worker 历史波动</h2><p class="muted">每 10 分钟采样；中断处留空。时间按浏览器本地时区显示。</p></div></div><div id="monitor-state-chart" class="monitor-chart"></div></div>
+    <div class="monitor-health-current"><div class="section-head"><div><p class="eyebrow">{{ t('WORKER HEALTH') }}</p><h2>{{ t('Worker 状态') }}</h2></div></div><div id="monitor-pie" class="monitor-pie-layout"></div><p class="muted">{{ t('分母为未删除的 Worker；停用、排空及无法归类的故障计入其他异常，登录状态沿用最近探测结果。') }}</p></div>
+    <div class="monitor-health-history"><div class="section-head"><div><h2>{{ t('Worker 历史波动') }}</h2><p class="muted">{{ t('每 10 分钟采样；中断处留空。时间按浏览器本地时区显示。') }}</p></div></div><div id="monitor-state-chart" class="monitor-chart"></div></div>
   </section>
 </div>

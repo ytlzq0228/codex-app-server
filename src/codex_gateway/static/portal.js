@@ -1,3 +1,5 @@
+(async () => {
+  await globalThis.I18n.ready;
 const dialog = document.getElementById('portal-result');
 document.querySelectorAll('[data-quota-step]').forEach(button => button.addEventListener('click', () => {
   const input = button.parentElement.querySelector('input[name="quota_granted"]');
@@ -27,7 +29,7 @@ document.querySelectorAll('form[data-portal]').forEach(form => form.addEventList
     const response = await fetch(form.action, {method:'POST', body:new FormData(form), headers:{'X-Requested-With':'XMLHttpRequest'}});
     const data = await response.json();
     if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data));
-    document.getElementById('portal-message').textContent = data.message || '已保存';
+    document.getElementById('portal-message').textContent = data.message || globalThis.I18n.t("已保存");
     document.getElementById('portal-secret').textContent = data.secret || '';
     document.getElementById('portal-secret').hidden = !data.secret;
     form.closest('dialog')?.close();
@@ -44,7 +46,7 @@ document.querySelectorAll('[data-price-form]').forEach(form => {
   const row = form.closest('tr');
   const message = form.querySelector('[data-price-message]');
   row.querySelectorAll('input:not([type=hidden])').forEach(input => input.addEventListener('input', () => {
-    message.textContent = '未保存';
+    message.textContent = globalThis.I18n.t("未保存");
     message.className = '';
   }));
   form.addEventListener('submit', async event => {
@@ -52,16 +54,16 @@ document.querySelectorAll('[data-price-form]').forEach(form => {
     const button = form.querySelector('button');
     const submitted = new FormData(form);
     button.disabled = true;
-    message.textContent = '保存中…';
+    message.textContent = globalThis.I18n.t("保存中…");
     message.className = '';
     try {
       const response = await fetch(form.action, {method:'POST',body:submitted,headers:{'X-Requested-With':'XMLHttpRequest'}});
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error?.message || (typeof data.detail === 'string' ? data.detail : '保存失败，请检查价格'));
+      if (!response.ok) throw new Error(data.error?.message || (typeof data.detail === 'string' ? data.detail : globalThis.I18n.t("保存失败，请检查价格")));
       const status = row.querySelector('[data-price-status]');
-      status.textContent = '已定价'; status.className = 'badge badge-ok';
+      status.textContent = globalThis.I18n.t("已定价"); status.className = 'badge badge-ok';
       const current = new FormData(form);
-      message.textContent = ['model','input_price','output_price','cache_read_price','cache_write_price'].every(key => current.get(key) === submitted.get(key)) ? '已保存' : '有新修改未保存';
+      message.textContent = ['model','input_price','output_price','cache_read_price','cache_write_price'].every(key => current.get(key) === submitted.get(key)) ? globalThis.I18n.t("已保存") : globalThis.I18n.t("有新修改未保存");
     } catch (error) { message.textContent = error.message; message.className = 'price-error'; }
     finally { button.disabled = false; }
   });
@@ -85,22 +87,22 @@ if (workerDialog) {
     const accountInfo = document.getElementById('worker-account-info');
     const pollStatus = document.getElementById('worker-login-poll');
     const pollText = document.getElementById('worker-login-poll-text');
-    title.textContent = form.hasAttribute('data-worker-login') ? '登录 Worker' : 'Worker 账号';
+    title.textContent = form.hasAttribute('data-worker-login') ? globalThis.I18n.t("登录 Worker") : globalThis.I18n.t("Worker 账号");
     workerDialog.dataset.reload = '';
-    message.textContent = '正在读取 Worker…'; loginContent.hidden = true; link.removeAttribute('href'); code.textContent = '';
+    message.textContent = globalThis.I18n.t("正在读取 Worker…"); loginContent.hidden = true; link.removeAttribute('href'); code.textContent = '';
     accountInfo.hidden = true; accountInfo.textContent = '';
-    pollStatus.hidden = false; pollStatus.classList.remove('has-error'); pollText.textContent = '等待登录完成…';
+    pollStatus.hidden = false; pollStatus.classList.remove('has-error'); pollText.textContent = globalThis.I18n.t("等待登录完成…");
     workerDialog.showModal();
     const call = async url => {
       const response = await fetch(url, {method:'POST',body:new FormData(form),headers:{'X-Requested-With':'XMLHttpRequest'},signal});
       const data = await response.json();
-      if (!response.ok) throw new Error(data.error?.message || data.detail || 'Worker 操作失败');
+      if (!response.ok) throw new Error(data.error?.message || data.detail || globalThis.I18n.t("Worker 操作失败"));
       return data;
     };
     try {
       const data = await call(form.action);
       message.textContent = data.message;
-      if (data.account) { accountInfo.hidden = false; workerDialog.dataset.reload = '1'; accountInfo.textContent = `账号：${data.account.email || '未登录'}\n类型：${data.account.type || '—'}\n套餐：${data.account.plan || '—'}`; }
+      if (data.account) { accountInfo.hidden = false; workerDialog.dataset.reload = '1'; accountInfo.textContent = globalThis.I18n.t("账号：{v0}\n类型：{v1}\n套餐：{v2}", undefined, {v0:data.account.email || globalThis.I18n.t("未登录"),v1:data.account.type || '—',v2:data.account.plan || '—'}); }
       if (data.login_url) { link.href=data.login_url; loginContent.hidden=false; code.textContent=data.user_code || '—'; pollStatus.hidden = !data.poll_url; }
       if (data.poll_url) {
         let attempts=0;
@@ -109,16 +111,18 @@ if (workerDialog) {
           try {
             const status = await call(data.poll_url);
             if (status.logged_in) {
-              title.textContent = '登录成功'; message.textContent = status.message;
+              title.textContent = globalThis.I18n.t("登录成功"); message.textContent = status.message;
               loginContent.hidden = true; workerDialog.dataset.reload = '1'; return;
             }
-            pollStatus.classList.remove('has-error'); pollText.textContent = '尚未检测到登录，继续等待…';
-          } catch(error) { if (!signal.aborted) { pollStatus.classList.add('has-error'); pollText.textContent = error.message + '，稍后重试…'; } }
+            pollStatus.classList.remove('has-error'); pollText.textContent = globalThis.I18n.t("尚未检测到登录，继续等待…");
+          } catch(error) { if (!signal.aborted) { pollStatus.classList.add('has-error'); pollText.textContent = error.message + globalThis.I18n.t("，稍后重试…"); } }
           if (++attempts<60 && !signal.aborted) timer=setTimeout(poll,5000);
-          else if (!signal.aborted) { pollStatus.classList.add('has-error'); pollText.textContent = '等待超时，请完成登录后手动探测 Worker。'; }
+          else if (!signal.aborted) { pollStatus.classList.add('has-error'); pollText.textContent = globalThis.I18n.t("等待超时，请完成登录后手动探测 Worker。"); }
         };
         timer=setTimeout(poll,5000);
       }
     } catch(error) { if (!signal.aborted) message.textContent=error.message; }
   }));
 }
+
+})();

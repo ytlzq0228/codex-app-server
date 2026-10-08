@@ -1,3 +1,5 @@
+(async () => {
+  await globalThis.I18n.ready;
 (() => {
   const queue = [];
   let running = 0;
@@ -8,7 +10,7 @@
     }
   };
   const usageClass = percent => percent >= 90 ? 'usage-danger' : (percent >= 60 ? 'usage-warn' : 'usage-ok');
-  const resetTime = seconds => new Date(seconds * 1000).toLocaleString('zh-CN', {
+  const resetTime = seconds => new Date(seconds * 1000).toLocaleString(globalThis.I18n.locale, {
     year: 'numeric', month: 'numeric', day: 'numeric',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
   });
@@ -21,17 +23,17 @@
     progress.max = 100;
     progress.value = window.used;
     progress.className = usageClass(progress.value);
-    progress.setAttribute('aria-label', `${label}已用额度`);
+    progress.setAttribute('aria-label', globalThis.I18n.t("{v0}已用额度", undefined, {v0:label}));
     const caption = document.createElement('span');
     caption.className = 'usage-caption';
     const used = document.createElement('span');
-    used.textContent = window.unlimited ? '无限制' : `${label}：已用 ${window.used}%`;
-    if (window.unlimited) progress.setAttribute('aria-valuetext', '无限制，已用 0%');
+    used.textContent = window.unlimited ? globalThis.I18n.t("无限制") : globalThis.I18n.t("{v0}：已用 {v1}%", undefined, {v0:label,v1:window.used});
+    if (window.unlimited) progress.setAttribute('aria-valuetext', globalThis.I18n.t("无限制，已用 0%"));
     caption.append(used);
     meter.append(progress, caption);
     const reset = document.createElement('span');
     reset.className = 'usage-reset';
-    reset.textContent = `重置：${window.resets_at != null ? resetTime(window.resets_at) : '—'}`;
+    reset.textContent = globalThis.I18n.t("重置：{v0}", undefined, {v0:window.resets_at != null ? resetTime(window.resets_at) : '—'});
     used.title = used.textContent;
     reset.title = reset.textContent;
     if (!window.unlimited) caption.append(reset);
@@ -49,21 +51,23 @@
         const response = await fetch(box.dataset.rateLimits, {method: 'POST', body,
           headers: {'X-Requested-With': 'XMLHttpRequest'}});
         const data = await response.json();
-        if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : '读取失败');
+        if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : globalThis.I18n.t("读取失败"));
         if (data.unlimited) {
-          content.replaceChildren(renderWindow('账号额度', {used: 0, unlimited: true}));
+          content.replaceChildren(renderWindow(globalThis.I18n.t("账号额度"), {used: 0, unlimited: true}));
           return;
         }
         if (data.message) { content.textContent = data.message; return; }
         const bucket = data.buckets.find(item => item.five_hour || item.week);
         const windows = [];
-        if (bucket?.five_hour) windows.push(renderWindow('5 小时', bucket.five_hour));
-        if (bucket?.week) windows.push(renderWindow('周窗口', bucket.week));
+        if (bucket?.five_hour) windows.push(renderWindow(globalThis.I18n.t("5 小时"), bucket.five_hour));
+        if (bucket?.week) windows.push(renderWindow(globalThis.I18n.t("周窗口"), bucket.week));
         content.replaceChildren(...windows);
       } catch (error) {
-        content.textContent = error.message || '额度读取失败';
+        content.textContent = error.message || globalThis.I18n.t("额度读取失败");
       }
     });
     pump();
   });
+})();
+
 })();

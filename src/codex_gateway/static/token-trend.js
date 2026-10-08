@@ -1,3 +1,5 @@
+(async () => {
+  await globalThis.I18n.ready;
 (() => {
   const host = document.querySelector('[data-token-trend]');
   if (!host) return;
@@ -9,7 +11,7 @@
     if (text != null) node.textContent = text;
     return node;
   }
-  const svg = element('svg', {viewBox:'0 0 900 280', role:'img', 'aria-label':'过去30天每日 Token 用量折线图，精确数值见下方表格', width:'100%'});
+  const svg = element('svg', {viewBox:'0 0 900 280', role:'img', 'aria-label':globalThis.I18n.t("过去30天每日 Token 用量折线图，精确数值见下方表格"), width:'100%'});
   const peak = Math.max(1, ...daily.map(day => day.tokens));
   const x = i => 82 + i * 790 / 29;
   const y = n => 230 - n / peak * 200;
@@ -21,9 +23,11 @@
   svg.append(element('polyline', {points:daily.map((day,i) => `${x(i)},${y(day.tokens)}`).join(' '), fill:'none', stroke:'#2563eb', 'stroke-width':2.5}));
   daily.forEach((day, i) => {
     const dot = element('circle', {cx:x(i), cy:y(day.tokens), r:4, fill:'#2563eb', tabindex:0, 'aria-label':`${day.date}: ${day.tokens} Token`});
-    dot.append(element('title', {}, `${day.date}: ${day.tokens.toLocaleString()} Token`));
+    dot.append(element('title', {}, `${day.date}: ${day.tokens.toLocaleString(globalThis.I18n.locale)} Token`));
     svg.append(dot);
     if ([0,7,14,21,29].includes(i)) svg.append(element('text', {x:x(i), y:260, 'text-anchor':'middle', fill:'#64748b', 'font-size':12}, day.date.slice(5)));
   });
   host.replaceChildren(svg);
+})();
+
 })();

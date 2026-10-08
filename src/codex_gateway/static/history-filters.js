@@ -1,3 +1,5 @@
+(async () => {
+  await globalThis.I18n.ready;
 (() => {
   const form = document.querySelector('[data-history-filters]');
   if (!form) return;
@@ -9,13 +11,13 @@
   panel.className = 'history-key-menu';
   const search = document.createElement('input');
   search.type = 'search';
-  search.placeholder = '搜索 Key 名称、ID 或归属用户';
-  search.setAttribute('aria-label', '搜索 Key');
+  search.placeholder = globalThis.I18n.t("搜索 Key 名称、ID 或归属用户");
+  search.setAttribute('aria-label', globalThis.I18n.t("搜索 Key"));
   search.autocomplete = 'off';
   const choices = document.createElement('div');
   choices.className = 'history-key-choices';
   const empty = document.createElement('p');
-  empty.textContent = '没有匹配的 Key';
+  empty.textContent = globalThis.I18n.t("没有匹配的 Key");
   empty.setAttribute('role', 'status');
   empty.hidden = true;
   const buttons = Array.from(select.options, option => {
@@ -33,7 +35,7 @@
     return button;
   });
   function update() {
-    summary.textContent = select.selectedOptions[0]?.textContent || '全部 Key';
+    summary.textContent = select.selectedOptions[0]?.textContent || globalThis.I18n.t("全部 Key");
     summary.title = summary.textContent;
     buttons.forEach(button => button.setAttribute('aria-pressed', String(button.dataset.value === select.value)));
   }
@@ -73,7 +75,7 @@
     const [start, end] = bounds;
     if (start.value && end.value && new Date(start.value) >= new Date(end.value)) {
       event.preventDefault();
-      end.setCustomValidity('结束时间必须晚于开始时间');
+      end.setCustomValidity(globalThis.I18n.t("结束时间必须晚于开始时间"));
       end.reportValidity();
     }
   });
@@ -83,4 +85,6 @@
     });
   });
   form.querySelector('[data-browser-timezone]').textContent = Intl.DateTimeFormat().resolvedOptions().timeZone;
+})();
+
 })();

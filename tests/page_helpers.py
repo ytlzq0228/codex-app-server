@@ -12,7 +12,7 @@ from urllib.parse import urlsplit, urlunsplit, parse_qsl
 import httpx
 
 PATHS={"/admin","/admin/api-keys","/admin/workers","/admin/sessions","/admin/users",
-       "/admin/finance","/admin/reports","/admin/google","/user/overview",
+       "/admin/finance","/admin/reports","/admin/google","/admin/dchat","/user/overview",
        "/user/account","/user/workers","/user/debug"}
 
 def rendered_pages(client, url, **kwargs):
@@ -36,7 +36,7 @@ def rendered_pages(client, url, **kwargs):
             assert item.status_code==200,item.text
             pages.append(item.json())
     result=subprocess.run(["node",str(Path(__file__).with_name("page_render.cjs"))],
-        input=json.dumps({"url":"http://testserver"+str(url),"pages":pages}),capture_output=True,text=True,check=True)
+        input=json.dumps({"url":"http://testserver"+str(url),"pages":pages,"lang":response.headers.get("content-language", "zh-CN")}),capture_output=True,text=True,check=True)
     html="\n".join(json.loads(result.stdout))
     shell=client.get(url,**kwargs)
     sidebar=re.search(r"<aside.*?</aside>",shell.text,re.S)

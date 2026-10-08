@@ -1,4 +1,5 @@
 """Authenticated JSON page responses. ORM objects use explicit display allowlists."""
+from .i18n import t
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
@@ -103,7 +104,7 @@ def page_number(request, name="page"):
             raise ValueError()
         return number
     except ValueError:
-        raise HTTPException(422, "页码必须为正整数")
+        raise HTTPException(422, t('页码必须为正整数'))
 
 
 async def paginate(db, query, request, *, size=30, name="page"):

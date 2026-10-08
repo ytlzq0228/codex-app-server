@@ -1,10 +1,10 @@
 <section class="panel" aria-labelledby="token-trend-title">
-  <h2 id="token-trend-title">过去30天每日 Token 趋势</h2>
-  <p class="muted">按 UTC 自然日统计，包含今天；无用量日期显示为 0。</p>
-  {% if loading %}<p class="page-pending-value">正在加载趋势…</p>{% else %}
+  <h2 id="token-trend-title">{{ t('过去30天每日 Token 趋势') }}</h2>
+  <p class="muted">{{ t('按 UTC 自然日统计，包含今天；无用量日期显示为 0。') }}</p>
+  {% if loading %}<p class="page-pending-value">{{ t('正在加载趋势…') }}</p>{% else %}
   <div data-token-trend>{% for day in recent_usage.daily %}<span hidden data-date="{{ day.date }}" data-tokens="{{ day.tokens }}"></span>{% endfor %}</div>
-  {% if not recent_usage.tokens %}<p class="muted">过去30天暂无 Token 用量。</p>{% endif %}
-  <details><summary>查看每日 Token 数值</summary><div class="table-wrap"><table><thead><tr><th>日期（UTC）</th><th>Token 总数</th></tr></thead><tbody>
+  {% if not recent_usage.tokens %}<p class="muted">{{ t('过去30天暂无 Token 用量。') }}</p>{% endif %}
+  <details><summary>{{ t('查看每日 Token 数值') }}</summary><div class="table-wrap"><table><thead><tr><th>{{ t('日期（UTC）') }}</th><th>{{ t('Token 总数') }}</th></tr></thead><tbody>
     {% for day in recent_usage.daily %}<tr><td>{{ day.date }}</td><td>{{ day.tokens }}</td></tr>{% endfor %}
   </tbody></table></div></details>
   <script src="/static/token-trend.js"></script>

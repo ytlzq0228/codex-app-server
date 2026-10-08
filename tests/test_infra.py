@@ -51,6 +51,8 @@ def test_provider_controls_and_node_assignment():
     from pathlib import Path
     import re
     env = Environment(loader=FileSystemLoader(Path(__file__).parents[1] / 'src/codex_gateway/templates'), autoescape=True)
+    from codex_gateway.i18n import t
+    env.globals.update(t=t, lang='CN', html_lang='zh-CN')
     workers = [SimpleNamespace(id=provider, name=provider, provider=provider, node_id='app-2', owner_username='owner', status=SimpleNamespace(value='ready'), enabled=True, account_email='account@example.test', auth_mode='oauth', plan_type=None, rate_limits=None, failure_reason=None, retry_after=None, account_checked_at=None) for provider in ('gemini','claude')]
     html = env.get_template('shared/contributions.html').render(workers=workers, csrf=lambda:'', identity=SimpleNamespace(username='owner'), credited=set(), duplicates=set())
     assert 'app-2' in html

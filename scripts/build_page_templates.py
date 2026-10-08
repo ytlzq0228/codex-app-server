@@ -45,8 +45,7 @@ for path in (root / "templates").rglob("*.html"):
     text = text.replace("user.password_hash", "user.has_password").replace("user.google_sub", "user.has_google")
     text = text.replace("config.client_secret", "config.has_secret")
     text = text.replace("|selectattr('owner_username','equalto',user.username)|list", "|ownedby(user.username)")
-    text = text.replace("record.logical_conversation_id or '未关联'), ('后端 Thread', record.thread_id or '未记录')] + evidence_fields",
-                        "record.logical_conversation_id or '未关联'), ('后端 Thread', record.thread_id or '未记录')]|concat(evidence_fields)")
+    text = text.replace("] + evidence_fields", "]|concat(evidence_fields)")
     # Nunjucks supports tuples but filtered loops need an explicit filter.
     text = text.replace("for worker in workers if worker.enabled", "for worker in workers|enabled")
     text = text.replace("for worker in workers if worker.id == key.pinned_worker_id", "for worker in workers|matching('id', key.pinned_worker_id)")

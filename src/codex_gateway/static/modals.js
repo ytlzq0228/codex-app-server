@@ -1,3 +1,5 @@
+(async () => {
+  await globalThis.I18n.ready;
 (() => {
   document.querySelectorAll('dialog[data-password-dialog]').forEach(dialog => dialog.addEventListener('close', () => {
     dialog.querySelector('form').reset();
@@ -21,7 +23,7 @@
     controller?.abort();
     const active = new AbortController();
     controller = active;
-    content.textContent = '正在加载请求详情…';
+    content.textContent = globalThis.I18n.t("正在加载请求详情…");
     dialog.showModal();
     try {
       const panel = await window.PageRenderer.detail(link.href, active.signal);
@@ -30,4 +32,6 @@
       if (!active.signal.aborted) content.textContent = error.message;
     }
   });
+})();
+
 })();

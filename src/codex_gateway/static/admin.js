@@ -1,3 +1,5 @@
+(async () => {
+  await globalThis.I18n.ready;
 const resultDialog = document.querySelector('#result-dialog');
 let loginPollTimer = null;
 let loginPollAttempts = 0;
@@ -16,10 +18,10 @@ const requestJson = async (url, body) => {
   });
   if (response.status === 401) {
     location.href = '/auth/login?next=/admin';
-    throw new Error('登录已过期');
+    throw new Error(globalThis.I18n.t("登录已过期"));
   }
   const data = await response.json();
-  if (!response.ok) throw new Error(data.error?.message || data.detail || '操作失败');
+  if (!response.ok) throw new Error(data.error?.message || data.detail || globalThis.I18n.t("操作失败"));
   return data;
 };
 
@@ -33,31 +35,31 @@ const pollLogin = async (url) => {
     const data = await requestJson(url, body);
     if (data.logged_in) {
       stopLoginPoll();
-      document.querySelector('#result-title').textContent = '登录成功';
+      document.querySelector('#result-title').textContent = globalThis.I18n.t("登录成功");
       document.querySelector('#result-message').textContent = data.message;
       document.querySelector('#result-login').hidden = true;
       resultDialog.dataset.reload = '1';
       return;
     }
-    status.innerHTML = '<span></span>尚未检测到登录，继续等待…';
+    status.innerHTML = `<span></span>${globalThis.I18n.t("尚未检测到登录，继续等待…")}`;
   } catch (error) {
-    status.innerHTML = `<span class="poll-error"></span>${error.message}，稍后重试…`;
+    status.innerHTML = `<span class="poll-error"></span>${error.message}${globalThis.I18n.t("，稍后重试…")}`;
   }
   if (loginPollAttempts < 100) loginPollTimer = setTimeout(() => pollLogin(url), 3000);
-  else status.textContent = '等待超时，请完成登录后手动探测 Worker。';
+  else status.textContent = globalThis.I18n.t("等待超时，请完成登录后手动探测 Worker。");
 };
 
 const showResult = (data, reload = false) => {
   stopLoginPoll();
-  document.querySelector('#result-title').textContent = data.title || '操作完成';
+  document.querySelector('#result-title').textContent = data.title || globalThis.I18n.t("操作完成");
   document.querySelector('#result-message').textContent = data.message || '';
   const secret = document.querySelector('#result-secret');
   const login = document.querySelector('#result-login');
   secret.querySelector('code').textContent = '';
   login.querySelector('a').removeAttribute('href');
   login.querySelector('.device-code').textContent = '';
-  document.querySelector('[data-copy-secret]').textContent = '复制';
-  document.querySelector('#login-poll-status').innerHTML = '<span></span>等待登录完成…';
+  document.querySelector('[data-copy-secret]').textContent = globalThis.I18n.t("复制");
+  document.querySelector('#login-poll-status').innerHTML = `<span></span>${globalThis.I18n.t("等待登录完成…")}`;
   secret.hidden = true;
   login.hidden = true;
   if (data.secret) {
@@ -101,7 +103,7 @@ document.querySelectorAll('[data-edit-worker-owner]').forEach(button => button.a
   const form = dialog.querySelector('form');
   form.action = `/admin/workers/${button.dataset.workerId}/owner`;
   form.elements.username.value = button.dataset.workerOwner;
-  document.querySelector('#worker-owner-title').textContent = `编辑归属 · ${button.dataset.workerName}`;
+  document.querySelector('#worker-owner-title').textContent = globalThis.I18n.t("编辑归属 · {v0}", undefined, {v0:button.dataset.workerName});
   dialog.showModal();
 }));
 document.querySelectorAll('[data-close-result]').forEach(button => button.addEventListener('click', () => {
@@ -111,7 +113,7 @@ document.querySelectorAll('[data-close-result]').forEach(button => button.addEve
 }));
 document.querySelector('[data-copy-secret]')?.addEventListener('click', async () => {
   await navigator.clipboard.writeText(document.querySelector('#result-secret code').textContent);
-  document.querySelector('[data-copy-secret]').textContent = '已复制';
+  document.querySelector('[data-copy-secret]').textContent = globalThis.I18n.t("已复制");
 });
 
 document.querySelectorAll('form[data-ajax]').forEach(form => form.addEventListener('submit', async event => {
@@ -121,14 +123,14 @@ document.querySelectorAll('form[data-ajax]').forEach(form => form.addEventListen
   if (button) {
     button.disabled = true;
     button.dataset.label = button.textContent;
-    button.textContent = '处理中…';
+    button.textContent = globalThis.I18n.t("处理中…");
   }
   try {
     const data = await requestJson(form.action, new FormData(form));
     form.closest('dialog')?.close();
     showResult(data, form.hasAttribute('data-reload'));
   } catch (error) {
-    showResult({title: '操作失败', message: error.message});
+    showResult({title: globalThis.I18n.t("操作失败"), message: error.message});
   } finally {
     if (button) {
       button.disabled = false;
@@ -136,3 +138,5 @@ document.querySelectorAll('form[data-ajax]').forEach(form => form.addEventListen
     }
   }
 }));
+
+})();

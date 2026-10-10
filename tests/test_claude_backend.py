@@ -181,7 +181,8 @@ async def test_worker_error_classification(backend, monkeypatch, kind):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reminder", [False, True])
-async def test_tool_roundtrip_images_isolation_and_cancel(backend, monkeypatch, reminder):
+@pytest.mark.parametrize("choice", ["auto", "required", {"type": "function", "name": "lookup"}])
+async def test_tool_roundtrip_images_isolation_and_cancel(backend, monkeypatch, reminder, choice):
     state = {"reply": asyncio.Event(), "requests": []}
     class Stream(httpx.AsyncByteStream):
         async def __aiter__(self):
@@ -201,7 +202,7 @@ async def test_tool_roundtrip_images_isolation_and_cancel(backend, monkeypatch, 
         state["reply"].set()
         return httpx.Response(200, json={"ok": True})
     transport(monkeypatch, handler)
-    first = await backend.complete(ResponseRequest(model="claude-test", input="hi", tools=[TOOL]), TARGET)
+    first = await backend.complete(ResponseRequest(model="claude-test", input="hi", tools=[TOOL], tool_choice=choice), TARGET)
     call = first.tool_calls[0]
     assert call["name"] == "lookup" and call["call_id"] != "private"
     followup = ResponseRequest(model="claude-test", input=[{"type": "function_call_output",
@@ -212,7 +213,10 @@ async def test_tool_roundtrip_images_isolation_and_cancel(backend, monkeypatch, 
         followup.input.append({"role": "developer", "content": [{"type": "input_text", "text": "<total_tokens>1000</total_tokens>"}]})
     with pytest.raises(ToolProtocolError):
         backend.continuation_target(followup, "other-key")
+    previous_limit = backend.tool_sessions.limit
+    backend.tool_sessions.limit = 0  # Admission saturation must not block results.
     final = await backend.complete(followup, TARGET)
+    backend.tool_sessions.limit = previous_limit
     assert final.text == "ok" and final.cache_write_tokens == 8
     assert state["requests"][1][1]["is_error"] is reminder
     assert state["requests"][0][1]["tools"][0]["name"] == "lookup"
@@ -223,7 +227,7 @@ async def test_tool_roundtrip_images_isolation_and_cancel(backend, monkeypatch, 
     assert state["closed"]
     with pytest.raises(ToolProtocolError):
         backend.continuation_target(followup, "key")
-    first = await backend.complete(ResponseRequest(model="claude-test", input="hi", tools=[TOOL]), TARGET)
+    first = await backend.complete(ResponseRequest(model="claude-test", input="hi", tools=[TOOL], tool_choice=choice), TARGET)
     await backend.tool_sessions.cancel_thread("key", first.thread_id)
     assert not backend.tool_sessions.pending
     await backend.close()
@@ -264,3 +268,53 @@ async def test_closing_stream_immediately_closes_worker_transport(backend, monke
     await events.aclose()
     assert closed.is_set()
     await backend.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("choice", ["required", {"type": "function", "name": "lookup"}])
+async def test_forced_choice_cannot_succeed_as_text(backend, monkeypatch, choice):
+    async def handler(request):
+        payload = json.loads(request.content)
+        assert [t["name"] for t in payload["tools"]] == ["lookup"]
+        return httpx.Response(200, text='{"delta":"direct answer","thread_id":"thread"}\n{"done":true}\n')
+    transport(monkeypatch, handler)
+    req = ResponseRequest(model="claude-test", input="hi", tools=[TOOL], tool_choice=choice)
+    assert req.unsupported() is None
+    try:
+        with pytest.raises(WorkerFailure) as caught:
+            await backend.complete(req, TARGET)
+        assert caught.value.code == "tool_choice_not_satisfied"
+    finally:
+        await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_configured_capacity_is_retryable(backend, monkeypatch):
+    sessions = backend.claude.tool_sessions
+    sessions.limit = 0
+    try:
+        with pytest.raises(WorkerFailure) as caught:
+            await backend.complete(ResponseRequest(model="claude-test", input="hi", tools=[TOOL]), TARGET)
+        assert caught.value.code == "client_tool_capacity_exceeded"
+        assert caught.value.status == 429
+    finally:
+        await backend.close()
+
+
+def test_shared_store_uses_configured_claude_limits():
+    from codex_gateway.config import Settings
+    backend = ProviderBackend(Settings(claude_tool_session_limit=75, claude_tool_sessions_per_key=12))
+    assert backend.claude.tool_sessions is backend.tool_sessions
+    assert backend.tool_sessions.limit == 75
+    assert backend.tool_sessions.provider_key_limits == {"claude": 12}
+    assert backend.tool_sessions.per_key_limit == 8
+
+
+def test_chat_forced_choice_and_unknown_tool(backend):
+    chat = ChatCompletionRequest(model="claude-test", messages=[{"role": "user", "content": "hi"}],
+        tools=[{"type": "function", "function": {k: v for k, v in TOOL.items() if k != "type"}}],
+        tool_choice={"type": "function", "function": {"name": "lookup"}})
+    assert chat.unsupported() is None
+    assert chat.to_response_request().tool_choice == {"type": "function", "name": "lookup"}
+    chat.tool_choice["function"]["name"] = "missing"
+    assert chat.unsupported() is not None

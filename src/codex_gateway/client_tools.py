@@ -122,8 +122,7 @@ def validate(request):
     outputs = tool_outputs(request)
     if request.previous_response_id and specs and not outputs:
         raise ToolProtocolError("Client tool requests must send full history or return a pending call_id; tool definitions cannot be attached to a resumed Worker thread")
-    if request.tool_choice not in (None,'auto','none'):
-        raise ToolProtocolError('Forced tool choice is not supported')
+    forced_specs(request, specs)
     return specs
 
 
@@ -160,3 +159,23 @@ def public_call(specs, params):
     else:
         call['arguments']=json.dumps(args,ensure_ascii=False,separators=(',',':'))
     return call
+
+
+def forced_specs(request, specs):
+    """Validate forced selection and return the allowed tools, or None for auto."""
+    choice = request.tool_choice
+    if choice in (None, "auto", "none"):
+        return None
+    from .providers import provider_for
+    if provider_for(request.model) != "claude":
+        raise ToolProtocolError("Forced tool choice is only supported for Claude")
+    if choice == "required":
+        selected = specs
+    elif isinstance(choice, dict) and choice.get("type") == "function" and not set(choice) - {"type", "name", "namespace"}:
+        selected = [s for s in specs if s["name"] == choice.get("name")
+                    and s["namespace"] == choice.get("namespace") and s["kind"] == "function"]
+    else:
+        raise ToolProtocolError("Invalid forced tool choice")
+    if not selected:
+        raise ToolProtocolError("Forced tool choice requires a declared matching tool")
+    return selected

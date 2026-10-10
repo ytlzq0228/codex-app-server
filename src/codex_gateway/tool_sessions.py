@@ -4,6 +4,7 @@ A suspended tool call owns its WS lease. Only the same API Key may return its
 result. A restart or expiry fails explicitly instead of rerunning the tool.
 """
 import asyncio
+import logging
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -26,10 +27,12 @@ class ToolRun:
 
 
 class ToolSessions:
-    def __init__(self, run_events, ttl=300, limit=512):
+    def __init__(self, run_events, ttl=300, limit=512, per_key_limit=8):
         self.run_events=run_events
         self.ttl=ttl
         self.limit=limit
+        self.per_key_limit=per_key_limit
+        self.provider_key_limits = {}
         self.pending={}
         self.runs=set()
         self.retired=OrderedDict()
@@ -186,7 +189,12 @@ class ToolSessions:
 
     async def receive_result(self,run):
         try:
-            return await asyncio.wait_for(run.reply,self.ttl)
+            result = await asyncio.wait_for(run.reply,self.ttl)
+            logging.getLogger(__name__).info("Client tool result received; active_sessions=%s", len(self.runs))
+            return result
+        except asyncio.TimeoutError:
+            logging.getLogger(__name__).warning("Client tool result timed out; active_sessions=%s", len(self.runs))
+            raise
         finally:
             self.pending.pop((run.target.connection_key.split(':',1)[0],run.call_id),None)
             run.call_id=None
@@ -205,8 +213,8 @@ class ToolSessions:
                                           and item.get("is_error") is True for item in items)
             run.reply.set_result(output)
         else:
-            if len(self.runs)>=self.limit or sum(r.target.connection_key.split(":",1)[0] == key for r in self.runs) >= 8:
-                raise ToolProtocolError('Too many pending client tool sessions; retry later')
+            if len(self.runs)>=self.limit or sum(r.target.connection_key.split(":",1)[0] == key for r in self.runs) >= self.provider_key_limits.get(getattr(target, "provider", None), self.per_key_limit):
+                raise ToolProtocolError('Too many pending client tool sessions; return outstanding tool results and reduce concurrency', 'client_tool_capacity_exceeded')
             run=ToolRun(request,target)
             self.runs.add(run)
             run.task=asyncio.create_task(self.pump(run),name='gateway-client-tool')

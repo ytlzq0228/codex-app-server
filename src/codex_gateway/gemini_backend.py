@@ -217,6 +217,8 @@ class ProviderBackend:
         self.tool_sessions = self.codex.tool_sessions
         self.gemini.tool_sessions = self.tool_sessions
         self.claude.tool_sessions = self.tool_sessions
+        self.tool_sessions.limit = settings.claude_tool_session_limit
+        self.tool_sessions.provider_key_limits = {"claude": settings.claude_tool_sessions_per_key}
         self.tool_sessions.run_events = self._turn_events
 
     async def _turn_events(self, request, target, run):

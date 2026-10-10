@@ -237,7 +237,7 @@ async def history_data(start: str = "", end: str = "", history_page: int = Query
     conversation: str = "", key_id: str = "", endpoint: str = "",
     admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     return history_json(await conversation_history(session, filters=history_time_filters(start, end),
-        page=history_page, conversation_id=conversation, key_id=key_id, endpoint=endpoint, summaries_only=True))
+        page=history_page, conversation_id=conversation, key_id=key_id, endpoint=endpoint, summaries_only=True, include_user_agent=True))
 
 
 @router.get("/history/requests")

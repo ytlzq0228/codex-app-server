@@ -13,17 +13,22 @@ def async_questions(item):
     questions = item["questions"]
     if not isinstance(questions, list) or not questions:
         raise ToolProtocolError("Worker returned invalid async questions")
+    normalized = []
     for question in questions:
         if (not isinstance(question, dict) or not isinstance(question.get("title"), str)
                 or not question["title"].strip()
                 or set(question) - {"title", "options"}):
             raise ToolProtocolError("Worker returned invalid async questions")
+        question = dict(question)
+        if question.get("options") is None:
+            question.pop("options", None)
         if "options" in question and (not isinstance(question["options"], list)
                 or not question["options"]
                 or any(not isinstance(option, str) or not option.strip()
                        for option in question["options"])):
             raise ToolProtocolError("Worker returned invalid async question options")
-    return questions
+        normalized.append(question)
+    return normalized
 
 
 def question_call(specs, questions):

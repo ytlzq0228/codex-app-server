@@ -1,10 +1,10 @@
 # Client tools and Worker isolation
 
-The gateway never executes client tools. Supported declarations are Responses `tools`, `input[].additional_tools.tools`, function namespaces, JSON-object function parameters, and custom tools with text, Lark grammar, or regex grammar input. Chat Completions supports `tools[].function`, assistant `tool_calls`, and `role=tool` results. Forced choices, legacy `functions`, hosted/native tool types, nested namespaces, unsupported grammar syntax, and non-text results return explicit 400 errors. Smartwork/Codex CLI `functions.exec` grammar declarations are bridged to a JSON input string internally and restored to `custom_tool_call` for the client; there is no fallback to Worker execution.
+The gateway never executes client tools. Supported declarations are Responses `tools`, `input[].additional_tools.tools`, function namespaces, JSON-object function parameters, and custom tools with text, Lark grammar, or regex grammar input. Chat Completions supports `tools[].function`, assistant `tool_calls`, and `role=tool` results. Forced choices for non-Claude providers, legacy `functions`, hosted/native tool types, nested namespaces, unsupported grammar syntax, and non-text results return explicit 400 errors. Smartwork/Codex CLI `functions.exec` grammar declarations are bridged to a JSON input string internally and restored to `custom_tool_call` for the client; there is no fallback to Worker execution.
 
 Codex tools are registered with app-server as experimental dynamic functions under gateway-generated aliases. Gemini registers the same aliases through a per-execution Antigravity MCP relay. A call becomes a Responses function_call/custom_tool_call or a Chat Completions tool_calls item. No client-supplied code runs on the server. The client returns a function_call_output/custom_tool_call_output with the exact call_id (or Chat role=tool/tool_call_id). The gateway responds to the suspended upstream tool request and resumes streaming its result.
 
-Pending calls retain their original transport (Codex WS lease or Gemini HTTP stream) and Worker. They are scoped to the authenticated API Key, expire after 300 seconds, permit only one result at a time, and reject replay, model/tool changes and unrelated previous_response_id. Up to 8 pending turns per Key and 64 per gateway process are allowed. Restarting the gateway expires in-memory continuations; unknown results fail explicitly. This first implementation targets one gateway process; shared or durable continuation storage is required before multi-replica deployment. Clients should finish pending calls before restarting a gateway.
+Pending calls retain their original transport (Codex WS lease or Gemini HTTP stream) and Worker. They are scoped to the authenticated API Key, expire after 300 seconds, permit only one result at a time, and reject replay, model/tool changes and unrelated previous_response_id. The shared store allows 1024 active or pending turns per process by default. Claude permits 32 per Key; other providers retain 8. Configure CODEX_GATEWAY_CLAUDE_TOOL_SESSION_LIMIT and CODEX_GATEWAY_CLAUDE_TOOL_SESSIONS_PER_KEY to bound admission. Result returns are accepted before checking admission capacity. Restarting the gateway expires in-memory continuations; unknown results fail explicitly. This first implementation targets one gateway process; shared or durable continuation storage is required before multi-replica deployment. Clients should finish pending calls before restarting a gateway.
 
 `previous_response_id` with client tools is supported only for returning a pending tool result. Start other client-tool turns with the full history. Explicit client conversation identity plus a verified history prefix now permits automatic cross-turn Thread reuse; see [execution continuation](execution-continuation.md). Pending tool requests are recorded as `waiting_client_tool`; tool results themselves are not considered executable server instructions. Prompt/output usage is accounted as deltas across continuation segments.
 
@@ -48,3 +48,22 @@ are incompatible with structured-output mode.
 Claude Code may append system reminders after its tool result. The gateway keeps
 the original history for audit and includes those reminders as text in the relay
 reply. A trailing new user message is never silently consumed as a tool result.
+
+
+## Claude forced selection and JSON
+
+Anthropic tool_choice accepts auto, none, any, and tool with a declared name.
+Responses accepts required or a function choice with name (and optional namespace).
+Chat Completions accepts required or a function choice with function.name.
+The CLI has no native tool_choice switch: the gateway restricts the exposed tools,
+instructs the model to call one, suppresses text before the first valid call, and
+fails explicitly with tool_choice_not_satisfied if the model finishes without it.
+This is gateway validation, not native constrained sampling. Tool results still
+resume the same execution; tools never execute on the gateway.
+
+For JSON-only requests, omit tools and use Anthropic output_config.format
+with type=json_schema and schema, Responses text.format, or Chat response_format.
+The gateway does not infer that a tool named structured_output is safe to replace:
+clients may rely on that tool's execution and result. Pending tool capacity returns
+client_tool_capacity_exceeded (429 for Claude); reduce concurrent requests, return
+outstanding results, and retry with backoff. Limits are per process, not cluster-wide.

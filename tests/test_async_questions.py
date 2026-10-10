@@ -202,3 +202,22 @@ async def test_worker_question_reaches_responses_sse_as_client_tool(backend, mon
         assert any(e["type"] == "response.function_call_arguments.done" for e in events)
     finally:
         await backend.close()
+
+
+def test_null_options_normalized_without_mutating_event():
+    from codex_gateway.async_questions import question_text
+    item = notification(questions=[{"title": "Question", "options": None}])["params"]["item"]
+    normalized = async_questions(item)
+    assert normalized == [{"title": "Question"}]
+    assert item["questions"][0]["options"] is None
+    assert question_text(normalized) == "Question\n\n"
+    specs = definitions(request())
+    specs[0]["schema"]["properties"]["questions"]["items"] = {
+        "type": "object", "properties": {"title": {"type": "string"}, "options": {"type": "array"}}}
+    assert json.loads(question_call(specs, normalized)["arguments"]) == {"questions": normalized}
+
+
+@pytest.mark.parametrize("options", ["bad", [], [None], [""], [2], {}])
+def test_invalid_non_null_options_still_rejected(options):
+    with pytest.raises(ToolProtocolError):
+        async_questions(notification(questions=[{"title": "Q", "options": options}])["params"]["item"])

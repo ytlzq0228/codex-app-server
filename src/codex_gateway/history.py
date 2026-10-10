@@ -7,7 +7,7 @@ from sqlalchemy import case, String, cast, func, literal, or_, select
 from .models import ApiKey, ResponseBinding, UsageRecord, Worker
 
 
-async def conversation_history(db, *, owner=None, page=1, page_size=30, filters=(), status='', conversation_id='', key_id='', endpoint='', summaries_only=False):
+async def conversation_history(db, *, owner=None, page=1, page_size=30, filters=(), status='', conversation_id='', key_id='', endpoint='', summaries_only=False, include_user_agent=False):
     # Owner scope is applied before ranking AND when fetching detail rows.
     scope = [UsageRecord.owner_username == owner] if owner is not None else []
     conversation = func.coalesce(UsageRecord.logical_conversation_id, UsageRecord.thread_id,
@@ -71,7 +71,21 @@ async def conversation_history(db, *, owner=None, page=1, page_size=30, filters=
         .group_by(selected.c.group_key, ranked.c.conversation, UsageRecord.api_key_id,
                   UsageRecord.endpoint, ApiKey.name, selected.c.latest_at)
         .order_by(selected.c.latest_at.desc(), selected.c.group_key))).mappings().all()
-        return {'groups': [dict(row) for row in rows], 'total': total,
+        groups = [dict(row) for row in rows]
+        if include_user_agent and groups:
+            # Read only the latest request's headers for each visible conversation.
+            headers = (await db.execute(select(
+                ranked.c.group_key, UsageRecord.request_observation['headers']
+            ).select_from(UsageRecord).join(ranked, UsageRecord.id == ranked.c.id)
+            .join(selected, ranked.c.group_key == selected.c.group_key)
+            .where(ranked.c.position == 1))).all()
+            agents = {identity: ' / '.join(
+                str(header.get('value') or '') for header in (items if isinstance(items, list) else [])
+                if isinstance(header, dict) and str(header.get('name', '')).lower() == 'user-agent'
+            ) for identity, items in headers}
+            for group in groups:
+                group['latest_user_agent'] = agents.get(group['identity'], '')
+        return {'groups': groups, 'total': total,
                 'request_total': request_total, 'page': page, 'pages': pages, 'page_size': page_size}
     rows = (await db.execute(select(UsageRecord, ApiKey.name, Worker.name,
         ranked.c.conversation, selected.c.latest_at, selected.c.group_key, ranked.c.worker_thread)

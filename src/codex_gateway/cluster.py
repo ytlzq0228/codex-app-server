@@ -360,6 +360,10 @@ async def remote_stream(url, request, target, settings):
                     data = json.loads(line)
                     if "error" in data:
                         error = data["error"]
+                        if error.get("status"):
+                            raise WorkerFailure(error["message"], kind=error.get("kind", "connection"),
+                                                code=error.get("code"), status=error["status"],
+                                                safe_to_retry=error.get("safe_to_retry", False))
                         if error.get("code"):
                             raise ToolProtocolError(error["message"], error["code"])
                         if error.get("capacity"):
@@ -426,5 +430,5 @@ async def execute(request: Request):
             from .app_server import AppServerCapacityError
             failure = exc if isinstance(exc, WorkerFailure) else WorkerFailure("Worker execution failed")
             yield json.dumps({"error": {"message": str(failure), "kind": failure.kind,
-                "safe_to_retry": failure.safe_to_retry, "capacity": isinstance(exc, AppServerCapacityError)}}) + "\n"
+                "safe_to_retry": failure.safe_to_retry, "code": failure.code, "status": failure.status, "capacity": isinstance(exc, AppServerCapacityError)}}) + "\n"
     return StreamingResponse(events(), media_type="application/x-ndjson")

@@ -200,3 +200,13 @@ def test_bare_client_empty_system_reminder_is_a_noop():
     body["messages"][-1]["role"] = "user"
     with pytest.raises(ValueError):
         translate_request(body)
+
+
+@pytest.mark.parametrize("choice,expected", [
+    ({"type": "any"}, "required"),
+    ({"type": "tool", "name": "lookup"}, {"type": "function", "name": "lookup"}),
+])
+def test_forced_choice_translation(choice, expected):
+    body = prompt() | {"tools": [{"name": "lookup", "input_schema": {"type": "object"}}],
+                       "tool_choice": choice}
+    assert translate_request(body)["tool_choice"] == expected

@@ -30,7 +30,9 @@ def test_conversation_pagination_latest_status_filters_and_owner_scope():
                 return UsageRecord(request_id=prefix+'-'+name,owner_username=owner,
                     logical_conversation_id=conv,status_code=status,created_at=now+timedelta(seconds=age),
                     endpoint='responses',model='model-'+name,input_tokens=10,output_tokens=2,
-                    duration_ms=5,cost_usd=Decimal('0.1'),**extra)
+                    duration_ms=5,cost_usd=Decimal('0.1'),
+                    request_observation={'headers': [{'name': 'User-Agent', 'value': 'agent-'+name}]}
+                        if name != 'failing-new' else None,**extra)
             db.add_all([
                 record('old','recovered',502,0),record('new','recovered',200,1),
                 record('other-owner','recovered',503,2,owner=bob),
@@ -56,8 +58,13 @@ def test_conversation_pagination_latest_status_filters_and_owner_scope():
             assert [r['usage'].status_code for r in recovered['requests']]==[200,502]
             assert next(g for g in groups if g['thread_id']=='tie')['latest_status']==504
             assert groups[0]['thread_id']=='legacy-thread'
-            summaries=await conversation_history(db,owner=alice,summaries_only=True)
+            summaries=await conversation_history(db,owner=alice,summaries_only=True,include_user_agent=True)
             assert next(g for g in summaries['groups'] if g['conversation_id']=='tie')['latest_model']=='model-tie-high'
+            assert next(g for g in summaries['groups'] if g['conversation_id']=='tie')['latest_user_agent']=='agent-tie-high'
+            assert next(g for g in summaries['groups'] if g['conversation_id']=='failing')['latest_user_agent']==''
+            filtered_summary=await conversation_history(db,owner=alice,summaries_only=True,
+                include_user_agent=True,filters=[UsageRecord.request_id==prefix+'-old'])
+            assert filtered_summary['groups'][0]['latest_user_agent']=='agent-new'
             assert all(r['usage'].owner_username==alice for g in groups for r in g['requests'])
             filtered=await conversation_history(db,owner=alice,filters=[UsageRecord.request_id==prefix+'-old'])
             assert filtered['total']==1 and filtered['groups'][0]['latest_status']==200

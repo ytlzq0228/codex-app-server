@@ -4,6 +4,7 @@
   const root = document.querySelector('#history');
   if (!root) return;
   const base = root.dataset.historyBase || '/admin/history';
+  const showUserAgent = base === '/admin/history';
   const pageParameter = root.dataset.historyPageParam || 'history_page';
   // The user portal hides which Worker served each request; administrators keep it.
   const showWorker = root.dataset.historyShowWorker !== 'false';
@@ -33,12 +34,15 @@
   }
   function render(data, signal, version) {
     summary.textContent = globalThis.I18n.t("共 {v0} 条请求，聚合为 {v1} 个会话", undefined, {v0:data.request_total,v1:data.total});
-    results.innerHTML = `<div class="table-wrap"><table><thead><tr><th>${globalThis.I18n.t("最近请求")}</th><th>${globalThis.I18n.t("逻辑会话 ID")}</th><th>Key</th><th>${globalThis.I18n.t("接口")}</th><th>${globalThis.I18n.t("模型（最近请求）")}</th><th>${globalThis.I18n.t("请求数")}</th><th>${globalThis.I18n.t("最近请求状态")}</th><th>${globalThis.I18n.t("总 Token")}</th><th>${globalThis.I18n.t("总价格（USD）")}</th><th></th></tr></thead><tbody></tbody></table></div>`;
+    results.innerHTML = `<div class="table-wrap"><table><thead><tr><th>${globalThis.I18n.t("最近请求")}</th><th>${globalThis.I18n.t("逻辑会话 ID")}</th><th>Key</th><th>${globalThis.I18n.t("接口")}${showUserAgent ? "/UA" : ""}</th><th>${globalThis.I18n.t("模型（最近请求）")}</th><th>${globalThis.I18n.t("请求数")}</th><th>${globalThis.I18n.t("最近请求状态")}</th><th>${globalThis.I18n.t("总 Token")}</th><th>${globalThis.I18n.t("总价格（USD）")}</th><th></th></tr></thead><tbody></tbody></table></div>`;
     const body = results.querySelector('tbody');
     if (!data.groups.length) body.innerHTML = `<tr><td colspan="10" class="empty">${globalThis.I18n.t("暂无请求历史")}</td></tr>`;
     data.groups.forEach((group,index) => {
+      const agent = group.latest_user_agent || '—';
+      const agentChars = Array.from(agent);
+      const agentLabel = agentChars.length > 10 ? agentChars.slice(0, 10).join('') + '...' : agent;
       const row = document.createElement('tr'); row.className = 'history-row';
-      row.innerHTML = `<td>${time(group.latest_at)}</td><td><code title="${esc(group.conversation_id)}">${esc(group.conversation_id)}</code>${group.logical?'':`<small>${globalThis.I18n.t("旧记录：以 Thread / 请求 ID 标识")}</small>`}<small>${group.thread_count} ${globalThis.I18n.t("个 Worker Thread")}</small></td><td>${esc(group.key_name || globalThis.I18n.t("已删除"))}</td><td><span class="badge">${esc(group.endpoint || 'unknown')}</span></td><td>${esc(group.latest_model || '—')}</td><td>${group.request_count}</td><td>${badge(group.latest_status)}</td><td>${totalTokens(group.input_tokens, group.output_tokens)}</td><td>${price(group.cost_usd)}${group.unpriced_count?`<small>${globalThis.I18n.t("另有")} ${group.unpriced_count} ${globalThis.I18n.t("条未定价")}</small>`:''}</td><td><button type="button" class="button button-small" aria-expanded="false">${globalThis.I18n.t("展开")}</button></td>`;
+      row.innerHTML = `<td>${time(group.latest_at)}</td><td><code title="${esc(group.conversation_id)}">${esc(group.conversation_id)}</code>${group.logical?'':`<small>${globalThis.I18n.t("旧记录：以 Thread / 请求 ID 标识")}</small>`}<small>${group.thread_count} ${globalThis.I18n.t("个 Worker Thread")}</small></td><td>${esc(group.key_name || globalThis.I18n.t("已删除"))}</td><td><span class="badge">${esc(group.endpoint || 'unknown')}</span>${showUserAgent ? `<small title="${esc(agent)}">${esc(agentLabel)}</small>` : ''}</td><td>${esc(group.latest_model || '—')}</td><td>${group.request_count}</td><td>${badge(group.latest_status)}</td><td>${totalTokens(group.input_tokens, group.output_tokens)}</td><td>${price(group.cost_usd)}${group.unpriced_count?`<small>${globalThis.I18n.t("另有")} ${group.unpriced_count} ${globalThis.I18n.t("条未定价")}</small>`:''}</td><td><button type="button" class="button button-small" aria-expanded="false">${globalThis.I18n.t("展开")}</button></td>`;
       const detail = document.createElement('tr'); detail.className = 'history-detail history-conversation-detail'; detail.hidden = true; detail.id = `history-group-${index}`;
       detail.innerHTML = `<td colspan="10"><div class="conversation-records"><div class="conversation-summary"><span>${globalThis.I18n.t("输入")} ${tokens(group.input_tokens)} Token</span><span>${globalThis.I18n.t("输出")} ${tokens(group.output_tokens)} Token</span><span>${globalThis.I18n.t("累计耗时")} ${group.duration_ms} ms</span><span>${globalThis.I18n.t("总价格 USD：")}${price(group.cost_usd)}</span></div><p data-detail-error class="alert alert-error" hidden></p><div class="table-wrap"><table><thead><tr><th>${globalThis.I18n.t("时间")}</th><th>${globalThis.I18n.t("请求 ID")}</th><th>${showWorker ? 'Worker' : 'Thread'}</th><th>${globalThis.I18n.t("模型")}</th><th>${globalThis.I18n.t("状态")}</th><th>Token</th><th>${globalThis.I18n.t("耗时")}</th><th>${globalThis.I18n.t("价格（USD）")}</th></tr></thead><tbody></tbody></table></div><div class="history-more"><button type="button" class="button button-small">${globalThis.I18n.t("加载请求")}</button></div></div></td>`;
       const toggle = row.querySelector('button'); toggle.setAttribute('aria-controls', detail.id);

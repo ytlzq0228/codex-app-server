@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     response_binding_ttl_hours: int = 24  # Legacy setting; ordinary bindings no longer expire.
     execution_resume_enabled: bool = True
     claude_execution_wait_seconds: float = Field(default=5.0, ge=0, le=30)
+    claude_tool_session_limit: int = Field(default=1024, ge=1, le=8192)
+    claude_tool_sessions_per_key: int = Field(default=32, ge=1, le=256)
     claude_execution_max_waiters: int = Field(default=8, ge=0, le=64)
     max_workers_per_user: int = 10
     max_ws_per_key_worker: int = 10

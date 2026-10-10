@@ -16,7 +16,8 @@ from .gemini_backend import worker_rpc
 class ClaudeAdapter:
     def __init__(self, settings):
         self.settings = settings
-        self.tool_sessions = ToolSessions(self._turn_events)
+        self.tool_sessions = ToolSessions(self._turn_events, limit=settings.claude_tool_session_limit,
+                                          per_key_limit=settings.claude_tool_sessions_per_key)
 
     async def stream(self, request, target):
         try:
@@ -28,7 +29,9 @@ class ClaudeAdapter:
                     observe_usage(target, event)
                     yield event
         except ToolProtocolError as exc:
-            raise WorkerFailure(str(exc), kind="request") from exc
+            capacity = exc.code == "client_tool_capacity_exceeded"
+            raise WorkerFailure(str(exc), kind="capacity" if capacity else "request",
+                                code=exc.code, status=429 if capacity else 400) from exc
 
     async def _turn_events(self, request, target, tool_run=None):
         from .providers import validate_capabilities, provider_for
@@ -60,6 +63,12 @@ class ClaudeAdapter:
         names = [(s["namespace"] + "__" if s["namespace"] else "") + s["name"] for s in specs]
         if len(set(names)) == len(names) and all(NAME.fullmatch(n) for n in names):
             specs = [{**s, "alias": n} for s, n in zip(specs, names)]
+        from .client_tools import forced_specs
+        forced = forced_specs(request, specs)
+        if forced is not None:
+            specs = forced
+            payload["system"] = (payload["system"] or "") + "\nYou must call one of the provided client tools before answering. Do not answer directly."
+        choice_satisfied = forced is None
         validators = {}
         from jsonschema.validators import validator_for
         from jsonschema.exceptions import SchemaError
@@ -150,6 +159,7 @@ class ClaudeAdapter:
                                     "Do not add Markdown fences or extra fields. Call the tool again with corrected arguments."}]})
                                 continue
                             grammar_needs_correction = False
+                            choice_satisfied = True
                             await self.tool_sessions.await_result(tool_run, call)
                             yield BackendStreamEvent(thread_id=thread, tool_call=call,
                                 usage_accounting=accounting,
@@ -167,6 +177,10 @@ class ClaudeAdapter:
                             continue
                         if data.get("done") and grammar_needs_correction:
                             raise ToolProtocolError("Model ended without correcting the invalid client tool input")
+                        if not choice_satisfied:
+                            if data.get("done"):
+                                raise ToolProtocolError("Claude ended without the required tool call", "tool_choice_not_satisfied")
+                            continue
                         delta = data.get("delta", "")
                         if output_schema is not None:
                             output_chunks.append(delta)

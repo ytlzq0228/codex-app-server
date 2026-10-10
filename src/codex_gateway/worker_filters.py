@@ -1,5 +1,5 @@
 """Worker list filters shared by the admin query and header controls."""
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import String, case, cast, func, or_, select
 from .models import Worker
 
 
@@ -7,7 +7,7 @@ def worker_filter_columns():
     return {
         "provider": Worker.provider,
         "plan": func.lower(func.trim(func.coalesce(Worker.plan_type, ""))),
-        "status": case(((Worker.status == "offline") & (func.coalesce(Worker.failure_kind, "") != ""), "error"), else_=Worker.status),
+        "status": case(((Worker.status == "offline") & (func.coalesce(Worker.failure_kind, "") != ""), "error"), else_=cast(Worker.status, String)),
         "node": func.coalesce(func.nullif(Worker.node_id, ""), "__local__"),
         "authentication": case((func.coalesce(Worker.auth_mode, "") != "", "logged_in"), else_="logged_out"),
     }

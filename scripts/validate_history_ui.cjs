@@ -29,7 +29,7 @@ print(e.get_template('admin/dashboard.html').render(page='history',history_keys=
   if(url.pathname==='/admin/history/data'){
    if(failNext){failNext=false;return route.fulfill({status:500,json:{detail:'测试加载失败'}});}
    const number=Number(url.searchParams.get('history_page') || 1);
-   return route.fulfill({json:{total:31,request_total:55,page:number,pages:2,page_size:30,groups:[{identity:'key:responses:conversation-'+number,conversation_id:'conversation-'+number,key_id:'key',key_name:'<img src=x onerror="window.pwned=1">',endpoint:'responses',latest_at:'2026-10-02T15:00:00Z',logical:true,thread_count:2,request_count:25,latest_status:200,latest_model:'<img src=x onerror="window.pwned=1">',input_tokens:'1100000',output_tokens:'150000',duration_ms:30,cost_usd:'0.1000',unpriced_count:0}]}});
+   return route.fulfill({json:{total:31,request_total:55,page:number,pages:2,page_size:30,groups:[{identity:'key:responses:conversation-'+number,conversation_id:'conversation-'+number,key_id:'key',key_name:'<img src=x onerror="window.pwned=1">',endpoint:'responses',latest_at:'2026-10-02T15:00:00Z',latest_user_agent:number===1?'<img src=x onerror="window.pwned=1">':null,logical:true,thread_count:2,request_count:25,latest_status:200,latest_model:'<img src=x onerror="window.pwned=1">',input_tokens:'1100000',output_tokens:'150000',duration_ms:30,cost_usd:'0.1000',unpriced_count:0}]}});
   }
   if(url.pathname==='/admin/history/requests'){
    const number=Number(url.searchParams.get('page') || 1);
@@ -44,6 +44,16 @@ print(e.get_template('admin/dashboard.html').render(page='history',history_keys=
  assert.equal(await page.locator('[data-history-request]').count(),0);
  assert.equal(await page.locator('.history-row').getByText('1.2500 million',{exact:true}).count(),1);
  assert.equal(await page.locator('.history-row td').nth(4).innerText(), '<img src=x onerror="window.pwned=1">');
+ assert.equal(await page.getByRole('columnheader',{name:'接口/UA',exact:true}).count(),1);
+ const ua=page.locator('.history-row td').nth(3).locator('small');
+ assert.equal(await ua.innerText(),'<img src=x...');
+ assert.equal(await ua.getAttribute('title'),'<img src=x onerror="window.pwned=1">');
+ const styles=await page.locator('.history-row').evaluate(row=>{
+  const agent=row.cells[3].querySelector('small'),thread=row.cells[1].querySelector('small');
+  const a=getComputedStyle(agent),t=getComputedStyle(thread);
+  return {same:a.font===t.font && a.color===t.color,below:agent.getBoundingClientRect().top>=row.cells[3].querySelector('.badge').getBoundingClientRect().bottom};
+ });
+ assert.deepEqual(styles,{same:true,below:true});
  await page.getByRole('button',{name:'展开',exact:true}).click();
  await page.locator('[data-history-request]').nth(19).waitFor();
  assert.equal(await page.locator('[data-history-request]').count(),20);
@@ -63,6 +73,7 @@ print(e.get_template('admin/dashboard.html').render(page='history',history_keys=
  await page.locator('code').getByText('conversation-2',{exact:true}).waitFor();
  assert.equal(await page.locator('[data-history-request]').count(),0);
  assert.equal(calls.filter(u=>u.pathname==='/admin/history/requests').length,2);
+ assert.equal(await page.locator('.history-row td').nth(3).locator('small').innerText(),'—');
  await page.locator('[name="conversation"]').fill('filter-conversation');
  await page.locator('[data-time-bound="start"]').fill('2026-10-02T08:00');
  await page.getByRole('button',{name:'查询',exact:true}).click();

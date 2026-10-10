@@ -138,8 +138,6 @@ class ResponseRequest(OpenAIRequestModel):
                 return "input", "This input item type is not supported by the gateway"
         except ValueError as exc:
             return "input", str(exc)
-        if self.tool_choice not in (None, "none", "auto"):
-            return "tool_choice", "Forced tool calling is not supported by this Codex gateway"
         if self.background:
             return "background", "Background responses are not supported"
         if self.conversation is not None:
@@ -284,7 +282,8 @@ class ChatCompletionRequest(OpenAIRequestModel):
     def unsupported(self) -> tuple[str, str] | None:
         if self.n != 1:
             return "n", "Only n=1 is supported"
-        if self.tool_choice not in (None, "none", "auto") or self.function_call not in (None, "none", "auto"):
+        from .providers import provider_for
+        if (provider_for(self.model) != "claude" and self.tool_choice not in (None, "none", "auto")) or self.function_call not in (None, "none", "auto"):
             return ("tool_choice" if self.tool_choice not in (None, "none", "auto") else "function_call"), "Forced tool calling is not supported by this Codex gateway"
         if self.modalities and self.modalities != ["text"]:
             return "modalities", "Only text output is supported"
@@ -323,8 +322,14 @@ class ChatCompletionRequest(OpenAIRequestModel):
             if tool.get("type") != "function" or not isinstance(tool.get("function"), dict):
                 raise ValueError("Chat Completions supports only function tools")
             tools.append({**tool["function"], "type":"function"})
+        choice = self.tool_choice
+        if isinstance(choice, dict) and choice.get("type") == "function" and set(choice) == {"type", "function"}:
+            function = choice["function"]
+            if not isinstance(function, dict) or set(function) != {"name"}:
+                raise ValueError("Invalid forced function choice")
+            choice = {"type": "function", "name": function["name"]}
         return ResponseRequest(
-            model=self.model, input=items, stream=self.stream, tools=tools, tool_choice=self.tool_choice,
+            model=self.model, input=items, stream=self.stream, tools=tools, tool_choice=choice,
             max_output_tokens=self.max_completion_tokens or self.max_tokens,
             temperature=self.temperature, top_p=self.top_p, metadata=self.metadata,
             store=self.store, reasoning={"effort": self.reasoning_effort} if self.reasoning_effort else None,

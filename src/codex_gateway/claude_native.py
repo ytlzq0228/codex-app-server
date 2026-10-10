@@ -99,10 +99,19 @@ def translate_request(body, model=None, stream=None):
         tools.append({"type": "function", "name": tool["name"], "description": tool.get("description", ""),
                       "parameters": tool["input_schema"]})
     choice = body.get("tool_choice") or {"type": "auto"}
-    if not isinstance(choice, dict) or choice.get("type") not in {"auto", "none"}:
-        raise ValueError("Only auto and none tool_choice are supported")
+    if not isinstance(choice, dict) or choice.get("type") not in {"auto", "none", "any", "tool"}:
+        raise ValueError("Invalid tool_choice")
+    if set(choice) - {"type", "name", "disable_parallel_tool_use"}:
+        raise ValueError("Invalid tool_choice fields")
+    if "disable_parallel_tool_use" in choice and not isinstance(choice["disable_parallel_tool_use"], bool):
+        raise ValueError("disable_parallel_tool_use must be boolean")
+    if choice["type"] == "tool" and not any(t["name"] == choice.get("name") for t in tools):
+        raise ValueError("tool_choice must name a declared tool")
+    if choice["type"] == "any" and not tools:
+        raise ValueError("tool_choice any requires tools")
     result = {"model": model or body["model"], "input": items, "tools": tools,
-              "tool_choice": choice["type"], "parallel_tool_calls": False,
+              "tool_choice": ({"type": "function", "name": choice["name"]} if choice["type"] == "tool"
+                              else "required" if choice["type"] == "any" else choice["type"]), "parallel_tool_calls": False,
               "stream": body.get("stream", False) if stream is None else stream}
     if not isinstance(result["stream"], bool):
         raise ValueError("stream must be a boolean")
@@ -153,7 +162,7 @@ def native_error(value, status=400):
     code = error.get("code", "")
     if status in {401, 403}:
         pass
-    elif code == "provider_quota_exhausted":
+    elif code in {"provider_quota_exhausted", "client_tool_capacity_exceeded"}:
         status = 429
     elif code in {"worker_capacity_exceeded", "worker_queue_timeout"}:
         status = 529
@@ -163,7 +172,7 @@ def native_error(value, status=400):
         status = 504
     elif code in {"previous_response_not_found", "model_not_found"}:
         status = 404
-    elif code.startswith(("invalid_", "client_tool")) or code in {"unsupported_parameter", "structured_output_invalid"}:
+    elif code.startswith(("invalid_", "client_tool")) or code in {"unsupported_parameter", "structured_output_invalid", "tool_choice_not_satisfied"}:
         status = 400
     elif status == 422:
         status = 400

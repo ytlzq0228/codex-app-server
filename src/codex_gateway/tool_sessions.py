@@ -138,6 +138,11 @@ class ToolSessions:
             raise ToolProtocolError(message, code)
         if request.model!=run.request.model:
             raise ToolProtocolError('Cannot change model while returning a pending tool output')
+        from .web_search import configuration as search_configuration
+        search_request = request if request.tools is not None else request.model_copy(update={"tools": run.request.tools})
+        if search_configuration(search_request) != search_configuration(run.request):
+            raise ToolProtocolError('Cannot change web_search while returning a pending tool output',
+                                    'tool_configuration_changed')
         if request.previous_response_id and request.previous_response_id != run.thread_id:
             raise ToolProtocolError('Tool output and previous_response_id refer to different Threads')
         from .providers import provider_for

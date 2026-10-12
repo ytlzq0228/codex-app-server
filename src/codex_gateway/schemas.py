@@ -1,3 +1,4 @@
+import json
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
@@ -95,6 +96,8 @@ class ResponseRequest(OpenAIRequestModel):
         if not isinstance(item, dict):
             return ""
         item_type = item.get("type")
+        if item_type == "web_search_call":
+            return "ASSISTANT WEB SEARCH:\n" + json.dumps(item.get("action") or {}, ensure_ascii=False)
         role = str(item.get("role") or "user").upper()
         if item_type in {"input_text", "output_text", "text"}:
             return str(item.get("text") or "")
@@ -116,6 +119,9 @@ class ResponseRequest(OpenAIRequestModel):
         if not isinstance(item, dict):
             return True
         item_type = item.get("type")
+        if item_type == "web_search_call":
+            return not (isinstance(item.get("id"), str) and item.get("status") == "completed"
+                        and isinstance(item.get("action"), dict))
         if item_type in {"input_file", "computer_screenshot", "item_reference"}:
             return True
         if item_type not in {None, "message", "additional_tools", "input_text", "output_text", "text", "input_image", "image_url", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output"}:
@@ -340,6 +346,8 @@ class ChatCompletionRequest(OpenAIRequestModel):
 
 
 class BackendResult(BaseModel):
+    native_items: list[dict[str, Any]] = Field(default_factory=list)
+    web_sources: list[dict[str, str]] = Field(default_factory=list)
     usage_accounting: dict[str, Any] | None = None
     text: str
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
@@ -351,6 +359,8 @@ class BackendResult(BaseModel):
 
 
 class BackendStreamEvent(BaseModel):
+    native_item: dict[str, Any] | None = None
+    web_sources: list[dict[str, str]] = Field(default_factory=list)
     usage_accounting: dict[str, Any] | None = None
     tool_call: dict[str, Any] | None = None
     delta: str = ""

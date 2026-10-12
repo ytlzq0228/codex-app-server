@@ -45,6 +45,7 @@ from .quota import reconcile_worker, enforce_quota
 from .contributions import account_monitor_loop, update_account
 from .migrations import upgrade, bootstrap_users
 from .schemas import BackendResult, ChatCompletionRequest, ResponseRequest
+from .web_search import annotations as search_annotations, public_item as public_search_item
 
 logger = logging.getLogger(__name__)
 
@@ -417,7 +418,7 @@ def response_object(response_id: str, body: ResponseRequest, result: BackendResu
         "id": response_id, "object": "response", "created_at": created_at, "completed_at": created_at if status == "completed" else None,
         "status": status, "model": body.model,
         "previous_response_id": previous_response_id,
-        "output": ([{"id": message_id or f"msg_{uuid4().hex}", "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": result.text, "annotations": []}]}] if result.text or not result.tool_calls else []) + result.tool_calls,
+        "output": ([{"id": message_id or f"msg_{uuid4().hex}", "type": "message", "status": "completed", "role": "assistant", "content": [{"type": "output_text", "text": result.text, "annotations": search_annotations(result.text, result.web_sources)}]}] if result.text or not result.tool_calls or result.native_items else []) + [public_search_item(i, body) for i in result.native_items] + result.tool_calls,
         "usage": {"input_tokens": result.input_tokens, "input_tokens_details": {"cached_tokens": result.cache_read_tokens, "cache_write_tokens": result.cache_write_tokens}, "output_tokens": result.output_tokens, "output_tokens_details": {"reasoning_tokens": 0}, "total_tokens": result.input_tokens + result.output_tokens},
         "metadata": body.metadata or {}, "error": None, "incomplete_details": None,
         "instructions": body.instructions, "max_output_tokens": body.max_output_tokens,
@@ -712,6 +713,8 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
     yield sse({"type": "response.in_progress", "sequence_number": sequence, "response": created}); sequence += 1
     message_started = False
     tool_calls = []
+    native_items = {}
+    web_sources = []
     chunks: list[str] = []
     thread_id = ""
     input_tokens = output_tokens = cache_read_tokens = cache_write_tokens = 0
@@ -732,6 +735,24 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
                     output_tokens = event.output_tokens or output_tokens
                     cache_read_tokens = event.cache_read_tokens or cache_read_tokens
                     cache_write_tokens = event.cache_write_tokens or cache_write_tokens
+                    if event.web_sources:
+                        web_sources = event.web_sources
+                    if event.native_item:
+                        if not message_started:
+                            yield sse({"type": "response.output_item.added", "sequence_number": sequence, "output_index": 0, "item": {"id": message_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []}}); sequence += 1
+                            yield sse({"type": "response.content_part.added", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": "", "annotations": []}}); sequence += 1
+                            message_started = True
+                        item = public_search_item(event.native_item, body)
+                        first = item["id"] not in native_items
+                        index = 1 + (len(native_items) if first else list(native_items).index(item["id"]))
+                        native_items[item["id"]] = item
+                        if first:
+                            yield sse({"type": "response.output_item.added", "sequence_number": sequence, "output_index": index, "item": {"id": item["id"], "type": "web_search_call", "status": "in_progress"}}); sequence += 1
+                            yield sse({"type": "response.web_search_call.in_progress", "sequence_number": sequence, "output_index": index, "item_id": item["id"]}); sequence += 1
+                            yield sse({"type": "response.web_search_call.searching", "sequence_number": sequence, "output_index": index, "item_id": item["id"]}); sequence += 1
+                        if item["status"] == "completed":
+                            yield sse({"type": "response.web_search_call.completed", "sequence_number": sequence, "output_index": index, "item_id": item["id"]}); sequence += 1
+                            yield sse({"type": "response.output_item.done", "sequence_number": sequence, "output_index": index, "item": item}); sequence += 1
                     if event.tool_call:
                         tool_calls.append(event.tool_call)
                     if event.delta:
@@ -747,7 +768,7 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
                     await quarantine_worker(target.worker_id, str(exc), exc.kind)
                 # Retry once only when Codex confirms the turn could not have begun and
                 # no model content has reached the client.
-                if retried or chunks or not allow_retry or not exc.safe_to_retry:
+                if retried or chunks or native_items or not allow_retry or not exc.safe_to_retry:
                     raise
                 reset_auto_resume(body if isinstance(body, ResponseRequest) else request, "worker_pre_turn_failure")
                 target = await retry_target(principal, target)
@@ -781,18 +802,21 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
         yield sse({"type": "response.failed", "sequence_number": sequence, "response": failed})
         return
     text = "".join(chunks).rstrip()
-    result = BackendResult(text=text, tool_calls=tool_calls, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens, cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens, usage_accounting=usage_accounting)
+    result = BackendResult(text=text, native_items=list(native_items.values()), web_sources=web_sources, tool_calls=tool_calls, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens, cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens, usage_accounting=usage_accounting)
     await save_usage(response_id, principal, target, body.model, 200, started, result, persist_binding=True, previous_response_id=public_previous_id, request_params=body.model_dump(mode="json"))
     if message_started or not tool_calls:
         if not message_started:
             yield sse({"type": "response.output_item.added", "sequence_number": sequence, "output_index": 0, "item": {"id": message_id, "type": "message", "status": "in_progress", "role": "assistant", "content": []}}); sequence += 1
             yield sse({"type": "response.content_part.added", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": "", "annotations": []}}); sequence += 1
         yield sse({"type": "response.output_text.done", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "text": text}); sequence += 1
-        part = {"type": "output_text", "text": text, "annotations": []}
+        citations = search_annotations(text, web_sources)
+        for annotation_index, annotation in enumerate(citations):
+            yield sse({"type": "response.output_text.annotation.added", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "annotation_index": annotation_index, "annotation": annotation}); sequence += 1
+        part = {"type": "output_text", "text": text, "annotations": citations}
         yield sse({"type": "response.content_part.done", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "part": part}); sequence += 1
         item = {"id": message_id, "type": "message", "status": "completed", "role": "assistant", "content": [part]}
         yield sse({"type": "response.output_item.done", "sequence_number": sequence, "output_index": 0, "item": item}); sequence += 1
-    for index, call in enumerate(tool_calls, start=1 if message_started else 0):
+    for index, call in enumerate(tool_calls, start=(1 if message_started else 0) + len(native_items)):
         argument_key = "arguments" if call["type"] == "function_call" else "input"
         event_name = "response.function_call_arguments" if argument_key == "arguments" else "response.custom_tool_call_input"
         yield sse({"type":"response.output_item.added", "sequence_number":sequence, "output_index":index, "item":{**call, "status":"in_progress", argument_key:""}}); sequence += 1

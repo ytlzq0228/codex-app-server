@@ -384,14 +384,19 @@ async def remote_stream(url, request, target, settings):
 
 async def collect(events):
     text_parts, calls, last = [], [], None
+    native_items, web_sources = [], []
     async for event in events:
         last = event
+        if event.web_sources:
+            web_sources = event.web_sources
+        if event.native_item and event.native_item["status"] == "completed":
+            native_items.append(event.native_item)
         text_parts.append(event.delta)
         if event.tool_call:
             calls.append(event.tool_call)
     if last is None or not (last.done or calls):
         raise WorkerFailure("Execution returned no final result")
-    return BackendResult(text="".join(text_parts), tool_calls=calls,
+    return BackendResult(text="".join(text_parts), native_items=native_items, web_sources=web_sources, tool_calls=calls,
         usage_accounting=last.usage_accounting,
         thread_id=last.thread_id, input_tokens=last.input_tokens, output_tokens=last.output_tokens,
         cache_read_tokens=last.cache_read_tokens, cache_write_tokens=last.cache_write_tokens)

@@ -180,7 +180,7 @@ class AppServerBackend:
     async def _start_thread(self, app_server, request: ResponseRequest, workspace: str) -> str:
         if request.previous_response_id:
             try:
-                result = await app_server.call("thread/resume", {"threadId": request.previous_response_id, **thread_policy()})
+                result = await app_server.call("thread/resume", {"threadId": request.previous_response_id, **thread_policy(request)})
             except AppServerError as exc:
                 if not request._execution_auto_resume:
                     raise WorkerFailure("The previous response session can no longer be resumed", kind="session", safe_to_retry=False) from exc
@@ -197,7 +197,7 @@ class AppServerBackend:
                 request._execution_input_items = None
                 request.previous_response_id = None
         if not request.previous_response_id:
-            result = await app_server.call("thread/start", {"model": request._upstream_model or self.model(request.model), "cwd": workspace, "serviceName": "codex_gateway", **thread_policy(), "dynamicTools": dynamic_specs(definitions(request)) if request.tool_choice != "none" else []})
+            result = await app_server.call("thread/start", {"model": request._upstream_model or self.model(request.model), "cwd": workspace, "serviceName": "codex_gateway", **thread_policy(request), "dynamicTools": dynamic_specs(definitions(request)) if request.tool_choice != "none" else []})
         return result["thread"]["id"]
 
     def continuation_target(self, request, key):
@@ -255,6 +255,7 @@ class AppServerBackend:
                     grammar_needs_correction = False
                     specs = definitions(request)
                     delivered_questions = set()
+                    web_sources = {}
                     async for message in app_server.messages():
                         method, params = message.get("method"), message.get("params", {})
                         event_turn = params.get("turnId") or (params.get("turn") or {}).get("id")
@@ -280,11 +281,16 @@ class AppServerBackend:
                             grammar_needs_correction = False
                             await self.tool_sessions.await_result(tool_run, call)
                             input_tokens, output_tokens, cache_read_tokens, cache_write_tokens = turn_usage.counts
-                            yield BackendStreamEvent(tool_call=call, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens, cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens)
+                            yield BackendStreamEvent(tool_call=call, web_sources=list(web_sources.values()), thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens, cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens)
                             output = await self.tool_sessions.receive_result(tool_run)
                             await app_server.websocket.send(json.dumps({"id": message["id"], "result": {"contentItems": dynamic_output(output), "success": True}}))
                         elif message.get("id") is not None and method:
                             await app_server.reject_server_request(message)
+                        elif method in {"item/started", "item/completed"} and (params.get("item") or {}).get("type") == "webSearch":
+                            from .web_search import native_item
+                            item, sources = native_item(params["item"], method == "item/completed")
+                            web_sources.update({s["url"]: s for s in sources})
+                            yield BackendStreamEvent(native_item=item, web_sources=list(web_sources.values()), thread_id=thread_id)
                         elif method == "item/completed":
                             item = params.get("item")
                             questions = async_questions(item)
@@ -304,7 +310,7 @@ class AppServerBackend:
                                 raise ToolProtocolError("Async questions require a client tool session")
                             await self.tool_sessions.await_result(tool_run, call)
                             input_tokens, output_tokens, cache_read_tokens, cache_write_tokens = turn_usage.counts
-                            yield BackendStreamEvent(tool_call=call, thread_id=thread_id, input_tokens=input_tokens,
+                            yield BackendStreamEvent(tool_call=call, web_sources=list(web_sources.values()), thread_id=thread_id, input_tokens=input_tokens,
                                 output_tokens=output_tokens, cache_read_tokens=cache_read_tokens,
                                 cache_write_tokens=cache_write_tokens)
                             # The native async tool already returned accepted=true. This
@@ -324,7 +330,11 @@ class AppServerBackend:
                                 message = error.get("message", "Codex turn failed")
                                 raise WorkerFailure(message, kind=classify_worker_failure(message), safe_to_retry=False)
                             input_tokens, output_tokens, cache_read_tokens, cache_write_tokens = turn_usage.counts
-                            yield BackendStreamEvent(thread_id=thread_id, done=True, input_tokens=input_tokens, output_tokens=output_tokens, cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens)
+                            # Resume config overrides are ignored for loaded threads.
+                            # Release the completed thread before returning the boundary;
+                            # keep the pooled socket and pending client-tool turns alive.
+                            await app_server.call("thread/unsubscribe", {"threadId": thread_id})
+                            yield BackendStreamEvent(thread_id=thread_id, web_sources=list(web_sources.values()), done=True, input_tokens=input_tokens, output_tokens=output_tokens, cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens)
                             return
             except asyncio.CancelledError:
                 if slot_id is not None:
@@ -347,13 +357,19 @@ class AppServerBackend:
         chunks: list[str] = []
         terminal = BackendStreamEvent()
         calls = []
+        native_items = []
+        web_sources = []
         async for event in self._turn(request, target):
             terminal = event
+            if event.web_sources:
+                web_sources = event.web_sources
+            if event.native_item and event.native_item["status"] == "completed":
+                native_items.append(event.native_item)
             if event.tool_call:
                 calls.append(event.tool_call)
             if event.delta:
                 chunks.append(event.delta)
-        return BackendResult(text="".join(chunks), tool_calls=calls, thread_id=terminal.thread_id or "", input_tokens=terminal.input_tokens, output_tokens=terminal.output_tokens, cache_read_tokens=terminal.cache_read_tokens, cache_write_tokens=terminal.cache_write_tokens)
+        return BackendResult(text="".join(chunks), native_items=native_items, web_sources=web_sources, tool_calls=calls, thread_id=terminal.thread_id or "", input_tokens=terminal.input_tokens, output_tokens=terminal.output_tokens, cache_read_tokens=terminal.cache_read_tokens, cache_write_tokens=terminal.cache_write_tokens)
 
     async def stream(self, request: ResponseRequest, target: BackendTarget) -> AsyncIterator[BackendStreamEvent]:
         async for event in self._turn(request, target):

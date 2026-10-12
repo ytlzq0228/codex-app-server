@@ -85,6 +85,7 @@ async def test_form_relay_acknowledgement_and_later_answer(backend, streaming):
     try:
         calls, text = await run(request())
         assert text == "" and len(calls) == 1
+        assert not any(method == "thread/unsubscribe" for method, _ in backend.rpc_calls)
         call = calls[0]
         assert call["namespace"] == "functions"
         assert call["name"] == "request_user_input_async"
@@ -108,7 +109,9 @@ async def test_form_relay_acknowledgement_and_later_answer(backend, streaming):
             input=[{"role": "user", "content": "深色"}]))
         assert calls == [] and text == "Dark selected."
         assert any(method == "thread/resume" for method, _ in backend.rpc_calls)
-        assert "深色" in json.dumps(backend.rpc_calls[-1][1], ensure_ascii=False)
+        last_turn = next(params for method, params in reversed(backend.rpc_calls) if method == "turn/start")
+        assert "深色" in json.dumps(last_turn, ensure_ascii=False)
+        assert backend.rpc_calls[-1] == ("thread/unsubscribe", {"threadId": "thread-a"})
     finally:
         await backend.close()
 

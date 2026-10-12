@@ -39,6 +39,9 @@ def normal_item(item, *, legacy=False):
     kind = item.get("type", "message")
     if kind == "additional_tools":
         return None
+    if kind == "web_search_call":
+        return {"type": kind, "action": {k: v for k, v in (item.get("action") or {}).items() if k != "sources"},
+                "status": item.get("status")}
     if kind == "message" and item.get("role") in {"user", "assistant", "developer", "system"}:
         return {"role": item["role"], "text": semantic_content(item.get("content"))}
     if kind in {"function_call", "custom_tool_call"}:
@@ -144,7 +147,10 @@ def hashes(items):
 
 
 def configuration(request):
-    return digest({"version": 1, "model": request.model, "instructions": request.instructions,
+    from .web_search import configuration as search_configuration
+    search = search_configuration(request)
+    return digest({**({"web_search": search} if search is not None else {}),
+                   "version": 1, "model": request.model, "instructions": request.instructions,
                    "tools": definitions(request), "tool_choice": request.tool_choice or "auto",
                    "output_schema": request.output_schema()})
 
@@ -540,8 +546,9 @@ async def finish(db, audit, result, target, response_id):
     expected = claim["history"]
     if result and expected is not None:
         expected = list(expected)
-        if result.text:
+        if result.text or result.native_items:
             expected.append(digest({"role": "assistant", "text": result.text}))
+        expected.extend(digest(normal_item(c)) for c in result.native_items)
         expected.extend(digest(normal_item(c)) for c in result.tool_calls)
     instant = now()
     failed_tool = (not result and target.provider == "claude"

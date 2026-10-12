@@ -11,9 +11,13 @@ CONFIG = {**{f'features.{name}':False for name in FEATURES},
           'apps._default.enabled':False}
 
 
-def thread_policy():
+def thread_policy(request=None):
+    config = dict(CONFIG)
+    if request is not None:
+        from .web_search import mode
+        config['web_search'] = mode(request)
     return {'environments':[], 'sandbox':'read-only','approvalPolicy':'untrusted',
-            'approvalsReviewer':'user','config':dict(CONFIG),'selectedCapabilityRoots':[]}
+            'approvalsReviewer':'user','config':config,'selectedCapabilityRoots':[]}
 
 
 def turn_policy():

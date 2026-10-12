@@ -16,11 +16,15 @@ class ToolProtocolError(ValueError):
 
 
 def definitions(request):
+    from .web_search import configuration
+    configuration(request)
     tools = list(request.tools or [])
     for item in request.input if isinstance(request.input, list) else [request.input]:
         if isinstance(item, dict) and item.get('type') == 'additional_tools':
             if not isinstance(item.get('tools'), list):
                 raise ToolProtocolError('additional_tools.tools must be an array')
+            if any(isinstance(t, dict) and t.get('type') == 'web_search' for t in item['tools']):
+                raise ToolProtocolError('Declare web_search in top-level tools')
             tools.extend(item['tools'])
     result = []
     seen = set()
@@ -28,6 +32,10 @@ def definitions(request):
         if not isinstance(tool, dict):
             raise ToolProtocolError('Tool definitions must be objects')
         name, kind = tool.get('name'), tool.get('type')
+        if kind == 'web_search':
+            if namespace:
+                raise ToolProtocolError('Declare web_search in top-level tools')
+            return
         if not isinstance(name, str) or not NAME.fullmatch(name):
             raise ToolProtocolError('Tool names must contain 1-64 letters, digits, underscores or hyphens')
         if kind == 'namespace':

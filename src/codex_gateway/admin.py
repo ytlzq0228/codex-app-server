@@ -1,3 +1,4 @@
+from decimal import Decimal
 from .i18n import t
 from .page_data import data_page, page_response, paginate, paginate_list
 import re
@@ -143,6 +144,9 @@ async def render_admin_page(request: Request, page: str, history_page: int, admi
     elif page == "keys":
         context["keys"], context["pagination"] = await paginate(session,
             select(ApiKey).where(ApiKey.deleted_at.is_(None)).order_by(ApiKey.created_at.desc(), ApiKey.id), request)
+        from .key_limits import key_budget_display
+        context["key_budgets"] = await key_budget_display(session, context["keys"])
+        context["default_key_monthly_limit_usd"] = str(get_settings().default_key_monthly_limit_usd)
         # Pickers only need display identifiers, never ORM credentials.
         context["workers"] = [dict(row) for row in (await session.execute(select(
             Worker.id, Worker.name, Worker.enabled).where(Worker.endpoint != "removed://worker", Worker.id.in_([key.pinned_worker_id for key in context["keys"] if key.pinned_worker_id])).order_by(Worker.name, Worker.id))).mappings()]
@@ -606,3 +610,19 @@ async def login_selected_worker(request: Request, worker_id: UUID, csrf_token: s
         poll_url=f"/admin/workers/{worker.id}/probe")
     await session.commit()
     return JSONResponse(payload)
+
+
+@router.post("/keys/{key_id}/budget")
+async def edit_key_budget(
+    request: Request, key_id: UUID,
+    monthly_limit_usd: Decimal = Form(..., ge=0, max_digits=14, decimal_places=2),
+    csrf_token: str = Form(...), admin: AdminSession = Depends(require_admin),
+    session: AsyncSession = Depends(get_session),
+):
+    verify_csrf(request, admin, csrf_token)
+    record = await session.get(ApiKey, key_id)
+    if not record or record.deleted_at:
+        raise HTTPException(404, "API key not found")
+    record.monthly_limit_usd = monthly_limit_usd
+    await session.commit()
+    return result(t("月限额已更新"), t("新的限额立即生效。"))

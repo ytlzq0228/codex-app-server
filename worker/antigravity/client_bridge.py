@@ -20,7 +20,7 @@ class ToolBridge:
         self.token = secrets.token_urlsafe(32)
         self.server_name = "gateway_client_" + uuid4().hex[:16]
         self.tools = {tool["name"]: tool for tool in tools}
-        if len(self.tools) != len(tools) or len(tools) > 64:
+        if len(self.tools) != len(tools) or len(tools) > 512:
             raise ValueError("Invalid tool declarations")
         self.images = images or []
         self.images_read = set()

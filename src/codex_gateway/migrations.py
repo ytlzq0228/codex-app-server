@@ -6,6 +6,8 @@ from .worker_names import archived_worker_name
 
 
 async def upgrade(connection):
+    await connection.execute(text("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS monthly_limit_usd NUMERIC(14,2) NOT NULL DEFAULT 3000"))
+    await connection.execute(text("CREATE INDEX IF NOT EXISTS ix_usage_records_key_month ON usage_records (api_key_id, created_at)"))
     await connection.execute(text("ALTER TABLE workers ADD COLUMN IF NOT EXISTS node_id VARCHAR(80)"))
     await connection.execute(text("CREATE INDEX IF NOT EXISTS ix_workers_node_id ON workers(node_id)"))
     await connection.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS provider_grants JSON NOT NULL DEFAULT '[]'"))

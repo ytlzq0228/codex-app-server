@@ -14,7 +14,7 @@ from . import models
 
 FIELDS = {
     models.User: "username email role enabled must_change_password created_at provider_grants",
-    models.ApiKey: "id name prefix owner_username enabled scheduling_mode pinned_worker_id created_at last_used_at deleted_at",
+    models.ApiKey: "id name prefix owner_username enabled scheduling_mode pinned_worker_id created_at last_used_at deleted_at monthly_limit_usd",
     models.Worker: "id name node_id provider owner_username account_email account_checked_at status auth_mode plan_type enabled created_at last_seen_at failure_kind failure_reason retry_after",
     models.ResponseBinding: "response_id api_key_id worker_id thread_id last_used_at",
     models.ModelPrice: "model input_price output_price cache_read_price cache_write_price",

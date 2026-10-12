@@ -1,5 +1,6 @@
 import enum
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID, uuid4
 from sqlalchemy import BigInteger, Boolean, DateTime, Enum, ForeignKey, Integer, String, Text, JSON, Numeric, func
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
@@ -154,8 +155,14 @@ class PendingToolRoute(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
 
 
+def default_key_monthly_limit():
+    from .config import get_settings
+    return get_settings().default_key_monthly_limit_usd
+
+
 class ApiKey(Base):
     __tablename__ = "api_keys"
+    monthly_limit_usd: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=default_key_monthly_limit, server_default="3000")
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     owner_username: Mapped[str | None] = mapped_column(ForeignKey("users.username"), index=True)
     name: Mapped[str] = mapped_column(String(120))

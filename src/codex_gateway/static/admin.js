@@ -80,6 +80,23 @@ document.querySelectorAll('[data-open-dialog]').forEach(button =>
   button.addEventListener('click', () => document.getElementById(button.dataset.openDialog).showModal()));
 document.querySelectorAll('[data-close-dialog]').forEach(button =>
   button.addEventListener('click', () => button.closest('dialog').close()));
+document.querySelectorAll('[data-key-owner]').forEach(container => {
+  const display = container.querySelector('[data-owner-display]');
+  const form = container.querySelector('form');
+  container.querySelector('[data-owner-edit]').addEventListener('click', () => {
+    display.hidden = true; form.hidden = false; form.elements.username.dispatchEvent(new Event('owner-picker-open'));
+  });
+  const cancel = () => {form.reset(); form.hidden = true; display.hidden = false; container.querySelector('[data-owner-edit]').focus();};
+  container.querySelector('[data-owner-cancel]').addEventListener('click', cancel);
+  form.addEventListener('keydown', event => {if(event.key === 'Escape') {event.preventDefault(); cancel();}});
+});
+document.querySelectorAll('[data-edit-key-budget]').forEach(button => button.addEventListener('click', () => {
+  const dialog = document.querySelector('#key-budget-dialog');
+  const form = dialog.querySelector('form');
+  form.action = '/admin/keys/' + button.dataset.keyId + '/budget';
+  form.elements.monthly_limit_usd.value = button.dataset.keyLimit;
+  dialog.showModal(); form.elements.monthly_limit_usd.focus();
+}));
 document.querySelectorAll('[data-edit-key]').forEach(button => button.addEventListener('click', () => {
   const dialog = document.querySelector('#edit-key-dialog');
   const form = dialog.querySelector('form');

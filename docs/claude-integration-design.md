@@ -119,7 +119,7 @@ Worker 设计完全基于以下实测行为（本机 + 测试环境均复现）�
  "workspace": "/workspace/<key_slug>"}
 ```
 
-约束：content 只允许 `text`/`image`(base64, png/jpeg/gif/webp, ≤10 MiB/张, ≤20 张, ≤20 MiB)；tools 名称 `^[A-Za-z0-9_-]{1,64}$`，≤64 个；`json_schema` 与 `tools` 互斥。
+约束：content 只允许 `text`/`image`(base64, png/jpeg/gif/webp, ≤10 MiB/张, ≤20 张, ≤20 MiB)；tools 名称 `^[A-Za-z0-9_-]{1,64}$`，≤512 个（网关容量策略）；`json_schema` 与 `tools` 互斥。
 
 `POST /turn` NDJSON 事件（每行一个对象）：
 

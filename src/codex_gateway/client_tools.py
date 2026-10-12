@@ -49,8 +49,8 @@ def definitions(request):
         seen.add(identity)
         result.append({'alias':f'gateway_client_{len(result)}','name':name,'namespace':namespace,
                        'kind':kind,'description':str(tool.get('description') or ''),'schema':schema, 'grammar':grammar})
-        if len(result)>64:
-            raise ToolProtocolError('At most 64 client tools are supported')
+        if len(result)>512:
+            raise ToolProtocolError('At most 512 client tools are supported')
     for tool in tools:
         add(tool)
     return result

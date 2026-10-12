@@ -101,3 +101,12 @@ mock 模式测试通过 fixture 模拟 Worker manager 的工作区接口，实�
 个人 Key 表格将脱敏前缀放入独立列，操作按钮放在单元格内部，保持行线对齐。贡献 Worker 页面与管理员概览显示账号 5 小时 / 周窗口剩余百分比、重置时间（浏览器本地时区）和读取时间，加载页面自动读取，也可手动刷新。通过 account/rateLimits/read 只读查询，按 windowDurationMins 区分 300 分钟和 10080 分钟，支持多个额度桶；缺失窗口显示暂无数据。查询失败不改变 Worker 状态或 Key quota，普通用户仅能查询自己的 Worker。
 
 导航分为“用户自助服务”（所有用户可见）与“系统管理”（admin / superadmin 可见）。用户页面统一为 `/user/overview`、`/user/account`、`/user/workers`、`/user/usage`、`/user/debug`；登录/退出为 `/auth/login`、`/auth/logout`，Google 登录入口与回调为 `/auth/google`、`/auth/google/callback`。管理功能继续使用 `/admin` 前缀。管理员也可使用自己的自助服务概览。旧用户路由通过 307 跳转到新路由，保留请求方法和查询参数；旧 Google 回调配置继续兼容，不自动修改已登记的回调地址。模型 API `/v1` 与内部 Worker Manager 路由不变。
+
+
+## 单 Key 月度 USD 限额
+
+每个 Key 按 UTC 自然月累计用量记录的 `cost_usd`，保留请求当时的价格。包括有计费金额的失败和 499 中断记录；未定价记录不计金额，Claude 已被最终结算替代的临时记录按归零后的金额计入。刷新 Key 或转移归属不会重置该 Key 的月用量。
+
+存量 Key 在首次迁移时统一设置为 3000 USD/月，重复启动不会覆盖管理员的修改。新 Key 默认 3000 USD/月，通过 `CODEX_GATEWAY_DEFAULT_KEY_MONTHLY_LIMIT_USD` 配置（非负，最多两位小数）；配置只影响之后创建的 Key。管理员在 `/admin/api-keys` 点击用量条旁的铅笔修改单 Key 限额，0 表示禁止新的推理请求。用户在 `/user/account` 查看自己 Key 的限额与用量。
+
+达到限额后，新的推理请求返回 HTTP 429（`monthly_key_limit_exceeded`），包含 OpenAI、Claude 和 Gemini 原生接口。模型列表及 Token 估算仍可访问。按已结算金额检查，不预占费用；已开始的请求继续结算，因此单次或并发请求可能超出限额。下个 UTC 月自动使用新的月累计值，无需清空历史数据。

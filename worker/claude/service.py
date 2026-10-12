@@ -252,7 +252,7 @@ class Turn(BaseModel):
     conversation: str | None = None
     system: str | None = Field(default=None, max_length=400000)
     content: list[dict] = Field(min_length=1, max_length=256)
-    tools: list[dict] = Field(default_factory=list, max_length=64)
+    tools: list[dict] = Field(default_factory=list, max_length=512)
     effort: str | None = None
     json_schema: dict | None = None
     workspace: str

@@ -66,8 +66,96 @@
     }
     return nav;
   }
+  let ownerPickerId=0;
+  function initOwnerPicker(select) {
+    const t=name=>globalThis.I18n.t(name);
+    const id='owner-picker-'+(++ownerPickerId);
+    const trigger=document.createElement('button');
+    trigger.type='button';trigger.className='owner-picker-trigger';
+    trigger.setAttribute('aria-label',select.getAttribute('aria-label'));
+    trigger.setAttribute('aria-haspopup','listbox');trigger.setAttribute('aria-expanded','false');
+    const popup=document.createElement('div');popup.className='owner-picker-menu';popup.popover='auto';popup.id=id;
+    const search=document.createElement('input');search.type='search';search.placeholder=t('搜索用户');
+    search.setAttribute('aria-label',t('搜索用户'));search.setAttribute('role','combobox');
+    search.setAttribute('aria-autocomplete','list');search.setAttribute('aria-controls',id+'-list');
+    const list=document.createElement('div');list.className='owner-picker-options';list.id=id+'-list';list.setAttribute('role','listbox');list.setAttribute('aria-label',t('归属用户'));
+    trigger.setAttribute('aria-controls',list.id);
+    const footer=document.createElement('div');footer.className='owner-picker-footer';
+    const status=document.createElement('span');status.setAttribute('role','status');
+    const more=document.createElement('button');more.type='button';more.className='button button-small';more.textContent=t('更多选项');
+    footer.append(status,more);popup.append(search,list,footer);select.after(trigger,popup);select.hidden=true;
+    let rows=[],next=1,timer,controller,active=-1;
+    const sync=()=>{trigger.textContent=select.selectedOptions[0]?.textContent || '—';};
+    const opened=()=>popup.matches(':popover-open');
+    const close=()=>{if(opened())popup.hidePopover();};
+    const position=()=>{
+      const box=trigger.getBoundingClientRect(),width=Math.min(Math.max(box.width,260),innerWidth-24);
+      popup.style.width=width+'px';popup.style.left=Math.max(12,Math.min(box.left,innerWidth-width-12))+'px';
+      const below=innerHeight-box.bottom-12,above=box.top-12;
+      const down=below>=Math.min(320,above),space=down?below:above;
+      popup.style.maxHeight=Math.max(80,space-6)+'px';
+      popup.style.top=down?box.bottom+6+'px':'auto';popup.style.bottom=down?'auto':innerHeight-box.top+6+'px';
+    };
+    const activate=index=>{
+      const options=[...list.children];active=index;
+      options.forEach((node,i)=>node.classList.toggle('is-active',i===active));
+      if(options[active]){search.setAttribute('aria-activedescendant',options[active].id);options[active].scrollIntoView({block:'nearest'});}
+      else search.removeAttribute('aria-activedescendant');
+    };
+    const render=()=>{
+      list.replaceChildren();active=-1;search.removeAttribute('aria-activedescendant');
+      rows.forEach((item,i)=>{
+        const option=document.createElement('button');option.type='button';option.className='owner-picker-option';option.id=id+'-option-'+i;
+        option.setAttribute('role','option');option.setAttribute('aria-selected',String(item.value===select.value));
+        option.tabIndex=-1;option.disabled=!item.enabled;option.textContent=item.label;option.title=item.label;
+        option.addEventListener('click',()=>{
+          let native=[...select.options].find(o=>o.value===item.value);
+          if(!native){native=new Option(item.label,item.value);select.append(native);}
+          select.value=item.value;select.dispatchEvent(new Event('change',{bubbles:true}));sync();close();trigger.focus();
+        });list.append(option);
+      });
+    };
+    async function load(reset=false) {
+      controller?.abort();controller=new AbortController();const signal=controller.signal;
+      if(reset){next=1;rows=[];render();}
+      more.disabled=true;status.textContent=t('正在搜索…');
+      try {
+        const data=await json('/admin/options/users?'+new URLSearchParams({search:search.value,page:next}),signal);
+        if(signal.aborted)return;
+        const existing=new Set(rows.map(r=>r.value));rows.push(...data.options.filter(r=>!existing.has(r.value)));render();
+        next=data.pagination.page+1;more.hidden=next>data.pagination.pages;more.textContent=t('更多选项');
+        status.textContent=data.pagination.total?globalThis.I18n.t('共 {total} 个选项',undefined,{total:data.pagination.total}):t('没有匹配的用户');
+      } catch(error) {if(!signal.aborted){status.textContent=error.message;more.textContent=t('重试');more.hidden=false;}}
+      finally {if(!signal.aborted)more.disabled=false;}
+    }
+    popup.addEventListener('toggle',event=>{
+      const open=event.newState==='open';trigger.setAttribute('aria-expanded',String(open));search.setAttribute('aria-expanded',String(open));
+      if(open){position();search.focus();window.addEventListener('resize',position);}
+      else {clearTimeout(timer);controller?.abort();window.removeEventListener('resize',position);}
+    });
+    const open=()=>{search.value='';load(true);popup.showPopover();position();};
+    trigger.addEventListener('click',()=>{if(opened())close();else open();});
+    select.addEventListener('owner-picker-open',()=>{sync();open();});
+    select.addEventListener('change',sync);
+    select.form.addEventListener('reset',()=>{close();setTimeout(sync,0);});
+    search.addEventListener('input',()=>{clearTimeout(timer);controller?.abort();rows=[];render();status.textContent=t('正在搜索…');more.hidden=true;timer=setTimeout(()=>load(true),250);});
+    more.addEventListener('click',()=>load());
+    popup.addEventListener('keydown',event=>{
+      if(event.key==='Escape'){event.preventDefault();event.stopPropagation();close();trigger.focus();}
+      if(event.target!==search)return;
+      if(event.key==='Enter'){event.preventDefault();if(active>=0)list.children[active]?.click();}
+      if(['ArrowDown','ArrowUp'].includes(event.key)){
+        event.preventDefault();const options=[...list.children],direction=event.key==='ArrowDown'?1:-1;
+        let index=active<0?(direction===1?-1:options.length):active;
+        do {index+=direction;} while(options[index]?.disabled);
+        if(options[index])activate(index);
+      }
+    });
+    sync();
+  }
   function initPickers() {
     document.querySelectorAll('select[name="username"],select[name="pinned_worker_id"]').forEach(select=>{
+      if(select.closest('[data-key-owner]')){initOwnerPicker(select);return;}
       const kind=select.name==='username'?'users':'workers';
       const controls=document.createElement('div');controls.className='option-picker';
       const search=document.createElement('input');search.type='search';search.placeholder=kind==='users'?globalThis.I18n.t("搜索用户"):globalThis.I18n.t("搜索 Worker");search.setAttribute('aria-label',search.placeholder);

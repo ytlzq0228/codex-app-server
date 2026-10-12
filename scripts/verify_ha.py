@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import urllib.request
+from urllib.parse import urlsplit
 
 root = Path(sys.argv[1])
 manifest = json.loads((root / 'release-manifest.json').read_text())
@@ -46,7 +47,13 @@ for worker in state['workers']:
     info = json.loads(output('docker', 'inspect', worker['container']))[0]
     expected_image = manifest['component_images'][worker['provider']]
     assert info['Image'] == output('docker', 'image', 'inspect', expected_image, '--format', '{{.Id}}'), worker['container']
-    assert info['NetworkSettings']['Ports']['4500/tcp'], worker['container']
+    ports = info['NetworkSettings']['Ports']['4500/tcp']
+    assert ports, worker['container']
+    endpoint = urlsplit(worker['endpoint'])
+    assert endpoint.scheme == ('ws' if worker['provider'] == 'codex' else 'http'), worker['container']
+    assert any(binding['HostIp'] == endpoint.hostname and
+               int(binding['HostPort']) == endpoint.port for binding in ports), (
+                   worker['container'], 'database endpoint differs from published port')
 with urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=5) as response:
     assert response.status == 200
 result = {'release': manifest['release'], 'status': 'passed', **state}

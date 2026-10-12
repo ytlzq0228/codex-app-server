@@ -3730,5 +3730,53 @@
   "没有符合条件的 Worker": {
     "CN": "没有符合条件的 Worker",
     "EN": "No matching Workers"
+  },
+  "本月用量（USD）": {
+    "CN": "本月用量（USD）",
+    "EN": "Monthly usage (USD)"
+  },
+  "已达限额": {
+    "CN": "已达限额",
+    "EN": "Limit reached"
+  },
+  "UTC 自然月": {
+    "CN": "UTC 自然月",
+    "EN": "UTC calendar month"
+  },
+  "本月用量 / 月限额（USD）": {
+    "CN": "本月用量 / 月限额（USD）",
+    "EN": "Monthly usage / limit (USD)"
+  },
+  "编辑月限额": {
+    "CN": "编辑月限额",
+    "EN": "Edit monthly limit"
+  },
+  "月限额（USD）": {
+    "CN": "月限额（USD）",
+    "EN": "Monthly limit (USD)"
+  },
+  "按 UTC 自然月累计，0 表示禁止新的推理请求。": {
+    "CN": "按 UTC 自然月累计，0 表示禁止新的推理请求。",
+    "EN": "Usage resets each UTC calendar month. Set 0 to block new inference requests."
+  },
+  "新 Key 默认月限额（USD）：": {
+    "CN": "新 Key 默认月限额（USD）：",
+    "EN": "Default monthly limit for new keys (USD):"
+  },
+  "月限额已更新": {
+    "CN": "月限额已更新",
+    "EN": "Monthly limit updated"
+  },
+  "新的限额立即生效。": {
+    "CN": "新的限额立即生效。",
+    "EN": "The new limit takes effect immediately."
+  },
+  "正在搜索…": {
+    "CN": "正在搜索…",
+    "EN": "Searching…"
+  },
+  "没有匹配的用户": {
+    "CN": "没有匹配的用户",
+    "EN": "No matching users"
   }
 }

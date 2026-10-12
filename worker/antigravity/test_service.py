@@ -387,3 +387,18 @@ class ConcurrentTurnTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(rows[-1]["done"])
             await parent.body_iterator.aclose()
             self.assertFalse(service.active_turns)
+
+
+class ToolCapacityTests(unittest.TestCase):
+    def test_512_tools_and_overflow(self):
+        from pydantic import ValidationError
+        tools = [{"name": f"catalog_{i}", "inputSchema": {"type":"object"}} for i in range(512)]
+        body = service.Turn(prompt="hello", model="gemini-test", workspace="/workspace/test", tools=tools)
+        bridge = service.ToolBridge(body.tools)
+        self.assertEqual(len(bridge.tools), 512)
+        self.assertIn("catalog_511", bridge.tools)
+        overflow = tools + [{"name":"overflow"}]
+        with self.assertRaises(ValidationError):
+            service.Turn(prompt="hello", model="gemini-test", workspace="/workspace/test", tools=overflow)
+        with self.assertRaises(ValueError):
+            service.ToolBridge(overflow)

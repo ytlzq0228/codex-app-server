@@ -304,3 +304,18 @@ async def test_bridge_stage_limit_survives_continuous_output(worker, monkeypatch
         producer.cancel()
         await asyncio.gather(producer, return_exceptions=True)
         await stream.aclose()
+
+
+def test_large_tool_declarations_and_overflow(worker):
+    from pydantic import ValidationError
+    tools = [{"name": f"lookup_{i}", "inputSchema": {"type":"object", "properties":{}}} for i in range(512)]
+    params = dict(model="claude-test", session_id=str(uuid4()), workspace=str(worker.ROOT / "key"),
+                  content=[{"type":"text", "text":"hi"}])
+    body = worker.Turn(**params, tools=tools)
+    bridge = worker.ToolBridge(body.tools)
+    assert len(bridge.tools) == 512 and "lookup_511" in bridge.tools
+    overflow = tools + [{"name":"overflow"}]
+    with pytest.raises(ValidationError):
+        worker.Turn(**params, tools=overflow)
+    with pytest.raises(ValueError):
+        worker.ToolBridge(overflow)

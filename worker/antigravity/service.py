@@ -556,7 +556,7 @@ class Turn(BaseModel):
     model: str
     conversation: str | None = None
     workspace: str
-    tools: list[dict] = Field(default_factory=list, max_length=64)
+    tools: list[dict] = Field(default_factory=list, max_length=512)
     images: list[ImageAttachment] = Field(default_factory=list, max_length=8)
 
     @model_validator(mode="after")

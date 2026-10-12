@@ -76,7 +76,8 @@ async def account(request: Request, identity=Depends(require_user), db: AsyncSes
         ApiKey.deleted_at.is_(None)).order_by(ApiKey.created_at.desc(), ApiKey.id), request)
     from .quota import quota_summary
     from .providers import allowed_providers
-    return render(request, identity, page="account", keys=keys, pagination=pagination, quota=await quota_summary(db, identity.username),
+    from .key_limits import key_budget_display
+    return render(request, identity, page="account", key_budgets=await key_budget_display(db, keys), keys=keys, pagination=pagination, quota=await quota_summary(db, identity.username),
                   account_providers=sorted(await allowed_providers(db, identity.username)),
                   recent_usage=await recent_user_usage(db, identity.username))
 

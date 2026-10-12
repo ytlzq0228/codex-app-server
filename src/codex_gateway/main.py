@@ -19,13 +19,14 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from .display import money, tokens
-from sqlalchemy import func, select, text, update
+from sqlalchemy import and_, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .admin import auth_router as admin_auth_router
 from .admin import probe_worker_record, router as admin_router
 from .admin import user_router as admin_user_router
 from .auth import ApiPrincipal, require_api_key
+from .key_limits import require_key_budget
 from .app_server import open_app_server
 from .providers import provider_for, validate_capabilities, validate_chat_capabilities, reject
 from .gemini_backend import ProviderBackend
@@ -521,6 +522,22 @@ async def choose_target(
         active, usage = await pool_routing_signals(session)
         scope = f"{principal.key_id or 'development'}:{cache_affinity}" if cache_affinity else None
         candidates = rank_pool_workers(candidates, active, usage, scope)
+        if principal.key_id:
+            recent_worker_id = await session.scalar(select(UsageRecord.worker_id).where(
+                UsageRecord.api_key_id == principal.key_id,
+                UsageRecord.provider == provider,
+                UsageRecord.worker_id.is_not(None),
+                or_(
+                    and_(UsageRecord.status_code >= 200,
+                         UsageRecord.status_code < 300,
+                         UsageRecord.error_code.is_(None)),
+                    UsageRecord.status_code == 499,
+                ),
+                UsageRecord.created_at >= datetime.now(timezone.utc) - timedelta(hours=2),
+            ).order_by(UsageRecord.created_at.desc(), UsageRecord.id.desc()).limit(1))
+            # Keep the existing pool order as fallback if the recent worker is
+            # unhealthy, excluded, on a dead node, or fails workspace preparation.
+            candidates.sort(key=lambda worker: worker.id != recent_worker_id)
     candidates = [worker for worker in candidates if (getattr(worker, "provider", None) or "codex") == provider and worker.id not in excluded and worker.enabled and worker.status in {WorkerStatus.ready, WorkerStatus.busy}]
     if not candidates:
         raise worker_unavailable(bound=binding is not None)
@@ -943,7 +960,7 @@ async def retrieve_model(model_id: str, principal: ApiPrincipal = Depends(requir
 
 
 @app.post("/v1/chat/completions")
-async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrincipal = Depends(require_api_key), backend: CompletionBackend = Depends(get_backend), session: AsyncSession = Depends(get_session), response: Response = None, http_request: Request = None):
+async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrincipal = Depends(require_key_budget), backend: CompletionBackend = Depends(get_backend), session: AsyncSession = Depends(get_session), response: Response = None, http_request: Request = None):
     if response is not None and provider_for(body.model) == "claude":
         response.headers["x-gateway-generation-policy"] = "worker-defaults"
     settings = get_settings()
@@ -993,7 +1010,7 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
 
 
 @app.post("/v1/responses")
-async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depends(require_api_key), backend: CompletionBackend = Depends(get_backend), session: AsyncSession = Depends(get_session), response: Response = None, http_request: Request = None):
+async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depends(require_key_budget), backend: CompletionBackend = Depends(get_backend), session: AsyncSession = Depends(get_session), response: Response = None, http_request: Request = None):
     if response is not None and provider_for(body.model) == "claude":
         response.headers["x-gateway-generation-policy"] = "worker-defaults"
     settings = get_settings()

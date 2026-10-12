@@ -1,0 +1,5 @@
+{% set budget = key_budgets[key.id|string] %}
+<div class="key-budget">
+  <div class="usage-meter"><progress max="100" value="{{ budget.percent }}" class="{{ 'usage-danger' if budget.exhausted else ('usage-warn' if budget.percent >= 80 else '') }}" aria-label="{{ t('本月用量（USD）') }}"></progress><span class="usage-caption"><span>${{ budget.used }} / ${{ budget.limit }}</span></span></div>
+  <small>{{ t('已达限额') if budget.exhausted else t('UTC 自然月') }}</small>
+</div>

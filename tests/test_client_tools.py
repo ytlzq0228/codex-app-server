@@ -307,3 +307,21 @@ async def test_codex_compaction_cancels_without_resuming_tool(case):
         assert resumed == []
     finally:
         await sessions.close()
+
+
+@pytest.mark.parametrize("count", [64, 65, 128, 256, 321, 512])
+def test_large_tool_declarations_keep_last_tool_callable(count):
+    tools = [{**TOOL, "name": f"lookup_{i}"} for i in range(count)]
+    body = ResponseRequest(model="test", input="hello", tools=tools)
+    specs = validate(body)
+    call = public_call(specs, {"tool": f"gateway_client_{count-1}", "arguments": {"query": "marker"}})
+    assert len(specs) == count
+    assert call["name"] == f"lookup_{count-1}"
+
+
+def test_tool_count_limit_includes_namespaces_and_additional_tools():
+    tools = [{**TOOL, "name": f"lookup_{i}"} for i in range(512)]
+    body = ResponseRequest(model="test", tools=[{"type":"namespace", "name":"client", "tools":tools}],
+        input=[{"type":"additional_tools", "tools":[{**TOOL, "name":"overflow"}]}])
+    with pytest.raises(ToolProtocolError, match="At most 512"):
+        validate(body)

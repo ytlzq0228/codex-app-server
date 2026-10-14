@@ -15,6 +15,7 @@ import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
+from .streaming import keepalive
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -482,21 +483,15 @@ def rank_pool_workers(candidates, active_connections, usage_payload, cache_scope
     return ranked
 
 
-async def pool_routing_signals(session: AsyncSession):
+async def pool_routing_signals(session: AsyncSession, key="development"):
     backend = getattr(app.state, "backend", None)
-    pool = getattr(backend, "pool", None)
-    active = await pool.active_connections_by_worker() if pool and hasattr(pool, "active_connections_by_worker") else {}
-    if get_settings().node_id:
-        from .cluster import live_nodes
-        active = {}
-        for node in await live_nodes(session, get_settings()):
-            for worker_id, count in node.active_connections.items():
-                active[worker_id] = active.get(worker_id, 0) + count
+    from .cluster import routing_load
+    load = await routing_load(session, backend, get_settings(), key)
     latest = await session.scalar(select(MetricSnapshot).where(
         MetricSnapshot.metric == "subscription_usage",
         MetricSnapshot.observed_at >= datetime.now(timezone.utc) - timedelta(hours=2),
     ).order_by(MetricSnapshot.bucket_at.desc()).limit(1))
-    return active, latest.payload if latest else {}
+    return load["active"], latest.payload if latest else {}, set(load["saturated"])
 
 
 async def choose_target(
@@ -512,6 +507,7 @@ async def choose_target(
     if binding and (getattr(binding, "provider", None) or "codex") != provider:
         reject("model", "Continuation cannot change provider", "provider_mismatch")
     candidates: list[Worker] = []
+    saturated = set()
     if binding:
         worker = await session.get(Worker, binding.worker_id)
         candidates = [worker] if worker else []
@@ -520,7 +516,7 @@ async def choose_target(
         candidates = [worker] if worker else []
     else:
         candidates = list((await session.scalars(select(Worker).where(Worker.provider == provider, Worker.enabled.is_(True), Worker.status.in_([WorkerStatus.ready, WorkerStatus.busy])).order_by(func.random()))).all())
-        active, usage = await pool_routing_signals(session)
+        active, usage, saturated = await pool_routing_signals(session, str(principal.key_id or "development"))
         scope = f"{principal.key_id or 'development'}:{cache_affinity}" if cache_affinity else None
         candidates = rank_pool_workers(candidates, active, usage, scope)
         if principal.key_id:
@@ -539,6 +535,10 @@ async def choose_target(
             # Keep the existing pool order as fallback if the recent worker is
             # unhealthy, excluded, on a dead node, or fails workspace preparation.
             candidates.sort(key=lambda worker: worker.id != recent_worker_id)
+        # Recent-key affinity is soft for new sessions. Preserve its priority
+        # only while capacity is available, keeping the load order as fallback.
+        # Bound continuations and explicitly pinned keys never take this path.
+        candidates.sort(key=lambda worker: str(worker.id) in saturated)
     candidates = [worker for worker in candidates if (getattr(worker, "provider", None) or "codex") == provider and worker.id not in excluded and worker.enabled and worker.status in {WorkerStatus.ready, WorkerStatus.busy}]
     if not candidates:
         raise worker_unavailable(bound=binding is not None)
@@ -555,7 +555,9 @@ async def choose_target(
                 response = await client.put(f"{manager_url}/workers/{worker.container_name}/workspaces/{key_slug}", headers={"Authorization": f"Bearer {settings.manager_token.get_secret_value()}"})
             if response.status_code >= 400:
                 raise RuntimeError(f"Worker manager returned HTTP {response.status_code}")
-            return BackendTarget(connection_key=f"{key_slug}:{worker.id}", endpoint=worker.endpoint, workspace=f"{settings.workspace_worker_root}/{key_slug}", worker_id=worker.id, worker_generation=worker.execution_generation, provider=getattr(worker, "provider", None) or "codex")
+            return BackendTarget(connection_key=f"{key_slug}:{worker.id}", endpoint=worker.endpoint, workspace=f"{settings.workspace_worker_root}/{key_slug}", worker_id=worker.id, worker_generation=worker.execution_generation, provider=getattr(worker, "provider", None) or "codex",
+                                 allow_capacity_fallback=not binding and not principal.pinned_worker_id and any(
+                                     other.id != worker.id and str(other.id) not in saturated for other in candidates))
         except Exception as exc:
             await quarantine_worker(worker.id, f"Workspace preparation failed: {exc}", "connection")
             if binding or principal.pinned_worker_id:
@@ -612,10 +614,13 @@ async def complete_with_failover(body: ResponseRequest, backend: CompletionBacke
     try:
         return await backend.complete(body, target), target
     except WorkerFailure as exc:
+        if allow_retry and exc.kind == "capacity" and exc.safe_to_retry:
+            replacement = await retry_target(principal, target)
+            return await complete_with_failover(body, backend, principal, replacement, allow_retry=False)
         if exc.code and exc.status:
             if exc.kind == "connection" and target.worker_id:
                 await quarantine_worker(target.worker_id, str(exc), exc.kind)
-            raise HTTPException(exc.status, detail={"error": {"message": str(exc), "type": "server_error", "code": exc.code, "param": None}}) from exc
+            raise HTTPException(exc.status, detail={"error": {"message": str(exc), "type": "invalid_request_error" if exc.kind == "request" and exc.status < 500 else "server_error", "code": exc.code, "param": None}}) from exc
         if exc.kind == "request":
             raise HTTPException(400, detail={"error": {"message": worker_failure_message(exc), "type": "invalid_request_error", "code": exc.__cause__.code if isinstance(exc.__cause__, ToolProtocolError) else "invalid_request", "param": "tools" if isinstance(exc.__cause__, ToolProtocolError) else "model"}}) from exc
         if exc.kind == "session":
@@ -776,7 +781,7 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
     except Exception as exc:
         session_failure = isinstance(exc, WorkerFailure) and exc.kind == "session"
         tool_failure = isinstance(exc, WorkerFailure) and isinstance(exc.__cause__, ToolProtocolError)
-        request_failure = tool_failure or (target.provider == "claude" and isinstance(exc, WorkerFailure) and exc.kind == "request")
+        request_failure = tool_failure or (isinstance(exc, WorkerFailure) and exc.kind == "request")
         capacity_failure = isinstance(exc, WorkerFailure) and exc.kind == "capacity"
         logger.exception("Responses backend failed: request_id=%s worker_id=%s failure_kind=%s", response_id,
                          target.worker_id, exc.kind if isinstance(exc, WorkerFailure) else type(exc).__name__)
@@ -881,8 +886,9 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
                 retried = True
     except Exception as exc:
         tool_failure = isinstance(exc, WorkerFailure) and isinstance(exc.__cause__, ToolProtocolError)
-        request_failure = tool_failure or (target.provider == "claude" and isinstance(exc, WorkerFailure) and exc.kind == "request")
+        request_failure = tool_failure or (isinstance(exc, WorkerFailure) and exc.kind == "request")
         capacity_failure = isinstance(exc, WorkerFailure) and exc.kind == "capacity"
+        logger.exception("Chat backend failed: request_id=%s worker_id=%s failure_kind=%s", completion_id, target.worker_id, exc.kind if isinstance(exc, WorkerFailure) else type(exc).__name__)
         error_code = exc.__cause__.code if tool_failure else "worker_capacity_exceeded" if capacity_failure else "backend_error"
         error_message = str(exc) if tool_failure else "Timed out waiting for an available Codex worker connection" if capacity_failure else "The Codex backend could not complete the request"
         if target.provider in {"gemini", "claude"}:
@@ -894,7 +900,7 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
             error_code, error_message = exc.code, str(exc)
         if audit := current_audit.get(): audit["rejection"] = {"code": error_code, "message": error_message}
         await save_usage(completion_id, principal, target, body.model, exc.status if isinstance(exc, WorkerFailure) and exc.status else 429 if target.provider == "claude" and error_code == "provider_quota_exhausted" else 400 if request_failure else 503 if capacity_failure else 502, started, error_code=error_code, request_params=body.model_dump(mode="json"))
-        yield chat_sse({"error": {"message": error_message, "type": "invalid_request_error" if tool_failure else "server_error", "code": error_code}})
+        yield chat_sse({"error": {"message": error_message, "type": "invalid_request_error" if request_failure else "server_error", "code": error_code}})
         yield chat_sse("[DONE]")
         return
     result = BackendResult(text="".join(output_chunks), tool_calls=tool_calls, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens, cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens, usage_accounting=usage_accounting)
@@ -988,8 +994,10 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
     if response is not None and provider_for(body.model) == "claude":
         response.headers["x-gateway-generation-policy"] = "worker-defaults"
     settings = get_settings()
+    if not body.model.strip():
+        return openai_error(400, "model must not be empty; select an id from /v1/models", "invalid_request", param="model")
     if not await model_available(session, body.model):
-        return openai_error(400, f"Model '{body.model}' is not available", "model_not_found", param="model")
+        return openai_error(400, f"Model '{body.model}' is not available; select an exact id from /v1/models", "model_not_found", param="model")
     from .providers import authorize_model
     await authorize_model(session, principal, body.model)
     if unsupported := body.unsupported():
@@ -1017,16 +1025,17 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
     allow_retry = not pending_target and (execution_binding is None or (request._execution_auto_resume and target.provider == "codex")) and principal.pinned_worker_id is None
     await release_request_session(session)
     if body.stream:
-        return StreamingResponse(chat_completion_stream(body, request, backend, principal, target, allow_retry), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", **({"x-gateway-generation-policy": "worker-defaults"} if provider_for(body.model) == "claude" else {})})
+        return StreamingResponse(keepalive(chat_completion_stream(body, request, backend, principal, target, allow_retry)), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", **({"x-gateway-generation-policy": "worker-defaults"} if provider_for(body.model) == "claude" else {})})
     started = time.monotonic()
     completion_id, created = f"chatcmpl-{uuid4().hex}", int(time.time())
     try:
         result, target = await complete_with_failover(request, backend, principal, target, allow_retry=allow_retry)
     except HTTPException as exc:
         if audit := current_audit.get(): audit["rejection"] = exc.detail.get("error", {}) if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
-        await save_usage(completion_id, principal, target, body.model, exc.status_code, started, error_code="invalid_request", request_params=body.model_dump(mode="json"))
+        await save_usage(completion_id, principal, target, body.model, exc.status_code, started, error_code=(exc.detail.get("error", {}).get("code", "invalid_request") if isinstance(exc.detail, dict) else "invalid_request"), request_params=body.model_dump(mode="json"))
         raise
     except Exception:
+        logger.exception("Chat completion failed: request_id=%s worker_id=%s", completion_id, target.worker_id)
         await save_usage(completion_id, principal, target, body.model, 502, started, error_code="backend_error", request_params=body.model_dump(mode="json"))
         raise
     await save_usage(completion_id, principal, target, body.model, 200, started, result, request_params=body.model_dump(mode="json"))
@@ -1038,8 +1047,10 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
     if response is not None and provider_for(body.model) == "claude":
         response.headers["x-gateway-generation-policy"] = "worker-defaults"
     settings = get_settings()
+    if not body.model.strip():
+        return openai_error(400, "model must not be empty; select an id from /v1/models", "invalid_request", param="model")
     if not await model_available(session, body.model):
-        return openai_error(400, f"Model '{body.model}' is not available", "model_not_found", param="model")
+        return openai_error(400, f"Model '{body.model}' is not available; select an exact id from /v1/models", "model_not_found", param="model")
     from .providers import authorize_model
     await authorize_model(session, principal, body.model)
     if unsupported := body.unsupported():
@@ -1083,7 +1094,7 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
         track_backend(target, None, source="selected_worker")
     await release_request_session(session)
     if body.stream:
-        return StreamingResponse(response_stream(body, backend, principal, target, public_previous_id, not pending_target and (binding is None or (body._execution_auto_resume and target.provider == "codex")) and principal.pinned_worker_id is None), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", **({"x-gateway-generation-policy": "worker-defaults"} if provider_for(body.model) == "claude" else {})})
+        return StreamingResponse(keepalive(response_stream(body, backend, principal, target, public_previous_id, not pending_target and (binding is None or (body._execution_auto_resume and target.provider == "codex")) and principal.pinned_worker_id is None)), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", **({"x-gateway-generation-policy": "worker-defaults"} if provider_for(body.model) == "claude" else {})})
     started = time.monotonic()
     try:
         result, target = await complete_with_failover(body, backend, principal, target, allow_retry=not pending_target and (binding is None or (body._execution_auto_resume and target.provider == "codex")) and principal.pinned_worker_id is None)
@@ -1092,10 +1103,11 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
         response_id = f"resp_{uuid4().hex}"
         if binding and exc.status_code == 404:
             await invalidate_response_thread(binding.api_key_id, binding.thread_id, "Codex thread could not be resumed")
-        await save_usage(response_id, principal, target, body.model, exc.status_code, started, error_code="invalid_request", previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))
+        await save_usage(response_id, principal, target, body.model, exc.status_code, started, error_code=(exc.detail.get("error", {}).get("code", "invalid_request") if isinstance(exc.detail, dict) else "invalid_request"), previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))
         raise
     except Exception:
         response_id = f"resp_{uuid4().hex}"
+        logger.exception("Response completion failed: request_id=%s worker_id=%s", response_id, target.worker_id)
         await save_usage(response_id, principal, target, body.model, 502, started, error_code="backend_error", previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))
         raise
     response_id = f"resp_{uuid4().hex}"

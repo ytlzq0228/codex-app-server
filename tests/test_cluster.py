@@ -138,11 +138,13 @@ async def test_supersede_preserves_owner_errors_and_requires_confirmation(monkey
 
 
 @pytest.mark.asyncio
-async def test_remote_capacity_preserves_status_and_code(monkeypatch):
+@pytest.mark.parametrize("kind,code,status", [("capacity", "client_tool_capacity_exceeded", 429), ("request", "invalid_client_tool", 400)])
+async def test_remote_capacity_preserves_status_and_code(monkeypatch, kind, code, status):
     class Response:
         def raise_for_status(self): pass
         async def aiter_lines(self):
-            yield '{"error":{"message":"capacity","kind":"capacity","code":"client_tool_capacity_exceeded","status":429}}'
+            import json
+            yield json.dumps({"error": {"message": "specific failure", "kind": kind, "code": code, "status": status}})
     class Client:
         async def __aenter__(self): return self
         async def __aexit__(self, *args): pass
@@ -153,4 +155,4 @@ async def test_remote_capacity_preserves_status_and_code(monkeypatch):
     with pytest.raises(WorkerFailure) as caught:
         async for _ in cluster.remote_stream("http://owner", ResponseRequest(model="claude-test", input="hi"), target, Settings()):
             pass
-    assert (caught.value.code, caught.value.status, caught.value.kind) == ("client_tool_capacity_exceeded", 429, "capacity")
+    assert (caught.value.code, caught.value.status, caught.value.kind) == (code, status, kind)

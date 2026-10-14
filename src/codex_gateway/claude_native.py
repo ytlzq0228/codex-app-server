@@ -314,7 +314,12 @@ class ClaudeNativeMiddleware:
                     frame, _, rest = buffer.partition(b"\n\n")
                     buffer[:] = rest
                     payload = b"\n".join(line[5:].strip() for line in frame.splitlines() if line.startswith(b"data:"))
-                    if not payload or payload == b"[DONE]":
+                    if not payload:
+                        if any(line.startswith(b":") for line in frame.splitlines()):
+                            await send({"type": "http.response.body",
+                                        "body": b'event: ping\ndata: {"type":"ping"}\n\n', "more_body": True})
+                        continue
+                    if payload == b"[DONE]":
                         continue
                     for obj in state.translate(json.loads(payload)):
                         wire = "event: " + obj["type"] + "\ndata: " + json.dumps(obj, ensure_ascii=False) + "\n\n"

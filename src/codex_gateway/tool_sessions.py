@@ -20,6 +20,7 @@ class ToolRun:
     call_id: str | None = None
     accepted_call_id: str | None = None
     result_is_error: bool = False
+    waiting_since: float | None = None
     task: asyncio.Task | None = None
     claimed: bool = False
     thread_id: str | None = None
@@ -133,11 +134,16 @@ class ToolSessions:
         if run is None or run.task.done() or run.reply is None or run.reply.done():
             retired=self.retired.get((str(key or 'development'),outputs[0][0]))
             code=retired[1] if retired and time.monotonic()-retired[0]<3600 else 'client_tool_call_unavailable'
-            message=('This client tool result has already been submitted' if code=='client_tool_result_duplicate'
-                     else 'Client tool call is no longer available in this gateway; start a new user turn with full history')
+            message = {
+                'client_tool_result_duplicate': 'This client tool result has already been submitted; do not execute or submit it again',
+                'client_tool_call_expired': 'Client tool result deadline expired; start a new user turn with full history, including the existing tool result',
+                'client_tool_call_cancelled': 'Client tool execution was cancelled; start a new user turn with full history, including any existing tool result',
+            }.get(code, 'Client tool call is no longer available in this gateway; start a new user turn with full history')
             raise ToolProtocolError(message, code)
         if request.model!=run.request.model:
             raise ToolProtocolError('Cannot change model while returning a pending tool output')
+        if request.text is not None and request.output_schema() != run.request.output_schema():
+            raise ToolProtocolError('Cannot change output schema while returning a pending tool output', 'tool_configuration_changed')
         from .web_search import configuration as search_configuration
         search_request = request if request.tools is not None else request.model_copy(update={"tools": run.request.tools})
         if search_configuration(search_request) != search_configuration(run.request):
@@ -188,6 +194,7 @@ class ToolSessions:
 
     async def await_result(self,run,call):
         run.call_id=call['call_id']
+        run.waiting_since=time.monotonic()
         run.reply=asyncio.get_running_loop().create_future()
         run.claimed=False
         self.pending[(run.target.connection_key.split(':',1)[0],run.call_id)]=run
@@ -197,8 +204,19 @@ class ToolSessions:
             result = await asyncio.wait_for(run.reply,self.ttl)
             logging.getLogger(__name__).info("Client tool result received; active_sessions=%s", len(self.runs))
             return result
-        except asyncio.TimeoutError:
-            logging.getLogger(__name__).warning("Client tool result timed out; active_sessions=%s", len(self.runs))
+        except asyncio.TimeoutError as exc:
+            self.retire((run.target.connection_key.split(':',1)[0],run.call_id), 'client_tool_call_expired')
+            logging.getLogger(__name__).warning(
+                "Client tool result expired: worker_id=%s thread_id=%s call_id=%s elapsed_seconds=%.3f ttl=%s active_sessions=%s",
+                run.target.worker_id, run.thread_id, run.call_id,
+                time.monotonic() - (run.waiting_since or time.monotonic()), self.ttl, len(self.runs))
+            raise ToolProtocolError('Client tool result deadline expired; start a new user turn with full history',
+                                    'client_tool_call_expired') from exc
+        except asyncio.CancelledError:
+            if not run.claimed:
+                self.retire((run.target.connection_key.split(':',1)[0],run.call_id), 'client_tool_call_cancelled')
+            logging.getLogger(__name__).info("Client tool execution cancelled: worker_id=%s thread_id=%s call_id=%s",
+                                            run.target.worker_id, run.thread_id, run.call_id)
             raise
         finally:
             self.pending.pop((run.target.connection_key.split(':',1)[0],run.call_id),None)

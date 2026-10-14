@@ -59,13 +59,68 @@ async def live_nodes(db, settings):
         AppNode.enabled.is_(True), AppNode.heartbeat_at > cutoff(settings)))).all()
 
 
+async def local_routing_load(backend, key):
+    if hasattr(backend, "routing_load"):
+        return await backend.routing_load(key)
+    pool = getattr(backend, "pool", None)
+    if pool and hasattr(pool, "routing_load"):
+        return await pool.routing_load(key)
+    active = await pool.active_connections_by_worker() if pool and hasattr(pool, "active_connections_by_worker") else {}
+    return {"active": active, "saturated": []}
+
+
+async def routing_load(db, backend, settings, key):
+    """Read owner-local reservations, including keys hidden from the ingress node."""
+    local = await local_routing_load(backend, key)
+    if not settings.node_id:
+        return local
+    nodes = await live_nodes(db, settings)
+    async with httpx.AsyncClient(timeout=2) as client:
+        async def read(node):
+            if node.id == settings.node_id:
+                return local
+            try:
+                response = await client.post(node.gateway_url + "/internal/routing-load",
+                    json={"key": key}, headers={"Authorization": "Bearer " + settings.manager_token.get_secret_value()})
+                response.raise_for_status()
+                data = response.json()
+                if not isinstance(data.get("active"), dict) or not isinstance(data.get("saturated"), list):
+                    raise ValueError("Invalid routing load")
+                return data
+            except (httpx.HTTPError, ValueError):
+                # Rolling upgrades or a transient RPC failure can use the last
+                # live heartbeat; execution admission remains authoritative.
+                return {"active": node.active_connections, "saturated": [worker for worker, count
+                        in node.active_connections.items() if count >= settings.max_ws_per_worker]}
+        snapshots = await asyncio.gather(*(read(node) for node in nodes))
+    active, saturated = {}, set()
+    for snapshot in snapshots:
+        for worker, count in snapshot["active"].items():
+            active[worker] = active.get(worker, 0) + count
+        saturated.update(snapshot["saturated"])
+    return {"active": active, "saturated": list(saturated)}
+
+
+@router.post("/internal/routing-load", include_in_schema=False)
+async def routing_load_endpoint(request: Request):
+    settings = get_settings()
+    expected = "Bearer " + settings.manager_token.get_secret_value()
+    if not settings.node_id or not hmac.compare_digest(request.headers.get("authorization", ""), expected):
+        raise HTTPException(401, "Unauthorized")
+    payload = await request.json()
+    key = payload.get("key") if isinstance(payload, dict) else None
+    if not isinstance(key, str) or not key or len(key) > 128:
+        raise HTTPException(400, "Invalid routing key")
+    return await local_routing_load(request.app.state.backend, key)
+
+
 async def heartbeat_loop(backend, settings):
     while True:
         try:
             async with httpx.AsyncClient(timeout=3) as client:
                 response = await client.get(settings.node_manager_url + "/healthz")
                 response.raise_for_status()
-            active = await backend.pool.active_connections_by_worker()
+            active = (await local_routing_load(backend, ""))["active"]
             async with SessionLocal() as db:
                 statement = insert(AppNode).values(id=settings.node_id,
                     gateway_url=settings.node_gateway_url, manager_url=settings.node_manager_url,
@@ -167,7 +222,7 @@ async def recoverable_pending_route(body, principal, endpoint, backend, audit):
         target, thread = await pending_route(body, principal.key_id, backend)
         return body, target, thread
     except ToolProtocolError as exc:
-        if exc.code not in {"client_tool_call_unavailable", "tool_configuration_changed"}:
+        if exc.code not in {"client_tool_call_unavailable", "client_tool_call_expired", "client_tool_call_cancelled", "tool_configuration_changed"}:
             raise
         from .execution import recover_lost_output
         recovered = await recover_lost_output(body, principal, endpoint, audit)

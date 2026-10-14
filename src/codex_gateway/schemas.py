@@ -120,7 +120,7 @@ class ResponseRequest(OpenAIRequestModel):
             return True
         item_type = item.get("type")
         if item_type == "web_search_call":
-            return not (isinstance(item.get("id"), str) and item.get("status") == "completed"
+            return not ((item.get("id") is None or isinstance(item.get("id"), str)) and item.get("status") == "completed"
                         and isinstance(item.get("action"), dict))
         if item_type in {"input_file", "computer_screenshot", "item_reference"}:
             return True

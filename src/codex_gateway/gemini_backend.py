@@ -270,6 +270,12 @@ class ProviderBackend:
     async def close(self):
         await self.codex.close()
 
+    async def routing_load(self, key):
+        codex = await self.pool.routing_load(key)
+        claude = self.claude.routing_load(key)
+        return {"active": {**codex["active"], **claude["active"]},
+                "saturated": codex["saturated"] + claude["saturated"]}
+
 async def probe_gemini(worker, db, settings, *, inference=True, login_session=None):
     from .contributions import update_account
     from .models import WorkerStatus

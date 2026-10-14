@@ -138,7 +138,6 @@ async def test_gateway_preserves_worker_reason(monkeypatch, code, status, kind):
 @pytest.mark.parametrize("extra", [
     {"reasoning": {"effort": "minimal"}}, {"reasoning": {"effort": "high", "summary": "auto"}},
     {"text": {"format": {"type": "other"}}}, {"unknown": True},
-    {"tools": [TOOL], "text": {"format": {"type": "json_object"}}},
 ])
 def test_claude_rejects_unimplementable_options(backend, extra):
     with pytest.raises(HTTPException):
@@ -180,16 +179,17 @@ async def test_worker_error_classification(backend, monkeypatch, kind):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("structured", [False, True])
 @pytest.mark.parametrize("reminder", [False, True])
 @pytest.mark.parametrize("choice", ["auto", "required", {"type": "function", "name": "lookup"}])
-async def test_tool_roundtrip_images_isolation_and_cancel(backend, monkeypatch, reminder, choice):
+async def test_tool_roundtrip_images_isolation_and_cancel(backend, monkeypatch, reminder, choice, structured):
     state = {"reply": asyncio.Event(), "requests": []}
     class Stream(httpx.AsyncByteStream):
         async def __aiter__(self):
             yield (json.dumps({"event": "client_tool", "thread_id": "thread-a", "tool": "lookup",
                 "run_id": "run", "worker_call_id": "private", "arguments": {"query": "hi"}}) + "\n").encode()
             await state["reply"].wait()
-            yield b'{"delta":"ok","thread_id":"thread-a"}\n'
+            yield (json.dumps({"delta": '{"ok":true}' if structured else "ok", "thread_id": "thread-a"}) + "\n").encode()
             yield b'{"done":true,"thread_id":"thread-a","input_tokens":20,"output_tokens":5,"cache_write_tokens":8}\n'
         async def aclose(self):
             state["closed"] = True
@@ -202,7 +202,8 @@ async def test_tool_roundtrip_images_isolation_and_cancel(backend, monkeypatch, 
         state["reply"].set()
         return httpx.Response(200, json={"ok": True})
     transport(monkeypatch, handler)
-    first = await backend.complete(ResponseRequest(model="claude-test", input="hi", tools=[TOOL], tool_choice=choice), TARGET)
+    first = await backend.complete(ResponseRequest(model="claude-test", input="hi", tools=[TOOL], tool_choice=choice, text={"format": {"type": "json_schema", "schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]}}} if structured else None), TARGET)
+    assert (await backend.routing_load("key"))["active"] == {"worker": 1}
     call = first.tool_calls[0]
     assert call["name"] == "lookup" and call["call_id"] != "private"
     followup = ResponseRequest(model="claude-test", input=[{"type": "function_call_output",
@@ -217,7 +218,8 @@ async def test_tool_roundtrip_images_isolation_and_cancel(backend, monkeypatch, 
     backend.tool_sessions.limit = 0  # Admission saturation must not block results.
     final = await backend.complete(followup, TARGET)
     backend.tool_sessions.limit = previous_limit
-    assert final.text == "ok" and final.cache_write_tokens == 8
+    assert (json.loads(final.text) == {"ok": True} if structured else final.text == "ok")
+    assert final.cache_write_tokens == 8
     assert state["requests"][1][1]["is_error"] is reminder
     assert state["requests"][0][1]["tools"][0]["name"] == "lookup"
     image = state["requests"][1][1]["content"][1]
@@ -225,11 +227,13 @@ async def test_tool_roundtrip_images_isolation_and_cancel(backend, monkeypatch, 
     if reminder:
         assert "<total_tokens>1000</total_tokens>" in state["requests"][1][1]["content"][-1]["text"]
     assert state["closed"]
+    assert (await backend.routing_load("key"))["active"] == {}
     with pytest.raises(ToolProtocolError):
         backend.continuation_target(followup, "key")
-    first = await backend.complete(ResponseRequest(model="claude-test", input="hi", tools=[TOOL], tool_choice=choice), TARGET)
+    first = await backend.complete(ResponseRequest(model="claude-test", input="hi", tools=[TOOL], tool_choice=choice, text={"format": {"type": "json_schema", "schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}, "required": ["ok"]}}} if structured else None), TARGET)
     await backend.tool_sessions.cancel_thread("key", first.thread_id)
     assert not backend.tool_sessions.pending
+    assert (await backend.routing_load("key"))["active"] == {}
     await backend.close()
 
 
@@ -267,6 +271,7 @@ async def test_closing_stream_immediately_closes_worker_transport(backend, monke
     assert (await anext(events)).delta == "first"
     await events.aclose()
     assert closed.is_set()
+    assert (await backend.routing_load("key"))["active"] == {}
     await backend.close()
 
 
@@ -318,3 +323,33 @@ def test_chat_forced_choice_and_unknown_tool(backend):
     assert chat.to_response_request().tool_choice == {"type": "function", "name": "lookup"}
     chat.tool_choice["function"]["name"] = "missing"
     assert chat.unsupported() is not None
+
+@pytest.mark.asyncio
+async def test_lost_worker_tool_result_is_protocol_error_without_replay(backend, monkeypatch):
+    paths = []
+    closed = asyncio.Event()
+    class Stream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield (json.dumps({"event": "client_tool", "thread_id": "thread-a", "tool": "lookup",
+                "run_id": "run", "worker_call_id": "private", "arguments": {"query": "hi"}}) + "\n").encode()
+            await asyncio.Event().wait()
+        async def aclose(self):
+            closed.set()
+    async def handler(request):
+        paths.append(request.url.path)
+        if request.url.path == "/turn":
+            return httpx.Response(200, stream=Stream())
+        return httpx.Response(409, json={"detail": "Tool execution unavailable"})
+    transport(monkeypatch, handler)
+    try:
+        first = await backend.complete(ResponseRequest(model="claude-test", input="hi", tools=[TOOL]), TARGET)
+        followup = ResponseRequest(model="claude-test", input=[{"type": "function_call_output",
+            "call_id": first.tool_calls[0]["call_id"], "output": "already executed"}])
+        with pytest.raises(WorkerFailure) as error:
+            await backend.complete(followup, TARGET)
+        assert error.value.code == "client_tool_call_unavailable"
+        assert error.value.kind == "request" and error.value.status == 400
+        assert paths == ["/turn", "/tool-result"]
+        assert closed.is_set()
+    finally:
+        await backend.close()

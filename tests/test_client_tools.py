@@ -183,7 +183,8 @@ async def test_expired_calls_fail_closed():
     _=[e async for e in sessions.stream(request(),target)]
     await asyncio.sleep(0.03)
     r=ResponseRequest(model='test',input=[{'type':'function_call_output','call_id':'call_expired','output':'late'}])
-    with pytest.raises(ToolProtocolError):sessions.target_for(r,'key')
+    with pytest.raises(ToolProtocolError) as caught: sessions.target_for(r,'key')
+    assert caught.value.code == 'client_tool_call_expired'
     assert not sessions.runs
     await sessions.close()
 

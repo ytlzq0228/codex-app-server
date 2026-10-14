@@ -25,7 +25,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
-from client_bridge import ACTIVE, SERVER_NAME, ToolBridge, install_mcp
+from client_bridge import ACTIVE, SERVER_NAME, MCP_TIMEOUT_MS, ToolBridge, install_mcp
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 install_mcp(app)
@@ -34,7 +34,9 @@ SESSION_ROOT = Path.home() / ".claude" / "projects"
 lock = asyncio.Lock()  # Login, account and probe runs are exclusive with turns.
 login = None
 active_turns = {}
-MAX_TURNS = 8
+turn_keys = {}  # Active and queued tickets, keyed by the gateway-owned workspace.
+MAX_TURNS = 40
+MAX_TURNS_PER_KEY = 10
 MAX_WAITERS = 32
 QUEUE_TIMEOUT = 30.0
 waiting_turns = {}  # Insertion order is the admission order.
@@ -66,7 +68,11 @@ def authorize(authorization: str | None = Header(default=None)):
 
 
 def cli_env():
-    return {**os.environ, "TERM": "dumb", "NO_COLOR": "1"}
+    # CLI MCP HTTP first-byte and tool-idle budgets must outlive the public
+    # result deadline. The CLI otherwise abandons a JSON MCP response at 60s.
+    return {**os.environ, "TERM": "dumb", "NO_COLOR": "1",
+            "MCP_TOOL_TIMEOUT": str(MCP_TIMEOUT_MS),
+            "CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT": str(MCP_TIMEOUT_MS)}
 
 
 def error_kind(text):
@@ -79,6 +85,30 @@ def error_kind(text):
     if any(x in text for x in ("not supported", "not found", "invalid request", "400", "unsupported model", "does not exist")):
         return "request"
     return "connection"
+
+
+def result_failure(item):
+    detail = str(item.get("result") or item.get("subtype") or "")
+    lowered = detail.lower()
+    kind = error_kind(detail + " " + str(item.get("api_error_status") or ""))
+    if "does not support this model" in lowered and "version" in lowered:
+        version = re.search(r"Claude Code ([0-9.]+)", detail)
+        required = re.search(r"version ([0-9.]+) or newer", detail)
+        return {"error": "Upstream rejected Claude client version"
+                + (": " + version[1] if version else "")
+                + ("; requires " + required[1] + " or newer" if required else ""),
+                "kind": "request", "code": "claude_client_version_unsupported", "status": 400}
+    if "tool call could not be parsed" in lowered:
+        return {"error": "Upstream could not parse the model tool call after retry",
+                "kind": "request", "code": "model_tool_call_invalid", "status": 502}
+    messages = {"request": "Claude upstream rejected the request",
+                "limit": "Claude subscription quota is exhausted",
+                "logged_out": "Claude worker authentication is unavailable",
+                "connection": "Claude upstream execution failed"}
+    return {"error": messages.get(kind, messages["connection"]), "kind": kind,
+            "code": {"request": "invalid_request", "limit": "provider_quota_exhausted",
+                     "logged_out": "worker_authentication_failed"}.get(kind, "claude_execution_failed"),
+            "status": {"request": 400, "limit": 429, "logged_out": 503}.get(kind, 502)}
 
 
 async def stop(process):
@@ -144,7 +174,8 @@ async def read_account():
 @app.post("/capabilities", dependencies=[Depends(authorize)])
 async def capabilities():
     return {"provider": "claude", "client_tools": 1, "image_input": 1, "tool_result_types": ["text", "image"],
-            "native_stream": 1, "structured_output": 1, "effort": 1, "system_prompt": 1, "max_turns": MAX_TURNS}
+            "native_stream": 1, "structured_output": 1, "effort": 1, "system_prompt": 1,
+            "max_turns": MAX_TURNS, "max_turns_per_key": MAX_TURNS_PER_KEY}
 
 
 @app.post("/account", dependencies=[Depends(authorize)])
@@ -269,8 +300,6 @@ class Turn(BaseModel):
                 raise ValueError("Invalid client tool declaration")
             if set(tool) - {"name", "description", "inputSchema"}:
                 raise ValueError("Unexpected client tool fields")
-        if self.json_schema is not None and self.tools:
-            raise ValueError("Structured output cannot be combined with client tools")
         return self
 
 
@@ -357,6 +386,7 @@ class TurnResponse(StreamingResponse):
     def release(self):
         if not self.released:
             active_turns.pop(self.ticket, None)
+            turn_keys.pop(self.ticket, None)
             self.released = True
 
     async def __call__(self, scope, receive, send):
@@ -367,7 +397,16 @@ class TurnResponse(StreamingResponse):
             self.release()
 
 
-async def acquire_turn(ticket, conversation, request=None):
+def key_has_capacity(key):
+    return sum(turn_keys.get(ticket) == key for ticket in active_turns) < MAX_TURNS_PER_KEY
+
+
+def next_eligible_waiter():
+    # A saturated key must not block other keys with available capacity.
+    return next((ticket for ticket in waiting_turns if key_has_capacity(turn_keys[ticket])), None)
+
+
+async def acquire_turn(ticket, conversation, request=None, *, key=None):
     # No await between checking and reserving: one ASGI event loop owns these maps.
     if ticket in active_turns or ticket in waiting_turns:
         raise admission_error(409, "worker_execution_conflict", "Conversation already executing or queued")
@@ -375,12 +414,14 @@ async def acquire_turn(ticket, conversation, request=None):
         raise admission_error(409, "worker_execution_conflict", "Login in progress")
     if lock.locked():
         raise admission_error(409, "worker_execution_conflict", "Worker maintenance in progress")
-    if len(active_turns) < MAX_TURNS and not waiting_turns:
+    if len(active_turns) < MAX_TURNS and key_has_capacity(key) and next_eligible_waiter() is None:
+        turn_keys[ticket] = key
         active_turns[ticket] = conversation
         return
     if len(waiting_turns) >= MAX_WAITERS:
         raise admission_error(503, "worker_capacity_exceeded", "Claude worker admission queue is full")
     waiting_turns[ticket] = conversation
+    turn_keys[ticket] = key
     deadline = time.monotonic() + QUEUE_TIMEOUT
     try:
         while True:
@@ -388,12 +429,14 @@ async def acquire_turn(ticket, conversation, request=None):
                 raise admission_error(499, "request_interrupted", "Client disconnected while queued")
             if time.monotonic() >= deadline:
                 raise admission_error(503, "worker_queue_timeout", "Claude worker admission queue wait timed out")
-            if next(iter(waiting_turns)) == ticket and not lock.locked() and len(active_turns) < MAX_TURNS:
+            if next_eligible_waiter() == ticket and not lock.locked() and len(active_turns) < MAX_TURNS:
                 active_turns[ticket] = conversation
                 return
             await asyncio.sleep(0.05)
     finally:
         waiting_turns.pop(ticket, None)
+        if ticket not in active_turns:
+            turn_keys.pop(ticket, None)
 
 
 @app.post("/turn", dependencies=[Depends(authorize)])
@@ -402,7 +445,7 @@ async def turn(body: Turn, request: Request = None):
     if workspace == ROOT or ROOT not in workspace.parents or not workspace.is_dir():
         raise HTTPException(400, "Invalid workspace")
     ticket = body.conversation or body.session_id
-    await acquire_turn(ticket, body.conversation, request)
+    await acquire_turn(ticket, body.conversation, request, key=workspace.relative_to(ROOT).parts[0])
 
     async def events():
         process = stderr_task = bridge = source = None
@@ -492,9 +535,7 @@ async def turn(body: Turn, request: Request = None):
                         yield json.dumps(line) + "\n"
                     elif kind == "result":
                         if item.get("subtype") != "success" or item.get("is_error"):
-                            detail = str(item.get("result") or item.get("subtype") or "")
-                            failure = error_kind(detail + " " + str(item.get("api_error_status") or ""))
-                            yield json.dumps({"error": "Claude execution failed: " + (item.get("subtype") or failure), "kind": failure}) + "\n"
+                            yield json.dumps(result_failure(item)) + "\n"
                             return
                         structured = item.get("structured_output")
                         if body.json_schema is not None:

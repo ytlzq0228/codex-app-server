@@ -12,11 +12,13 @@ def configuration(request):
             continue
         if provider_for(request.model) != 'codex':
             raise ToolProtocolError('web_search is only supported for Codex Responses')
-        unknown = set(tool) - {'type', 'external_web_access'}
+        unknown = set(tool) - {'type', 'external_web_access', 'search_content_types'}
         if unknown:
             raise ToolProtocolError('Unsupported web_search option: ' + sorted(unknown)[0])
         if 'external_web_access' in tool and not isinstance(tool['external_web_access'], bool):
             raise ToolProtocolError('web_search.external_web_access must be a boolean')
+        if tool.get('search_content_types', ['text']) != ['text']:
+            raise ToolProtocolError("web_search.search_content_types currently supports only ['text']")
         declarations.append(tool)
     if len(declarations) > 1:
         raise ToolProtocolError('Declare web_search at most once')

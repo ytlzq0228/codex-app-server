@@ -1,6 +1,7 @@
 """Claude Code transport, kept separate from the existing Codex backend."""
 import json
 import logging
+from collections import Counter
 from contextlib import aclosing
 from datetime import datetime, timedelta, timezone
 import httpx
@@ -16,6 +17,7 @@ from .gemini_backend import worker_rpc
 class ClaudeAdapter:
     def __init__(self, settings):
         self.settings = settings
+        self.active_turns = Counter()
         self.tool_sessions = ToolSessions(self._turn_events, limit=settings.claude_tool_session_limit,
                                           per_key_limit=settings.claude_tool_sessions_per_key)
 
@@ -34,6 +36,35 @@ class ClaudeAdapter:
                                 code=exc.code, status=429 if capacity else 400) from exc
 
     async def _turn_events(self, request, target, tool_run=None):
+        # Selection and execution are separated by awaits (and possibly an HA
+        # hop). Catch capacity consumed in that interval before starting a turn.
+        if target.allow_capacity_fallback and not request.previous_response_id:
+            key, worker = target.connection_key.split(":", 1)
+            if worker in self.routing_load(key)["saturated"]:
+                raise WorkerFailure("Claude worker capacity filled before execution", kind="capacity",
+                                    code="worker_capacity_exceeded", status=503, safe_to_retry=True)
+        # Count the complete upstream turn, including client-tool suspension.
+        self.active_turns[target.connection_key] += 1
+        try:
+            async with aclosing(self._worker_events(request, target, tool_run)) as events:
+                async for event in events:
+                    yield event
+        finally:
+            self.active_turns[target.connection_key] -= 1
+            if not self.active_turns[target.connection_key]:
+                del self.active_turns[target.connection_key]
+
+    def routing_load(self, key):
+        active, per_key = Counter(), Counter()
+        for group, count in self.active_turns.items():
+            owner, worker = group.split(":", 1)
+            active[worker] += count
+            if owner == key:
+                per_key[worker] += count
+        return {"active": dict(active), "saturated": [worker for worker, count in active.items()
+                if count >= 40 or per_key[worker] >= 10]}
+
+    async def _worker_events(self, request, target, tool_run=None):
         from .providers import validate_capabilities, provider_for
         validate_capabilities(request)
         if target.provider != provider_for(request.model):
@@ -120,7 +151,7 @@ class ClaudeAdapter:
                         if data.get("heartbeat"):
                             continue
                         if data.get("error"):
-                            raise WorkerFailure(data["error"], kind=data.get("kind", "connection"))
+                            raise WorkerFailure(data["error"], kind=data.get("kind", "connection"), code=data.get("code"), status=data.get("status"))
                         thread = data.get("thread_id") or thread
                         if data.get("event") == "usage":
                             yield BackendStreamEvent(thread_id=thread, usage_accounting=accounting,
@@ -208,6 +239,12 @@ class ClaudeAdapter:
         except httpx.TimeoutException as exc:
             code = "worker_connection_timeout" if isinstance(exc, (httpx.ConnectTimeout, httpx.PoolTimeout)) else "worker_transport_timeout"
             raise WorkerFailure("Claude worker connection timed out" if code == "worker_connection_timeout" else "Claude worker transport timed out", code=code, status=504) from exc
+        except httpx.HTTPStatusError as exc:
+            if exc.request.url.path == "/tool-result" and exc.response.status_code == 409:
+                raise ToolProtocolError(
+                    "Claude tool execution is no longer waiting for this result; do not re-execute the tool",
+                    "client_tool_call_unavailable") from exc
+            raise WorkerFailure("Claude worker connection failed") from exc
         except httpx.HTTPError as exc:
             raise WorkerFailure("Claude worker connection failed") from exc
         except (ValueError, KeyError, TypeError) as exc:

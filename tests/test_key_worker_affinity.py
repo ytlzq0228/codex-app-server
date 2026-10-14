@@ -18,6 +18,7 @@ from codex_gateway.models import UsageRecord, Worker, WorkerStatus
     'disabled', 'offline', 'excluded', 'workspace_failure', 'pinned', 'bound',
     'no_key', 'latest', 'boundary', 'dead_node',
     'interrupted', 'interrupted_expired', 'interrupted_without_worker',
+    'recent_saturated', 'all_saturated',
 ])
 async def test_recent_key_worker_preference_and_fallback(monkeypatch, scenario):
     now = datetime(2026, 10, 10, tzinfo=timezone.utc)
@@ -79,11 +80,13 @@ async def test_recent_key_worker_preference_and_fallback(monkeypatch, scenario):
             async def get(self, model, key):
                 return db.get(model, key)
 
-        async def signals(_session):
+        async def signals(_session, _key):
+            saturated = {str(preferred.id)} if scenario == 'recent_saturated' else (
+                {str(preferred.id), str(fallback.id)} if scenario == 'all_saturated' else set())
             return {str(preferred.id): 5}, {'workers': {
                 str(fallback.id): {'weighted_remaining': 100},
                 str(preferred.id): {'weighted_remaining': 1},
-            }}
+            }}, saturated
 
         attempted, quarantined = [], []
 
@@ -119,8 +122,10 @@ async def test_recent_key_worker_preference_and_fallback(monkeypatch, scenario):
             exclude_worker_ids={preferred.id} if scenario == 'excluded' else None,
             cache_affinity='shared-prefix',
         )
-        expected = preferred if scenario in {'recent', 'latest', 'boundary', 'interrupted'} else fallback
+        expected = preferred if scenario in {'recent', 'latest', 'boundary', 'interrupted', 'all_saturated'} else fallback
         assert target.worker_id == expected.id
+        if scenario in {'pinned', 'bound', 'all_saturated', 'recent_saturated'}:
+            assert not target.allow_capacity_fallback
         assert len(attempted) == (2 if scenario == 'workspace_failure' else 1)
         assert quarantined == ([preferred.id] if scenario == 'workspace_failure' else [])
     engine.dispose()

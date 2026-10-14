@@ -150,3 +150,20 @@ async def test_sse_output_indices_sources_and_cross_node_collection(monkeypatch,
     assert remote.native_items==[completed] and remote.tool_calls==[call]
     without_sources=main.response_object("r",request(),remote)
     assert "sources" not in without_sources["output"][1]["action"]
+
+
+def test_completed_search_history_without_id_is_compatible():
+    item = {"type": "web_search_call", "status": "completed", "action": {"type": "search", "query": "x"}}
+    req = request(input=[item, {"role": "user", "content": "next"}])
+    assert req.unsupported() is None
+    assert "ASSISTANT WEB SEARCH" in req.input_text()
+    for invalid in ({**item, "status": "in_progress"}, {**item, "id": 123}, {**item, "action": "x"}):
+        assert request(input=[invalid]).unsupported() is not None
+
+
+def test_text_search_content_types_has_native_semantics():
+    explicit = request(tools=[{"type": "web_search", "search_content_types": ["text"]}])
+    assert explicit.unsupported() is None
+    assert mode(explicit) == mode(request())
+    for value in (["image"], [], "text", ["text", "image"]):
+        assert request(tools=[{"type": "web_search", "search_content_types": value}]).unsupported()

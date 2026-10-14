@@ -25,6 +25,7 @@ class BackendTarget:
     worker_id: UUID | None = None
     worker_generation: int | None = None
     provider: str = "codex"
+    allow_capacity_fallback: bool = False
 
 
 class WorkerFailure(RuntimeError):
@@ -216,7 +217,7 @@ class AppServerBackend:
                 async for event in self._turn_events(request, target):
                     yield event
         except ToolProtocolError as exc:
-            raise WorkerFailure(str(exc), kind="request", safe_to_retry=False) from exc
+            raise WorkerFailure(str(exc), kind="capacity" if exc.code == "client_tool_capacity_exceeded" else "request", code=exc.code, status=429 if exc.code == "client_tool_capacity_exceeded" else 400, safe_to_retry=False) from exc
 
     async def _turn_events(self, request: ResponseRequest, target: BackendTarget, tool_run=None) -> AsyncIterator[BackendStreamEvent]:
         if target.worker_id and target.worker_generation is not None:
@@ -341,7 +342,7 @@ class AppServerBackend:
                     await self.pool.invalidate(target.connection_key, slot_id)
                 raise
             except ToolProtocolError as exc:
-                raise WorkerFailure(str(exc), kind="request", safe_to_retry=False) from exc
+                raise WorkerFailure(str(exc), kind="capacity" if exc.code == "client_tool_capacity_exceeded" else "request", code=exc.code, status=429 if exc.code == "client_tool_capacity_exceeded" else 400, safe_to_retry=False) from exc
             except WorkerFailure:
                 raise
             except AppServerCapacityError as exc:

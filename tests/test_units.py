@@ -68,6 +68,8 @@ async def test_resumed_turn_bills_only_its_own_usage():
                 return {'thread': {'id': 'existing-thread'}}
             if method == 'turn/start':
                 return {'turn': {'id': 'new-turn'}}
+            if method == 'thread/unsubscribe':
+                return {}
             raise AssertionError(method)
 
         async def messages(self):

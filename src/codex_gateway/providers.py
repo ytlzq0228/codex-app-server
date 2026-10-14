@@ -95,9 +95,6 @@ def _validate_claude(request):
             validator_for(schema).check_schema(schema)
         except SchemaError:
             reject("text", "Invalid output JSON Schema")
-        from .client_tools import definitions
-        if definitions(request):
-            reject("text", "Combining Claude structured output with tools is not supported")
     if request.model_extra:
         reject(next(iter(request.model_extra)), "Unrecognized Claude parameter")
 

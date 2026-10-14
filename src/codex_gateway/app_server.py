@@ -227,6 +227,23 @@ class AppServerPool:
         async with self._condition:
             return dict(Counter(slot.worker_key for slot in self._slots if slot.busy))
 
+    async def routing_load(self, key: str) -> dict:
+        async with self._condition:
+            await self._drop_stale_locked()
+            workers = {slot.worker_key for slot in self._slots}
+            saturated = []
+            for worker in workers:
+                slots = [slot for slot in self._slots if slot.worker_key == worker]
+                group = [slot for slot in slots if slot.group_key == f"{key}:{worker}"]
+                # Idle connections belonging to this key are reusable; those
+                # belonging to another key still occupy the worker's pool.
+                if not any(not slot.busy for slot in group) and (
+                    len(group) >= self.max_per_group or len(slots) >= self.max_per_worker
+                ):
+                    saturated.append(worker)
+            return {"active": dict(Counter(slot.worker_key for slot in self._slots if slot.busy)),
+                    "saturated": saturated}
+
     async def close(self) -> None:
         self._closed = True
         if self._reaper:

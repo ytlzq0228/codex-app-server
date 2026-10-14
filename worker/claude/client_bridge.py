@@ -12,7 +12,8 @@ from uuid import uuid4
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
-TOOL_TTL = 300
+TOOL_TTL = 330  # Gateway's 300-second result deadline plus transport/cleanup grace.
+MCP_TIMEOUT_MS = (TOOL_TTL + 30) * 1000
 INFERENCE_IDLE_TIMEOUT = 300.0
 INFERENCE_STAGE_TIMEOUT = 1800.0
 EXECUTION_TIMEOUT = 14400.0
@@ -35,7 +36,8 @@ class ToolBridge:
 
     def mcp_config(self):
         return json.dumps({"mcpServers": {SERVER_NAME: {
-            "type": "http", "url": "http://127.0.0.1:4500/client-mcp/" + self.token}}})
+            "type": "http", "timeout": MCP_TIMEOUT_MS,
+            "url": "http://127.0.0.1:4500/client-mcp/" + self.token}}})
 
     async def call(self, name, arguments, meta):
         if name not in self.tools or not isinstance(arguments, dict):

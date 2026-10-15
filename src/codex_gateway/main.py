@@ -42,6 +42,7 @@ from .conversations import correlate, durable_write
 from .client_tools import ToolProtocolError
 from .grammar_tools import validate_grammars
 from .execution import prepare as prepare_execution, finish as finish_execution
+from .input_limits import input_length_error, INPUT_TOO_LONG_CODE
 from .quota import reconcile_worker, enforce_quota
 from .contributions import account_monitor_loop, update_account
 from .migrations import upgrade, bootstrap_users
@@ -1018,6 +1019,9 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
     await release_request_session(session)
     request, execution_binding = await prepare_execution(request, principal, "chat.completions", current_audit.get(), pending_thread=pending_thread, tool_sessions=getattr(backend,"tool_sessions",None), is_disconnected=http_request.is_disconnected if http_request else None)
     await validate_pending_worker(backend, pending_target, session)
+    if provider_for(request.model) == "codex" and not pending_target:
+        if message := input_length_error(request.worker_input()):
+            reject("messages", message, INPUT_TOO_LONG_CODE)
     target = pending_target or await choose_execution_target(principal, session, execution_binding, request)
     if not pending_target:
         from .audit import track_backend
@@ -1088,6 +1092,9 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
     await release_request_session(session)
     body, binding = await prepare_execution(body, principal, "responses", current_audit.get(), pending_thread=pending_thread, binding=binding, tool_sessions=getattr(backend,"tool_sessions",None), is_disconnected=http_request.is_disconnected if http_request else None)
     await validate_pending_worker(backend, pending_target, session)
+    if provider_for(body.model) == "codex" and not pending_target:
+        if message := input_length_error(body.worker_input()):
+            reject("input", message, INPUT_TOO_LONG_CODE)
     target = pending_target or await choose_execution_target(principal, session, binding, body)
     if not pending_target:
         from .audit import track_backend

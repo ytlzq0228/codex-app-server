@@ -260,6 +260,15 @@ class DChatConfig(Base):
     api_client_secret: Mapped[str] = mapped_column(String(1000), default="")
 
 
+class DChatUserCache(Base):
+    """Complete directory profiles, scoped to the configured D-Chat credentials."""
+    __tablename__ = "dchat_user_cache"
+    credential_fingerprint: Mapped[str] = mapped_column(String(64), primary_key=True)
+    username: Mapped[str] = mapped_column(String(120), primary_key=True)
+    profile: Mapped[dict] = mapped_column(JSON)
+    refreshed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class WorkerNotification(Base):
     """One durable notification per failure episode; reset when reconciled healthy."""
     __tablename__ = "worker_notifications"

@@ -1,19 +1,21 @@
-"""D-Chat transport and bounded profile cache. Credentials stay on the server."""
+"""D-Chat transport and persistent profile cache. Credentials stay on the server."""
 import asyncio
 import hashlib
 import logging
-import time
-from collections import OrderedDict
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from .models import DChatConfig
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert
+
+from .database import SessionLocal
+from .models import DChatConfig, DChatUserCache
 
 logger = logging.getLogger(__name__)
 # Fixed regional API endpoint, shared by messaging and user lookup.
 BASE_URL = "http://10.14.128.126/snitch_openapi_online_lb"
-_profiles = OrderedDict()
-CACHE_LIMIT = 2048
+PROFILE_CACHE_TTL = timedelta(days=7)
 
 
 def configured(config):
@@ -75,7 +77,7 @@ async def get_user_info(config, username: str) -> dict | None:
         return None
 
 
-async def display_names(db, usernames) -> dict[str, str]:
+async def display_names(db, usernames, *, cache_only=False) -> dict[str, str]:
     names = list(dict.fromkeys(name for name in usernames if name))
     result = {name: name for name in names}
     if not names:
@@ -86,29 +88,62 @@ async def display_names(db, usernames) -> dict[str, str]:
     fingerprint = hashlib.sha256(
         repr((config.bot_id, config.api_client_id, config.api_client_secret)).encode()
     ).hexdigest()
+    # Cache transactions are independent of the caller's transaction: read-only
+    # pages must persist refreshes without committing unrelated caller changes.
+    async with SessionLocal() as cache_db:
+        cached = (await cache_db.scalars(
+            select(DChatUserCache).where(
+                DChatUserCache.credential_fingerprint == fingerprint,
+                DChatUserCache.username.in_(names),
+            )
+        )).all()
+    fresh = {
+        entry.username: entry.profile for entry in cached
+        if entry.refreshed_at + PROFILE_CACHE_TTL > datetime.now(timezone.utc)
+    }
+
+    def display_name(profile, name):
+        display = profile.get("full_name") or profile.get("fullname")
+        return (display.strip() if isinstance(display, str) else "") or name
+
+    for name, profile in fresh.items():
+        result[name] = display_name(profile, name)
+
+    if cache_only:
+        return result
+
     slots = asyncio.Semaphore(5)
+    refreshed = []
 
     async def resolve(name):
-        key = (fingerprint, name)
-        cached = _profiles.get(key)
-        if cached and cached[0] > time.monotonic():
-            result[name] = cached[1]
-            _profiles.move_to_end(key)
-            return
         async with slots:
             profile = await get_user_info(config, name)
-        display = (profile or {}).get("full_name") or (profile or {}).get("fullname")
-        display = display.strip() if isinstance(display, str) else ""
-        result[name] = display or name
-        _profiles[key] = (time.monotonic() + (1800 if display else 60), result[name])
-        _profiles.move_to_end(key)
-        while len(_profiles) > CACHE_LIMIT:
-            _profiles.popitem(last=False)
+        if profile is None:
+            return
+        result[name] = display_name(profile, name)
+        refreshed.append({
+            "credential_fingerprint": fingerprint,
+            "username": name,
+            "profile": profile,
+            "refreshed_at": datetime.now(timezone.utc),
+        })
 
     # A slow directory must not turn a paginated admin page into a long queue.
-    tasks = [asyncio.create_task(resolve(name)) for name in names]
+    tasks = [asyncio.create_task(resolve(name)) for name in names if name not in fresh]
     try:
         await asyncio.wait_for(asyncio.gather(*tasks), timeout=4)
     except TimeoutError:
         pass
+    if refreshed:
+        # Serialize database work after network lookups; AsyncSession cannot be
+        # shared by concurrent tasks. Upsert also handles competing page loads.
+        async with SessionLocal() as cache_db:
+            statement = insert(DChatUserCache).values(refreshed)
+            await cache_db.execute(statement.on_conflict_do_update(
+                index_elements=["credential_fingerprint", "username"],
+                set_={"profile": statement.excluded.profile,
+                      "refreshed_at": statement.excluded.refreshed_at},
+                where=DChatUserCache.refreshed_at < statement.excluded.refreshed_at,
+            ))
+            await cache_db.commit()
     return result

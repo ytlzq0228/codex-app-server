@@ -66,6 +66,53 @@
     }
     return nav;
   }
+  // One queue per page: deduplicate repeated users across rows/dialogs/pickers,
+  // and drain every batch instead of sharing a deadline for the whole page.
+  const displayNameValues=new Map(), displayNamePending=new Map(), displayNameQueue=[];
+  let resolvingDisplayNames=false;
+  async function drainDisplayNames() {
+    if(resolvingDisplayNames)return;
+    resolvingDisplayNames=true;
+    try {
+      while(displayNameQueue.length) {
+        const batch=displayNameQueue.splice(0,5);
+        let values={};
+        try {
+          const params=new URLSearchParams();
+          batch.forEach(item=>params.append('usernames',item.name));
+          const data=await json('/user/display-names?'+params);
+          values=data.display_names || {};
+        } catch(error) { /* Keep the rendered fallback; other batches still run. */ }
+        for(const {name,resolve} of batch) {
+          const value=typeof values[name]==='string'?values[name]:null;
+          if(value!==null)displayNameValues.set(name,value);
+          displayNamePending.delete(name);
+          resolve(value);
+        }
+      }
+    } finally {resolvingDisplayNames=false;}
+  }
+  function resolveDisplayName(name) {
+    if(displayNameValues.has(name))return Promise.resolve(displayNameValues.get(name));
+    if(displayNamePending.has(name))return displayNamePending.get(name);
+    const result=new Promise(resolve=>displayNameQueue.push({name,resolve}));
+    displayNamePending.set(name,result);
+    // Gather all names discovered in this DOM pass before starting the batch.
+    queueMicrotask(drainDisplayNames);
+    return result;
+  }
+  async function hydrateDisplayNames(root=document) {
+    await Promise.all([...root.querySelectorAll('[data-display-name]')].map(async node=>{
+      const name=node.dataset.displayName;
+      if(!name)return;
+      const value=await resolveDisplayName(name);
+      if(value===null || !node.isConnected || node.dataset.displayName!==name)return;
+      node.textContent=value+(node.dataset.displayNameSuffix || '');
+      // Do not fire change: a new label must not change or submit the selection.
+      if(node.tagName==='OPTION')node.closest('select')?.dispatchEvent(new Event('display-names-updated'));
+    }));
+  }
+
   let ownerPickerId=0;
   function initOwnerPicker(select) {
     const t=name=>globalThis.I18n.t(name);
@@ -107,13 +154,16 @@
       rows.forEach((item,i)=>{
         const option=document.createElement('button');option.type='button';option.className='owner-picker-option';option.id=id+'-option-'+i;
         option.setAttribute('role','option');option.setAttribute('aria-selected',String(item.value===select.value));
-        option.tabIndex=-1;option.disabled=!item.enabled;option.textContent=item.label;option.title=item.label;
+        option.tabIndex=-1;option.disabled=!item.enabled;option.textContent=item.label;option.title=item.value;
+        option.dataset.displayName=item.value;
         option.addEventListener('click',()=>{
           let native=[...select.options].find(o=>o.value===item.value);
-          if(!native){native=new Option(item.label,item.value);select.append(native);}
+          if(!native){native=new Option(option.textContent,item.value);select.append(native);}
+          native.dataset.displayName=item.value;hydrateDisplayNames(select);
           select.value=item.value;select.dispatchEvent(new Event('change',{bubbles:true}));sync();close();trigger.focus();
         });list.append(option);
       });
+      hydrateDisplayNames(list);
     };
     async function load(reset=false) {
       controller?.abort();controller=new AbortController();const signal=controller.signal;
@@ -137,6 +187,7 @@
     trigger.addEventListener('click',()=>{if(opened())close();else open();});
     select.addEventListener('owner-picker-open',()=>{sync();open();});
     select.addEventListener('change',sync);
+    select.addEventListener('display-names-updated',sync);
     select.form.addEventListener('reset',()=>{close();setTimeout(sync,0);});
     search.addEventListener('input',()=>{clearTimeout(timer);controller?.abort();rows=[];render();status.textContent=t('正在搜索…');more.hidden=true;timer=setTimeout(()=>load(true),250);});
     more.addEventListener('click',()=>load());
@@ -178,8 +229,11 @@
           }
           const existing=new Set([...select.options].map(o=>o.value));
           for(const item of data.options) if(!existing.has(item.value)){
-            const option=new Option(item.label,item.value);option.disabled=!item.enabled;select.append(option);
+            const option=new Option(item.label,item.value);option.disabled=!item.enabled;
+            if(kind==='users')option.dataset.displayName=item.value;
+            select.append(option);
           }
+          if(kind==='users')hydrateDisplayNames(select);
           next=data.pagination.page+1;more.hidden=next>data.pagination.pages;
           status.textContent=globalThis.I18n.t('共 {total} 个选项', undefined, {total:data.pagination.total});
         } catch(e){if(e.name!=='AbortError'){status.textContent=e.message;more.textContent=globalThis.I18n.t("重试");more.hidden=false;}}
@@ -221,6 +275,7 @@
         panel?.append(pager(data.subscription_pagination,globalThis.I18n.t("订阅套餐分页")));
       }
       if(data.page==='keys' || data.page==='admin_workers') initPickers();
+      hydrateDisplayNames();
       if(data.history) window.initialPageHistory=data.history;
       document.title=parsed.title;
       const loaded=new Set();
@@ -241,7 +296,7 @@
       else {const button=document.createElement('button');button.className='button';button.textContent=globalThis.I18n.t("刷新重试");button.onclick=()=>location.reload();target.append(button);}
     } finally {loading=false;document.querySelector('main.content').removeAttribute('aria-busy');}
   }
-  window.PageRenderer={json,render,detail};
+  window.PageRenderer={json,render,detail,hydrateDisplayNames};
   if(document.body.dataset.jsonPage) {
     document.querySelector('[data-page-retry]').addEventListener('click',load);
     load();

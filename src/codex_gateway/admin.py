@@ -190,9 +190,9 @@ async def render_admin_page(request: Request, page: str, history_page: int, admi
                   for g in groups for item in g["threads"]]
         routes, context["pagination"] = paginate_list(routes, request)
         context["session_routes"] = routes
-    if page == "admin_workers":
+    if page in {"admin_workers", "keys"}:
         from .dchat import display_names
-        context["display_names"] = await display_names(session, [u["username"] for u in context["users"]])
+        context["display_names"] = await display_names(session, [u["username"] for u in context["users"]], cache_only=True)
     return page_response(request, "admin/dashboard.html", context)
 
 
@@ -261,7 +261,7 @@ async def page_options(kind: str, request: Request, search: str = "", page: int 
             query = query.where(User.username.contains(search, autoescape=True))
         rows, pagination = await paginate(session, query, request)
         from .dchat import display_names
-        names = await display_names(session, [u.username for u in rows])
+        names = await display_names(session, [u.username for u in rows], cache_only=True)
         options = [{"value": u.username, "label": names[u.username], "enabled": u.enabled} for u in rows]
     elif kind == "workers":
         query = select(Worker).where(Worker.endpoint != "removed://worker", Worker.enabled.is_(True)).order_by(Worker.name, Worker.id)

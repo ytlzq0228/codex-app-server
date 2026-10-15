@@ -9,6 +9,7 @@ from uuid import UUID, uuid4
 from .app_server import AppServerCapacityError, AppServerError, AppServerPool
 from .config import Settings
 from .worker_policy import thread_policy, turn_policy
+from .input_limits import input_length_error, is_input_length_error, INPUT_TOO_LONG_CODE
 from .client_tools import definitions, dynamic_specs, public_call, tool_outputs, ToolProtocolError
 from .tool_sessions import ToolSessions
 from .grammar_tools import call_matches_grammar
@@ -40,6 +41,8 @@ class WorkerFailure(RuntimeError):
 
 
 def classify_worker_failure(message: str) -> str:
+    if is_input_length_error(message):
+        return "request"
     lowered = message.lower().replace("_", " ").replace("-", " ")
     if any(term in lowered for term in ("invalid request", "model is not supported", "model is unsupported", "unsupported model")):
         return "request"
@@ -220,6 +223,8 @@ class AppServerBackend:
             raise WorkerFailure(str(exc), kind="capacity" if exc.code == "client_tool_capacity_exceeded" else "request", code=exc.code, status=429 if exc.code == "client_tool_capacity_exceeded" else 400, safe_to_retry=False) from exc
 
     async def _turn_events(self, request: ResponseRequest, target: BackendTarget, tool_run=None) -> AsyncIterator[BackendStreamEvent]:
+        if message := input_length_error(request.worker_input()):
+            raise WorkerFailure(message, kind="request", code=INPUT_TOO_LONG_CODE, status=400)
         if target.worker_id and target.worker_generation is not None:
             from .database import SessionLocal
             from .models import Worker
@@ -238,8 +243,11 @@ class AppServerBackend:
                     if account.get("requiresOpenaiAuth") and not account.get("account"):
                         raise WorkerFailure("Codex worker is not logged in", kind="logged_out", safe_to_retry=True)
                     thread_id = await self._start_thread(app_server, request, workspace)
+                    worker_input = request.worker_input()
+                    if message := input_length_error(worker_input):
+                        raise WorkerFailure(message, kind="request", code=INPUT_TOO_LONG_CODE, status=400)
                     turn_params = {
-                        "threadId": thread_id, "input": request.worker_input(),
+                        "threadId": thread_id, "input": worker_input,
                         "cwd": workspace, **turn_policy(),
                         "model": request._upstream_model or self.model(request.model),
                     }
@@ -329,6 +337,8 @@ class AppServerBackend:
                             if turn.get("status") == "failed":
                                 error = turn.get("error") or {}
                                 message = error.get("message", "Codex turn failed")
+                                if is_input_length_error(message):
+                                    raise WorkerFailure(message, kind="request", code=INPUT_TOO_LONG_CODE, status=400)
                                 raise WorkerFailure(message, kind=classify_worker_failure(message), safe_to_retry=False)
                             input_tokens, output_tokens, cache_read_tokens, cache_write_tokens = turn_usage.counts
                             # Resume config overrides are ignored for loaded threads.
@@ -348,6 +358,8 @@ class AppServerBackend:
             except AppServerCapacityError as exc:
                 raise WorkerFailure(str(exc), kind="capacity", safe_to_retry=False) from exc
             except AppServerError as exc:
+                if is_input_length_error(str(exc)):
+                    raise WorkerFailure(str(exc), kind="request", code=INPUT_TOO_LONG_CODE, status=400) from exc
                 raise WorkerFailure(str(exc), kind=classify_worker_failure(str(exc)), safe_to_retry=not turn_may_have_started) from exc
             except Exception as exc:
                 if slot_id is not None:

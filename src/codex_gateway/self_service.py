@@ -9,8 +9,8 @@ from urllib.parse import urlencode, urlparse
 from uuid import UUID
 
 import httpx
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, RedirectResponse
 from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,6 +38,23 @@ def render(request, identity, **context):
         "identity": request.state.user, "csrf_token": identity.csrf_token, **context})
 
 
+@router.get("/user/display-names")
+async def user_display_names(request: Request,
+    usernames: list[str] = Query(..., min_length=1, max_length=5),
+    identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
+    # A batch fits one directory concurrency window, so the page-wide timeout
+    # cannot starve users at the end of a long list.
+    if any(not name or len(name) > 120 for name in usernames):
+        raise HTTPException(422, "Invalid username")
+    names = list(dict.fromkeys(usernames))
+    if request.state.user.role not in {"admin", "superadmin"} and names != [identity.username]:
+        raise HTTPException(403, "Cannot query other users")
+    existing = (await db.scalars(select(User.username).where(User.username.in_(names)))).all()
+    from .dchat import display_names
+    return JSONResponse({"display_names": await display_names(db, existing)},
+                        headers={"Cache-Control": "no-store"})
+
+
 @data_page(router, "/user/overview", "account.html", "self_overview")
 async def overview(request: Request, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
     from .quota import quota_summary
@@ -62,7 +79,7 @@ async def overview(request: Request, identity=Depends(require_user), db: AsyncSe
     healthy = bool(workers) and not attention
     completed = int(bool(logged)) + int(bool(key_count)) + int(healthy)
     from .dchat import display_names
-    names = await display_names(db, [identity.username])
+    names = await display_names(db, [identity.username], cache_only=True)
     return render(request, identity, page="self_overview", workers=workers, logged_count=len(logged),
                   display_name=names.get(identity.username, identity.username),
                   key_count=key_count, enabled_key_count=enabled_key_count,
@@ -133,7 +150,7 @@ async def users(request: Request, identity=Depends(require_admin), db: AsyncSess
     from .quota import quota_summary
     quotas = {user.username: await quota_summary(db, user.username) for user in users}
     from .dchat import display_names
-    names = await display_names(db, [u.username for u in users])
+    names = await display_names(db, [u.username for u in users], cache_only=True)
     return render(request, identity, page="users", users=users, key_counts=key_counts, quotas=quotas, pagination=pagination, display_names=names)
 
 

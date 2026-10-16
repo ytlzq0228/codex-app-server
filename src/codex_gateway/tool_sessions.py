@@ -157,7 +157,7 @@ class ToolSessions:
                       else definitions(request) == definitions(run.request))
         if definitions(request) and not compatible:
             raise ToolProtocolError('Cannot change tool contracts while returning a pending tool output',
-                "tool_configuration_changed" if provider_for(request.model) in {"claude", "gemini"} else "invalid_client_tool")
+                "tool_configuration_changed")
         return run
 
     def target_for(self, request, key):

@@ -212,7 +212,7 @@ async def recover_lost_output(request, principal, endpoint, audit, *, failed_onl
     from .audit import request_params
     from .request_observation import request_observation
     if (not get_settings().execution_resume_enabled or not audit or not principal.key_id
-            or request.previous_response_id or provider_for(request.model) not in {"claude", "gemini"}):
+            or request.previous_response_id or provider_for(request.model) not in {"codex", "claude", "gemini"}):
         return None
     observation = request_observation(audit)
     if observation.get("body_capture_truncated") or not observation.get("body_complete") or observation.get("capture_notes"):
@@ -430,7 +430,7 @@ async def _prepare(request, principal, endpoint, audit, *, pending_thread=None, 
                 superseded = await supersede_tool(db, row, request, tool_sessions)
                 if superseded:
                     live = False
-            if ((not call_id or context_recovery) and provider in {"claude", "gemini"} and not binding
+            if ((not call_id or context_recovery) and provider in {"codex", "claude", "gemini"} and not binding
                     and not request.previous_response_id and has_new_user_turn(items)):
                 # An explicit, scoped new user turn may abandon an old execution.
                 # History is context only, not proof allowing a tool RPC to resume.
@@ -551,7 +551,7 @@ async def finish(db, audit, result, target, response_id):
         expected.extend(digest(normal_item(c)) for c in result.native_items)
         expected.extend(digest(normal_item(c)) for c in result.tool_calls)
     instant = now()
-    failed_tool = (not result and target.provider == "claude"
+    failed_tool = (not result and target.provider in {"codex", "claude", "gemini"}
                    and claim["action"] == "tool_continuation" and expected is not None)
     row.history_hashes = expected if result or failed_tool else None
     row.config_hash = claim["config"]

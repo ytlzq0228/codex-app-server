@@ -111,7 +111,7 @@ async def test_supersede_preserves_owner_errors_and_requires_confirmation(monkey
         {"type":"function_call_output", "call_id":"call", "output":"done"},
         {"role":"user", "content":"Compact context"},
     ])
-    db = SimpleNamespace(get=AsyncMock(return_value=SimpleNamespace(thread_id="thread", node_id="owner")),
+    db = SimpleNamespace(delete=AsyncMock(), get=AsyncMock(return_value=SimpleNamespace(thread_id="thread", node_id="owner")),
                          scalar=AsyncMock(return_value=SimpleNamespace(gateway_url="http://owner")))
     monkeypatch.setattr(cluster, "get_settings", lambda: Settings(node_id="ingress", node_gateway_url="http://ingress", node_manager_url="http://manager", bootstrap_worker=False))
     error = {"message":"Cannot change tools", "code":"invalid_client_tool", "type":"invalid_request_error", "param":"tools"}

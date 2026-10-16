@@ -21,10 +21,11 @@ from test_tool_recovery import setup_waiting
 
 
 @pytest.mark.parametrize("case", ["null_checkpoint", "missing_result", "new_tools", "summary_only", "claimed"])
-def test_new_user_turn_abandons_without_replaying_tools(monkeypatch, case):
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_new_user_turn_abandons_without_replaying_tools(monkeypatch, case, provider):
     monkeypatch.setattr(get_settings(), "model_providers", "claude-recovery:claude")
     async def run():
-        p, w, t, first, follow, cid, logical, thread, sessions = await setup_waiting()
+        p, w, t, first, follow, cid, logical, thread, sessions = await setup_waiting(provider=provider)
         async with SessionLocal() as db:
             row = await db.get(ExecutionSession, logical)
             row.history_hashes = None
@@ -64,10 +65,11 @@ def test_new_user_turn_abandons_without_replaying_tools(monkeypatch, case):
 
 
 @pytest.mark.parametrize("case", ["ok", "changed_tools", "arguments", "foreign_key", "wrong_session", "stale", "null_checkpoint"])
-def test_lost_result_requires_persisted_scoped_proof(monkeypatch, case):
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_lost_result_requires_persisted_scoped_proof(monkeypatch, case, provider):
     monkeypatch.setattr(get_settings(), "model_providers", "claude-recovery:claude")
     async def run():
-        p, w, t, first, follow, cid, logical, thread, sessions = await setup_waiting()
+        p, w, t, first, follow, cid, logical, thread, sessions = await setup_waiting(provider=provider)
         follow.input = follow.input[:4] + [{"role": "developer", "content": "reminder"}]
         if case != "changed_tools":
             await sessions.close()
@@ -90,7 +92,7 @@ def test_lost_result_requires_persisted_scoped_proof(monkeypatch, case):
             if case in {"arguments", "foreign_key", "wrong_session", "null_checkpoint"}:
                 with pytest.raises(ToolProtocolError) as error:
                     await cluster.recoverable_pending_route(follow, p, "responses", backend, audit)
-                assert error.value.code == "client_tool_call_unavailable"
+                assert error.value.code in {"client_tool_call_unavailable", "client_tool_call_cancelled"}
             else:
                 recovered, target, pending = await cluster.recoverable_pending_route(follow, p, "responses", backend, audit)
                 assert target is None and pending is None
@@ -161,10 +163,11 @@ def test_tool_contracts_ignore_order_and_description_but_not_schema():
 
 
 @pytest.mark.parametrize("case", ["ok", "changed_output", "foreign_key", "wrong_session", "explicit_response", "stale", "claimed"])
-def test_failed_tool_retry_recovers_only_verified_context(monkeypatch, case):
+@pytest.mark.parametrize("provider", ["claude", "codex"])
+def test_failed_tool_retry_recovers_only_verified_context(monkeypatch, case, provider):
     monkeypatch.setattr(get_settings(), "model_providers", "claude-recovery:claude")
     async def run():
-        p, w, t, first, follow, cid, logical, thread, sessions = await setup_waiting()
+        p, w, t, first, follow, cid, logical, thread, sessions = await setup_waiting(provider=provider)
         follow.input = follow.input[:4]
         failed_audit = audit_for(follow, cid)
         await ex.prepare(follow, p, "responses", failed_audit, pending_thread=thread, tool_sessions=sessions)

@@ -24,6 +24,8 @@ class Settings(BaseSettings):
     gemini_native_model_aliases: str = ""  # Explicit native CLI model aliases
     claude_native_model_aliases: str = ""
     model_providers: str = ""  # Explicit public-model:provider entries
+    # Explicit, observed account incompatibilities; override when upstream capabilities change.
+    model_auth_restrictions: dict[str, list[str]] = {"gpt-6.1-sol": ["chatgpt"]}
     model_aliases: str = "gpt-5.6:gpt-5.6-sol"
     app_server_url: str = "ws://worker-1:4500"
     app_server_token: SecretStr = SecretStr("development-worker-token-change-me")

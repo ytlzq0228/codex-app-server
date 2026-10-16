@@ -21,12 +21,14 @@ document.querySelectorAll('.plan-color-field input[type="color"]').forEach(input
 document.querySelectorAll('form[data-portal]').forEach(form => form.addEventListener('submit', async event => {
   event.preventDefault();
   if (form.dataset.confirm && !confirm(form.dataset.confirm)) return;
-  const button = form.querySelector('button[type=submit],button:not([type])');
+  const button = event.submitter || form.querySelector('button[type=submit],button:not([type])');
+  const submitted = new FormData(form);
+  if (event.submitter?.name) submitted.append(event.submitter.name, event.submitter.value);
   const errorBox = form.querySelector('[data-form-error]');
   if (errorBox) errorBox.hidden = true;
   button.disabled = true;
   try {
-    const response = await fetch(form.action, {method:'POST', body:new FormData(form), headers:{'X-Requested-With':'XMLHttpRequest'}});
+    const response = await fetch(form.action, {method:'POST', body:submitted, headers:{'X-Requested-With':'XMLHttpRequest'}});
     const data = await response.json();
     if (!response.ok) throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail || data));
     document.getElementById('portal-message').textContent = data.message || globalThis.I18n.t("已保存");

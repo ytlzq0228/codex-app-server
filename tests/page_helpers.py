@@ -11,7 +11,7 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit, parse_qsl
 import httpx
 
-PATHS={"/admin","/admin/api-keys","/admin/workers","/admin/sessions","/admin/users",
+PATHS={"/admin/service-keys","/admin","/admin/api-keys","/admin/workers","/admin/sessions","/admin/users",
        "/admin/finance","/admin/reports","/admin/google","/admin/dchat","/user/overview",
        "/user/account","/user/workers","/user/debug"}
 

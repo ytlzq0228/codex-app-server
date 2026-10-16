@@ -53,6 +53,10 @@ class RequestAuditMiddleware:
 
         try:
             await self.app(scope, observed_receive, observed_send)
+        except Exception as exc:
+            from .diagnostics import capture_failure
+            capture_failure(exc)
+            raise
         finally:
             try:
                 from .execution import cleanup
@@ -71,6 +75,8 @@ class RequestAuditMiddleware:
                         evidence["thread_source"] = context["source"]
                     if audit.get("execution_decision"):
                         evidence["execution"] = audit["execution_decision"]
+                    if audit.get("diagnostic"):
+                        evidence["diagnostic"] = audit["diagnostic"]
                     if audit.get("rejection"):
                         evidence["rejection"] = audit["rejection"]
                     from .providers import provider_for

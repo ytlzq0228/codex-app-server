@@ -146,6 +146,8 @@ class ClaudeAdapter:
                         if not line:
                             continue
                         data = json.loads(line)
+                        if not isinstance(data, dict):
+                            raise ValueError("Worker event must be an object")
                         accounting = ({"run_id": usage_run_id, "final": bool(data.get("done"))}
                                       if any(k in data for k in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")) else None)
                         if data.get("heartbeat"):
@@ -235,7 +237,7 @@ class ClaudeAdapter:
                             cache_write_tokens=data.get("cache_write_tokens", 0))
                         if data.get("done"):
                             return
-            raise WorkerFailure("Claude stream ended without a final result")
+            raise WorkerFailure("Claude stream ended without a final result", code="claude_stream_incomplete", status=502)
         except httpx.TimeoutException as exc:
             code = "worker_connection_timeout" if isinstance(exc, (httpx.ConnectTimeout, httpx.PoolTimeout)) else "worker_transport_timeout"
             raise WorkerFailure("Claude worker connection timed out" if code == "worker_connection_timeout" else "Claude worker transport timed out", code=code, status=504) from exc
@@ -244,13 +246,13 @@ class ClaudeAdapter:
                 raise ToolProtocolError(
                     "Claude tool execution is no longer waiting for this result; do not re-execute the tool",
                     "client_tool_call_unavailable") from exc
-            raise WorkerFailure("Claude worker connection failed") from exc
+            raise WorkerFailure("Claude worker connection failed", code="claude_transport_error", status=502) from exc
         except httpx.HTTPError as exc:
-            raise WorkerFailure("Claude worker connection failed") from exc
+            raise WorkerFailure("Claude worker connection failed", code="claude_transport_error", status=502) from exc
         except (ValueError, KeyError, TypeError) as exc:
             if isinstance(exc, ToolProtocolError):
                 raise
-            raise WorkerFailure("Claude worker returned an invalid event") from exc
+            raise WorkerFailure("Claude worker returned an invalid event", code="claude_event_invalid", status=502) from exc
 
     async def complete(self, request, target):
         text = ""
@@ -262,7 +264,7 @@ class ClaudeAdapter:
             if event.tool_call:
                 calls.append(event.tool_call)
         if not terminal.done and not calls:
-            raise WorkerFailure("Claude returned no final result")
+            raise WorkerFailure("Claude returned no final result", code="claude_stream_incomplete", status=502)
         return BackendResult(text=text, tool_calls=calls, thread_id=terminal.thread_id,
                              usage_accounting=terminal.usage_accounting,
                              input_tokens=terminal.input_tokens, output_tokens=terminal.output_tokens,

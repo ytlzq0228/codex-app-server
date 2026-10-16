@@ -21,6 +21,7 @@ class ApiPrincipal:
     scheduling_mode: str = "pooled"
     pinned_worker_id: UUID | None = None
     owner_username: str | None = None
+    key_type: str = "general_user_key"
 
 async def require_api_key(
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer),
@@ -37,14 +38,14 @@ async def require_api_key(
 
     parts = supplied.split("_", 2)
     if len(parts) == 3 and parts[0] == "cag":
-        record = await session.scalar(select(ApiKey).where(ApiKey.prefix == parts[1], ApiKey.enabled.is_(True), ApiKey.deleted_at.is_(None)))
+        record = await session.scalar(select(ApiKey).where(ApiKey.prefix == parts[1], ApiKey.enabled.is_(True), ApiKey.admin_disabled.is_(False), ApiKey.deleted_at.is_(None)))
         if record and keys_equal(supplied, record.key_hash, settings.key_pepper.get_secret_value()):
             owner = await session.get(User, record.owner_username) if record.owner_username else None
-            if not owner or not owner.enabled:
+            if not owner or (not owner.enabled and record.key_type != "project_service_key"):
                 raise HTTPException(401, "Key owner is disabled")
             record.last_used_at = datetime.now(timezone.utc)
             await session.commit()
-            principal = ApiPrincipal(key_id=record.id, name=record.name, scheduling_mode=record.scheduling_mode, pinned_worker_id=record.pinned_worker_id, owner_username=record.owner_username)
+            principal = ApiPrincipal(key_type=record.key_type, key_id=record.id, name=record.name, scheduling_mode=record.scheduling_mode, pinned_worker_id=record.pinned_worker_id, owner_username=record.owner_username)
             if audit := current_audit.get():
                 audit["principal"] = principal
             return principal

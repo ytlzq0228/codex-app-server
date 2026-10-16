@@ -162,6 +162,9 @@ def default_key_monthly_limit():
 
 class ApiKey(Base):
     __tablename__ = "api_keys"
+    key_type: Mapped[str] = mapped_column(String(32), default="general_user_key", server_default="general_user_key", index=True)
+    provider_grants: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
+    admin_disabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     monthly_limit_usd: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=default_key_monthly_limit, server_default="3000")
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
     owner_username: Mapped[str | None] = mapped_column(ForeignKey("users.username"), index=True)
@@ -174,6 +177,28 @@ class ApiKey(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+
+class ServiceKeyRequest(Base):
+    __tablename__ = "service_key_requests"
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    owner_username: Mapped[str] = mapped_column(String(120), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    reason: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    key_id: Mapped[UUID | None] = mapped_column(ForeignKey("api_keys.id"), nullable=True, unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ServiceKeyEvent(Base):
+    __tablename__ = "service_key_events"
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)
+    request_id: Mapped[UUID | None] = mapped_column(ForeignKey("service_key_requests.id"), nullable=True, index=True)
+    key_id: Mapped[UUID | None] = mapped_column(ForeignKey("api_keys.id"), nullable=True, index=True)
+    actor: Mapped[str] = mapped_column(String(120))
+    action: Mapped[str] = mapped_column(String(32))
+    detail: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
 
 class ResponseBinding(Base):
     __tablename__ = "response_bindings"

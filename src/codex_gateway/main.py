@@ -50,6 +50,7 @@ from .schemas import BackendResult, ChatCompletionRequest, ResponseRequest
 from .web_search import annotations as search_annotations, public_item as public_search_item
 
 logger = logging.getLogger(__name__)
+from .diagnostics import capture_failure
 
 
 @asynccontextmanager
@@ -162,6 +163,8 @@ app.include_router(infra_router)
 from .self_service import router as self_service_router
 from .reporting import router as reporting_router
 app.include_router(self_service_router)
+from .service_keys import router as service_keys_router
+app.include_router(service_keys_router)
 app.include_router(reporting_router)
 from .contributions import router as contribution_router
 app.include_router(contribution_router)
@@ -502,6 +505,7 @@ async def choose_target(
     exclude_worker_ids: set | None = None,
     cache_affinity: str | None = None,
     provider: str = "codex",
+    model: str | None = None,
 ) -> BackendTarget:
     settings = get_settings()
     excluded = exclude_worker_ids or set()
@@ -541,6 +545,12 @@ async def choose_target(
         # Bound continuations and explicitly pinned keys never take this path.
         candidates.sort(key=lambda worker: str(worker.id) in saturated)
     candidates = [worker for worker in candidates if (getattr(worker, "provider", None) or "codex") == provider and worker.id not in excluded and worker.enabled and worker.status in {WorkerStatus.ready, WorkerStatus.busy}]
+    if model and candidates:
+        from .model_capabilities import supports_model, upstream_name
+        upstream = await upstream_name(session, model)
+        candidates = [worker for worker in candidates if supports_model(worker, upstream)]
+        if not candidates:
+            reject("model", "This model is not supported by the available worker accounts; select an available model from /v1/models", "model_account_unsupported")
     if not candidates:
         raise worker_unavailable(bound=binding is not None)
     if settings.node_id:
@@ -591,17 +601,17 @@ def reset_auto_resume(body, reason):
 
 async def choose_execution_target(principal, session, binding, body):
     try:
-        return await choose_target(principal, session, binding, cache_affinity=body.prompt_cache_key, provider=provider_for(body.model))
+        return await choose_target(principal, session, binding, cache_affinity=body.prompt_cache_key, provider=provider_for(body.model), model=body.model)
     except HTTPException:
         if not body._execution_auto_resume or principal.pinned_worker_id or provider_for(body.model) != "codex":
             raise
         reset_auto_resume(body, "bound_worker_unavailable")
-        return await choose_target(principal, session, cache_affinity=body.prompt_cache_key, provider=provider_for(body.model))
+        return await choose_target(principal, session, cache_affinity=body.prompt_cache_key, provider=provider_for(body.model), model=body.model)
 
 
-async def retry_target(principal: ApiPrincipal, failed: BackendTarget) -> BackendTarget:
+async def retry_target(principal: ApiPrincipal, failed: BackendTarget, model: str | None = None) -> BackendTarget:
     async with SessionLocal() as session:
-        return await choose_target(principal, session, exclude_worker_ids={failed.worker_id}, provider=failed.provider)
+        return await choose_target(principal, session, exclude_worker_ids={failed.worker_id}, provider=failed.provider, model=model)
 
 
 async def release_request_session(session: AsyncSession) -> None:
@@ -615,8 +625,9 @@ async def complete_with_failover(body: ResponseRequest, backend: CompletionBacke
     try:
         return await backend.complete(body, target), target
     except WorkerFailure as exc:
+        capture_failure(exc)
         if allow_retry and exc.kind == "capacity" and exc.safe_to_retry:
-            replacement = await retry_target(principal, target)
+            replacement = await retry_target(principal, target, body.model)
             return await complete_with_failover(body, backend, principal, replacement, allow_retry=False)
         if exc.code and exc.status:
             if exc.kind == "connection" and target.worker_id:
@@ -635,7 +646,7 @@ async def complete_with_failover(body: ResponseRequest, backend: CompletionBacke
         if not (allow_retry and exc.safe_to_retry):
             raise
         reset_auto_resume(body, "worker_pre_turn_failure")
-        replacement = await retry_target(principal, target)
+        replacement = await retry_target(principal, target, body.model)
         try:
             return await backend.complete(body, replacement), replacement
         except WorkerFailure as retry_exc:
@@ -686,6 +697,8 @@ async def save_usage(
             record.conversation_evidence["auto_resume"] = audit["execution_decision"]["action"] == "resume"
         if audit and audit.get("execution"):
             record.logical_conversation_id = audit["execution"]["logical_id"]
+        if audit and audit.get("diagnostic"):
+            record.conversation_evidence["diagnostic"] = audit["diagnostic"]
         if audit and audit.get("rejection"):
             record.conversation_evidence["rejection"] = audit["rejection"]
             record.error_code = audit["rejection"].get("code", record.error_code)
@@ -770,6 +783,7 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
                         yield sse({"type": "response.output_text.delta", "sequence_number": sequence, "item_id": message_id, "output_index": 0, "content_index": 0, "delta": event.delta}); sequence += 1
                 break
             except WorkerFailure as exc:
+                capture_failure(exc)
                 if exc.kind not in {"request", "session", "capacity", "execution_conflict", "account_changed"} and target.worker_id:
                     await quarantine_worker(target.worker_id, str(exc), exc.kind)
                 # Retry once only when Codex confirms the turn could not have begun and
@@ -777,9 +791,10 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
                 if retried or chunks or native_items or not allow_retry or not exc.safe_to_retry:
                     raise
                 reset_auto_resume(body if isinstance(body, ResponseRequest) else request, "worker_pre_turn_failure")
-                target = await retry_target(principal, target)
+                target = await retry_target(principal, target, body.model)
                 retried = True
     except Exception as exc:
+        capture_failure(exc)
         session_failure = isinstance(exc, WorkerFailure) and exc.kind == "session"
         tool_failure = isinstance(exc, WorkerFailure) and isinstance(exc.__cause__, ToolProtocolError)
         request_failure = tool_failure or (isinstance(exc, WorkerFailure) and exc.kind == "request")
@@ -878,14 +893,16 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
                         yield chat_sse(chunk({"content": event.delta}))
                 break
             except WorkerFailure as exc:
+                capture_failure(exc)
                 if exc.kind not in {"request", "session", "capacity", "execution_conflict", "account_changed"} and target.worker_id:
                     await quarantine_worker(target.worker_id, str(exc), exc.kind)
                 if retried or content_emitted or not allow_retry or not exc.safe_to_retry:
                     raise
                 reset_auto_resume(body if isinstance(body, ResponseRequest) else request, "worker_pre_turn_failure")
-                target = await retry_target(principal, target)
+                target = await retry_target(principal, target, body.model)
                 retried = True
     except Exception as exc:
+        capture_failure(exc)
         tool_failure = isinstance(exc, WorkerFailure) and isinstance(exc.__cause__, ToolProtocolError)
         request_failure = tool_failure or (isinstance(exc, WorkerFailure) and exc.kind == "request")
         capacity_failure = isinstance(exc, WorkerFailure) and exc.kind == "capacity"
@@ -978,6 +995,8 @@ async def health() -> dict[str, str]:
 async def models(principal: ApiPrincipal = Depends(require_api_key), session: AsyncSession = Depends(get_session)) -> dict:
     from .providers import visible_models
     public_models = await visible_models(session, principal)
+    from .model_capabilities import filter_visible_models
+    public_models = await filter_visible_models(session, principal, public_models)
     return {"object": "list", "data": [{"id": model, "object": "model", "created": 0, "owned_by": "codex-gateway" if provider_for(model) == "codex" else provider_for(model)} for model in public_models]}
 
 
@@ -987,6 +1006,9 @@ async def retrieve_model(model_id: str, principal: ApiPrincipal = Depends(requir
         return openai_error(404, f"The model '{model_id}' does not exist", "model_not_found", param="model")
     from .providers import authorize_model
     await authorize_model(session, principal, model_id)
+    from .model_capabilities import filter_visible_models
+    if not await filter_visible_models(session, principal, [model_id]):
+        reject("model", "This model is not supported by the available worker accounts", "model_account_unsupported")
     return {"id": model_id, "object": "model", "created": 0, "owned_by": "codex-gateway" if provider_for(model_id) == "codex" else provider_for(model_id)}
 
 
@@ -1038,7 +1060,8 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
         if audit := current_audit.get(): audit["rejection"] = exc.detail.get("error", {}) if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
         await save_usage(completion_id, principal, target, body.model, exc.status_code, started, error_code=(exc.detail.get("error", {}).get("code", "invalid_request") if isinstance(exc.detail, dict) else "invalid_request"), request_params=body.model_dump(mode="json"))
         raise
-    except Exception:
+    except Exception as exc:
+        capture_failure(exc)
         logger.exception("Chat completion failed: request_id=%s worker_id=%s", completion_id, target.worker_id)
         await save_usage(completion_id, principal, target, body.model, 502, started, error_code="backend_error", request_params=body.model_dump(mode="json"))
         raise
@@ -1112,7 +1135,8 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
             await invalidate_response_thread(binding.api_key_id, binding.thread_id, "Codex thread could not be resumed")
         await save_usage(response_id, principal, target, body.model, exc.status_code, started, error_code=(exc.detail.get("error", {}).get("code", "invalid_request") if isinstance(exc.detail, dict) else "invalid_request"), previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))
         raise
-    except Exception:
+    except Exception as exc:
+        capture_failure(exc)
         response_id = f"resp_{uuid4().hex}"
         logger.exception("Response completion failed: request_id=%s worker_id=%s", response_id, target.worker_id)
         await save_usage(response_id, principal, target, body.model, 502, started, error_code="backend_error", previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))

@@ -102,7 +102,7 @@ async def quota_summary(db, username):
     base = await db.scalar(select(User.quota_granted).where(User.username == username)) or 0
     credited, _ = await credited_workers(db, username)
     credits = len(credited)
-    used = await db.scalar(select(func.count()).select_from(ApiKey).where(ApiKey.owner_username == username, ApiKey.enabled.is_(True), ApiKey.deleted_at.is_(None))) or 0
+    used = await db.scalar(select(func.count()).select_from(ApiKey).where(ApiKey.owner_username == username, ApiKey.key_type == "general_user_key", ApiKey.enabled.is_(True), ApiKey.deleted_at.is_(None))) or 0
     return dict(granted=base, contributed=credits, total=base+credits, used=used, available=max(0,base+credits-used))
 
 
@@ -115,7 +115,7 @@ async def enforce_quota(db, username):
     excess = quota['used'] - quota['total']
     if excess <= 0:
         return 0
-    keys = (await db.scalars(select(ApiKey).where(ApiKey.owner_username == username, ApiKey.enabled.is_(True), ApiKey.deleted_at.is_(None))
+    keys = (await db.scalars(select(ApiKey).where(ApiKey.owner_username == username, ApiKey.key_type == "general_user_key", ApiKey.enabled.is_(True), ApiKey.deleted_at.is_(None))
         .order_by(ApiKey.last_used_at.asc().nullsfirst(), ApiKey.created_at.asc(), ApiKey.id.asc()).limit(excess).with_for_update())).all()
     for key in keys:
         key.enabled = False
@@ -136,7 +136,7 @@ async def ensure_capacity(db, username, exclude_key_id=None):
     quota = await quota_summary(db, username)
     used = quota['used']
     if exclude_key_id:
-        same = await db.scalar(select(ApiKey.id).where(ApiKey.id == exclude_key_id, ApiKey.owner_username == username, ApiKey.enabled.is_(True), ApiKey.deleted_at.is_(None)))
+        same = await db.scalar(select(ApiKey.id).where(ApiKey.id == exclude_key_id, ApiKey.owner_username == username, ApiKey.key_type == "general_user_key", ApiKey.enabled.is_(True), ApiKey.deleted_at.is_(None)))
         used -= bool(same)
     if used >= quota['total']:
         raise HTTPException(409, t('Quota 不足，请停用其他 Key、贡献有效付费 Worker 或联系管理员增加额度'))

@@ -143,7 +143,7 @@ async def render_admin_page(request: Request, page: str, history_page: int, admi
         }
     elif page == "keys":
         context["keys"], context["pagination"] = await paginate(session,
-            select(ApiKey).where(ApiKey.deleted_at.is_(None)).order_by(ApiKey.created_at.desc(), ApiKey.id), request)
+            select(ApiKey).where(ApiKey.deleted_at.is_(None), ApiKey.key_type == "general_user_key").order_by(ApiKey.created_at.desc(), ApiKey.id), request)
         from .key_limits import key_budget_display
         context["key_budgets"] = await key_budget_display(session, context["keys"])
         context["default_key_monthly_limit_usd"] = str(get_settings().default_key_monthly_limit_usd)
@@ -303,11 +303,17 @@ async def toggle_key(request: Request, key_id: UUID, csrf_token: str = Form(...)
     record = await session.scalar(select(ApiKey).where(ApiKey.id == key_id).with_for_update().execution_options(populate_existing=True))
     if not record or record.deleted_at:
         raise HTTPException(404, "API key not found")
-    if not record.enabled:
+    if not record.enabled and record.key_type != "project_service_key":
         await ensure_capacity(session, record.owner_username)
-    record.enabled = not record.enabled
+    if record.key_type == "project_service_key":
+        from .service_keys import log_event
+        record.admin_disabled = not record.admin_disabled
+        log_event(session, admin.username, "admin_disabled" if record.admin_disabled else "admin_enabled", key=record)
+    else:
+        record.enabled = not record.enabled
     await session.commit()
-    return result(t('Key 状态已更新'), t('{v0} 已{v1}。', v0=f'{record.name}', v1=t('启用' if record.enabled else '停用')))
+    enabled = record.enabled and not record.admin_disabled
+    return result(t('Key 状态已更新'), t('{v0} 已{v1}。', v0=f'{record.name}', v1=t('启用' if enabled else '停用')))
 
 
 async def validate_key_schedule(session: AsyncSession, scheduling_mode: str, pinned_worker_id: str) -> UUID | None:

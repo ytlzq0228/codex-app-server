@@ -231,6 +231,55 @@ async def recoverable_pending_route(body, principal, endpoint, backend, audit):
         return recovered, None, None
 
 
+from .cancellations import Cancellations, operation_id as cancellation_id, failure as cancellation_failure
+
+
+def cancellation_operation(request, action, payload):
+    expected = cancellation_id(action, payload)
+    if payload.get("operation_id", expected) != expected:
+        raise cancellation_failure("tool_cancellation_conflict", "Cancellation identity changed", 409)
+    if not hasattr(request.app.state, "tool_cancellations"):
+        request.app.state.tool_cancellations = Cancellations()
+    return request.app.state.tool_cancellations
+
+
+async def request_cancellation(url, action, payload, settings):
+    import time
+    operation = cancellation_id(action, payload)
+    payload = {**payload, "operation_id": operation}
+    deadline = time.monotonic() + 8
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(3, connect=2)) as client:
+            while True:
+                response = await client.post(url + "/internal/tools/" + action, json=payload,
+                    headers={"Authorization": "Bearer " + settings.manager_token.get_secret_value()})
+                data = response.json()
+                if response.status_code in {400, 409, 422}:
+                    error = data.get("error") if isinstance(data, dict) else None
+                    if isinstance(error, dict) and isinstance(error.get("code"), str):
+                        raise HTTPException(response.status_code, detail={"error": error})
+                    raise cancellation_failure("tool_cancellation_conflict", "Pending execution changed", response.status_code)
+                response.raise_for_status()
+                if not isinstance(data, dict) or not isinstance(data.get("cancelled"), bool):
+                    raise ValueError("Invalid cancellation acknowledgement")
+                if data.get("operation_id", operation) != operation:
+                    raise ValueError("Cancellation acknowledgement identity mismatch")
+                if data["cancelled"]:
+                    return True
+                if data.get("status") != "pending":
+                    return False  # Compatibility with older owners.
+                if time.monotonic() >= deadline:
+                    raise cancellation_failure("tool_cancellation_timeout", "Cancellation is still pending; retry with the same conversation")
+                payload["status_only"] = True
+                await asyncio.sleep(0.1)
+    except httpx.ConnectTimeout as exc:
+        raise cancellation_failure("tool_owner_connect_timeout", "Connection to the pending tool owner timed out") from exc
+    except httpx.TimeoutException as exc:
+        raise cancellation_failure("tool_cancellation_timeout", "Pending tool cancellation could not be confirmed; retry with the same conversation") from exc
+    except (httpx.HTTPError, ValueError) as exc:
+        raise cancellation_failure("tool_cancellation_unconfirmed", "Pending tool cancellation could not be confirmed") from exc
+
+
 async def supersede_tool(db, row, body, sessions):
     """Called under the ingress checkpoint lock; only the owner cancels a run."""
     settings = get_settings()
@@ -251,25 +300,10 @@ async def supersede_tool(db, row, body, sessions):
         raise HTTPException(503, "Pending tool owner is unavailable")
     payload = {"logical_id": row.logical_id, "key_id": str(row.api_key_id),
                "response_id": row.response_id, "request": body.model_dump(mode="json")}
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            response = await client.post(node.gateway_url + "/internal/tools/supersede", json=payload,
-                headers={"Authorization": "Bearer " + settings.manager_token.get_secret_value()})
-            if response.status_code in {400, 409, 422}:
-                data = response.json()
-                error = data.get("error") if isinstance(data, dict) else None
-                if (isinstance(error, dict) and isinstance(error.get("message"), str)
-                        and isinstance(error.get("code"), str)):
-                    # Preserve deterministic owner rejection instead of retryable 503.
-                    raise HTTPException(response.status_code, detail={"error": error})
-            response.raise_for_status()
-            data = response.json()
-            if not isinstance(data, dict) or not isinstance(data.get("cancelled"), bool):
-                raise ValueError("Invalid cancellation acknowledgement")
-            return data["cancelled"]
-    except (httpx.HTTPError, ValueError) as exc:
-        # An ambiguous cancellation is never followed by executing a new turn.
-        raise HTTPException(503, "Pending tool cancellation could not be confirmed") from exc
+    confirmed = await request_cancellation(node.gateway_url, "supersede", payload, settings)
+    if confirmed:
+        await db.delete(route)
+    return confirmed
 
 
 @router.post("/internal/tools/supersede", include_in_schema=False)
@@ -299,13 +333,14 @@ async def supersede(request: Request):
                 or worker.provider != row.provider or worker.endpoint != route.target.get("endpoint")):
             raise HTTPException(409, "Pending tool ownership changed")
         sessions = request.app.state.backend.tool_sessions
-        cancelled = await sessions.supersede_with_user_turn(body, row.api_key_id, row.thread_id, len(row.history_hashes))
-        # A stale route with no live task is also safe to retire. The ingress
-        # retries against the unchanged checkpoint if cancellation lost the race.
-        if cancelled or not sessions.has_pending(row.api_key_id, row.thread_id):
-            await db.delete(route)
-            await db.commit()
-        return {"cancelled": cancelled}
+        operation = cancellation_operation(request, "supersede", payload)
+        key, thread, length = row.api_key_id, row.thread_id, len(row.history_hashes)
+    async def cancel():
+        if not sessions.has_pending(key, thread):
+            return True
+        return await sessions.supersede_with_user_turn(body, key, thread, length)
+    return await operation.run(cancellation_id("supersede", payload), cancel,
+                               status_only=payload.get("status_only") is True)
 
 
 async def abandon_tool(db, row, sessions):
@@ -337,15 +372,8 @@ async def abandon_tool(db, row, sessions):
             AppNode.heartbeat_at > cutoff(settings)))
         if not node:
             raise HTTPException(503, "Pending tool owner is unavailable")
-        try:
-            async with httpx.AsyncClient(timeout=10) as client:
-                response = await client.post(node.gateway_url + "/internal/tools/abandon",
-                    json=payload, headers={"Authorization": "Bearer " + settings.manager_token.get_secret_value()})
-                response.raise_for_status()
-                if response.json().get("cancelled") is not True:
-                    return False
-        except (httpx.HTTPError, ValueError) as exc:
-            raise HTTPException(503, "Pending tool cancellation could not be confirmed") from exc
+        if not await request_cancellation(node.gateway_url, "abandon", payload, settings):
+            return False
     for route in routes:
         await db.delete(route)
     return True
@@ -364,7 +392,7 @@ async def abandon(request: Request):
         if (not row or str(row.api_key_id) != payload.get("key_id")
                 or row.response_id != payload.get("response_id")
                 or row.thread_id != payload.get("thread_id")
-                or row.provider not in {"claude", "gemini"}
+                or row.provider not in {"codex", "claude", "gemini"}
                 or row.state != "waiting_tool" or row.lease_token):
             raise HTTPException(409, "Pending execution changed")
         routes = list((await db.scalars(select(PendingToolRoute).where(
@@ -375,9 +403,11 @@ async def abandon(request: Request):
         worker = await db.get(Worker, row.worker_id) if row.worker_id else None
         if not routes and (not worker or worker.node_id != settings.node_id):
             raise HTTPException(409, "Pending execution belongs to another node")
-        cancelled = await request.app.state.backend.tool_sessions.abandon_thread(row.api_key_id, row.thread_id)
-        # The ingress retires routes in the same transaction as the new lease.
-        return {"cancelled": cancelled}
+        operation = cancellation_operation(request, "abandon", payload)
+        key, thread = row.api_key_id, row.thread_id
+    return await operation.run(cancellation_id("abandon", payload),
+        lambda: request.app.state.backend.tool_sessions.abandon_thread(key, thread),
+        status_only=payload.get("status_only") is True)
 
 
 async def owner_url(target, settings):

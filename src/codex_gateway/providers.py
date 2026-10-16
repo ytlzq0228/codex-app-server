@@ -124,10 +124,19 @@ async def allowed_providers(db, username):
     return automatic | (set(grants or []) & CAPABILITIES.keys())
 
 
+async def principal_providers(db, principal):
+    from sqlalchemy import select
+    from .models import ApiKey
+    if principal.key_type == "project_service_key":
+        grants = await db.scalar(select(ApiKey.provider_grants).where(ApiKey.id == principal.key_id))
+        return set(grants or []) & CAPABILITIES.keys()
+    return await allowed_providers(db, principal.owner_username)
+
+
 async def authorize_model(db, principal, model):
     if principal.owner_username is None:
         return  # Existing development-key behavior.
-    if provider_for(model) not in await allowed_providers(db, principal.owner_username):
+    if provider_for(model) not in await principal_providers(db, principal):
         error = {"code": "provider_not_allowed", "message": "Your account is not enabled for this model provider", "param": "model"}
         from .audit import current_audit
         if audit := current_audit.get():
@@ -141,5 +150,5 @@ async def visible_models(db, principal):
     models = await public_models(db)
     if principal.owner_username is None:
         return models
-    providers = await allowed_providers(db, principal.owner_username)
+    providers = await principal_providers(db, principal)
     return [model for model in models if provider_for(model) in providers]

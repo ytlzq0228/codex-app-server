@@ -18,7 +18,7 @@ def configuration(request):
         if 'external_web_access' in tool and not isinstance(tool['external_web_access'], bool):
             raise ToolProtocolError('web_search.external_web_access must be a boolean')
         if tool.get('search_content_types', ['text']) != ['text']:
-            raise ToolProtocolError("web_search.search_content_types currently supports only ['text']")
+            raise ToolProtocolError("Image search is not supported by this gateway transport; set web_search.search_content_types to ['text'] or omit it to use text search. Image search has not been performed.")
         declarations.append(tool)
     if len(declarations) > 1:
         raise ToolProtocolError('Declare web_search at most once')

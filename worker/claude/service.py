@@ -547,7 +547,7 @@ async def turn(body: Turn, request: Request = None):
                             yield json.dumps({"thread_id": thread, "delta": text,
                                               "stream": {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}}}) + "\n"
                         if not produced_output:
-                            yield json.dumps({"error": "Claude reported success without any response or client tool call", "kind": "connection"}) + "\n"
+                            yield json.dumps({"error": "Claude reported success without any response or client tool call", "kind": "connection", "code": "claude_empty_success", "status": 502}) + "\n"
                             return
                         terminal = {"thread_id": thread, "done": True, "stop_reason": item.get("stop_reason") or "end_turn",
                                     "num_turns": item.get("num_turns"), "usage": item.get("usage"),
@@ -556,11 +556,11 @@ async def turn(body: Turn, request: Request = None):
             if terminal is None:
                 await process.wait()
                 tail = await stderr_task
-                yield json.dumps({"error": "Claude ended without a final result", "kind": error_kind(tail.decode(errors="replace"))}) + "\n"
+                yield json.dumps({"error": "Claude ended without a final result", "kind": error_kind(tail.decode(errors="replace")), "code": "claude_process_incomplete", "status": 502}) + "\n"
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            yield json.dumps({"error": "Claude execution interrupted or timed out: " + type(exc).__name__, "kind": "connection"}) + "\n"
+            yield json.dumps({"error": "Claude execution interrupted or timed out: " + type(exc).__name__, "kind": "connection", "code": "claude_process_interrupted", "status": 502}) + "\n"
         finally:
             # StreamingResponse cancellation propagates here on client disconnect.
             try:

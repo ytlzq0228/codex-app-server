@@ -1,11 +1,18 @@
 """Idempotent additive upgrade for existing PostgreSQL installations."""
 from sqlalchemy import select, text, update
-from .models import AdminUser, ApiKey, User, Worker
+from .models import AdminUser, ApiKey, User, Worker, ServiceKeyRequest, ServiceKeyEvent
 from .security import hash_password
 from .worker_names import archived_worker_name
 
 
 async def upgrade(connection):
+    for statement in (
+        "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS key_type VARCHAR(32) NOT NULL DEFAULT 'general_user_key'",
+        "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS provider_grants JSON NOT NULL DEFAULT '[]'",
+        "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS admin_disabled BOOLEAN NOT NULL DEFAULT false",
+        "CREATE INDEX IF NOT EXISTS ix_api_keys_key_type ON api_keys (key_type)",
+    ):
+        await connection.execute(text(statement))
     await connection.execute(text("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS monthly_limit_usd NUMERIC(14,2) NOT NULL DEFAULT 3000"))
     await connection.execute(text("CREATE INDEX IF NOT EXISTS ix_usage_records_key_month ON usage_records (api_key_id, created_at)"))
     await connection.execute(text("ALTER TABLE workers ADD COLUMN IF NOT EXISTS node_id VARCHAR(80)"))
@@ -79,6 +86,8 @@ async def upgrade(connection):
         AND EXISTS (SELECT 1 FROM subscription_plans target WHERE target.name='gemini:' || old.name)
         AND NOT EXISTS (SELECT 1 FROM workers WHERE provider='codex' AND lower(trim(plan_type))=old.name)
     """))
+    await connection.run_sync(lambda conn: ServiceKeyRequest.__table__.create(conn, checkfirst=True))
+    await connection.run_sync(lambda conn: ServiceKeyEvent.__table__.create(conn, checkfirst=True))
     await migrate_email_usernames(connection)
     await migrate_deleted_worker_names(connection)
 
@@ -98,7 +107,7 @@ async def bootstrap_users(db, settings):
         db.add(User(username=settings.admin_username, role="superadmin",
                     password_hash=hash_password(settings.admin_password.get_secret_value())))
     await db.flush()
-    await db.execute(update(ApiKey).where(ApiKey.owner_username.is_(None)).values(owner_username=settings.admin_username))
+    await db.execute(update(ApiKey).where(ApiKey.owner_username.is_(None), ApiKey.key_type == "general_user_key").values(owner_username=settings.admin_username))
     await db.execute(text("UPDATE usage_records u SET owner_username=k.owner_username FROM api_keys k WHERE u.api_key_id=k.id AND u.owner_username IS NULL"))
 
     await db.execute(update(Worker).where(Worker.owner_username.is_(None)).values(owner_username=settings.admin_username))
@@ -159,7 +168,7 @@ async def migrate_email_usernames(connection):
         await connection.execute(text("UPDATE users SET username=:new, email=CASE WHEN email IS NULL AND strpos(:old, '@')>0 THEN :old ELSE email END WHERE username=:old"), params)
         for table, column in (("user_sessions", "username"), ("api_keys", "owner_username"),
                               ("workers", "owner_username"), ("usage_records", "owner_username"),
-                              ("admin_users", "username")):
+                              ("admin_users", "username"), ("service_key_requests", "owner_username")):
             await connection.execute(text(f"UPDATE {table} SET {column}=:new WHERE {column}=:old"), params)
         # Display names follow the new username; Docker IDs/volumes stay stable.
         workers = (await connection.execute(text("SELECT id, name FROM workers WHERE owner_username=:new"), params)).all()

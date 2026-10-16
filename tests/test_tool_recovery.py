@@ -149,7 +149,7 @@ def test_edited_history_only_recovers_as_separate_no_tools_context(monkeypatch, 
         client.portal.call(run)
 
 
-@pytest.mark.parametrize("provider,missing_checkpoint", [("claude", False), ("claude", True), ("codex", False)])
+@pytest.mark.parametrize("provider,missing_checkpoint", [("claude", False), ("claude", True), ("codex", False), ("codex", True)])
 @pytest.mark.parametrize("failure", [None, "timeout"])
 def test_cross_node_recovery_cancels_on_owner_before_rebuild(monkeypatch, failure, missing_checkpoint, provider):
     from contextvars import ContextVar

@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from .admin_auth import AdminSession, require_admin, verify_csrf
 from .config import get_settings
 from .database import get_session
-from .models import ApiKey, GoogleAuthConfig, OAuthState, User, Worker, WorkerStatus
+from .models import ServiceKeyRequest, ApiKey, GoogleAuthConfig, OAuthState, User, Worker, WorkerStatus
 from .security import generate_api_key, hash_api_key, hash_password
 from .user_auth import cookie_secure, digest, issue_session, require_user
 
@@ -96,6 +96,8 @@ async def account(request: Request, identity=Depends(require_user), db: AsyncSes
     from .key_limits import key_budget_display
     return render(request, identity, page="account", key_budgets=await key_budget_display(db, keys), keys=keys, pagination=pagination, quota=await quota_summary(db, identity.username),
                   account_providers=sorted(await allowed_providers(db, identity.username)),
+                  service_applications=(await db.scalars(select(ServiceKeyRequest).where(
+                      ServiceKeyRequest.owner_username == identity.username).order_by(ServiceKeyRequest.created_at.desc()).limit(30))).all(),
                   recent_usage=await recent_user_usage(db, identity.username))
 
 
@@ -131,12 +133,15 @@ async def transfer_key(request: Request, key_id: UUID, username: str = Form(...)
     key = await db.scalar(select(ApiKey).where(ApiKey.id == key_id).with_for_update().execution_options(populate_existing=True))
     if not key or key.deleted_at:
         raise HTTPException(404, t('Key 不存在'))
-    if key.enabled:
+    if key.enabled and key.key_type != "project_service_key":
         await ensure_capacity(db, username, key_id)
     else:
         target = await db.get(User, username)
         if not target or not target.enabled:
             raise HTTPException(400, t('请选择已存在且启用的用户'))
+    if key.key_type == "project_service_key":
+        from .service_keys import log_event
+        log_event(db, identity.username, "transferred", key=key, detail={"from": key.owner_username, "to": username})
     key.owner_username = username
     await db.commit()
     return {"message": t('Key 归属已更新')}
@@ -213,7 +218,7 @@ async def edit_provider_grants(request: Request, username: str, codex: bool = Fo
     authorize_role(request.state.user, user.role, user.role)
     user.provider_grants = [name for name, enabled in (("codex", codex), ("gemini", gemini), ("claude", claude)) if enabled]
     await db.commit()
-    return {"message": t('Provider 额外授权已更新，对用户名下所有 Key 立即生效')}
+    return {"message": t('Provider 额外授权已更新，对用户名下普通 Key 立即生效')}
 
 
 @router.get("/auth/google")
@@ -348,7 +353,9 @@ async def personal_toggle(request: Request, key_id: UUID, csrf_token: str = Form
     key = await db.scalar(select(ApiKey).where(ApiKey.id == key_id, ApiKey.owner_username == identity.username, ApiKey.deleted_at.is_(None)).with_for_update().execution_options(populate_existing=True))
     if not key:
         raise HTTPException(404, t('Key 不存在'))
-    if not key.enabled:
+    if key.admin_disabled:
+        raise HTTPException(403, "该 Key 已被管理员停用")
+    if not key.enabled and key.key_type != "project_service_key":
         await ensure_capacity(db, identity.username)
     key.enabled = not key.enabled
     await db.commit()

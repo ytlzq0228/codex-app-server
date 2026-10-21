@@ -2,6 +2,8 @@
 
 
 async def probe_provider(worker, db, settings, **kwargs):
+    from .quota import quota_lock
+    await quota_lock(db)
     if worker.provider == "claude":
         from .claude_backend import probe_claude
         return await probe_claude(worker, db, settings, **kwargs)

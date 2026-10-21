@@ -64,6 +64,8 @@ async def test_resumed_turn_bills_only_its_own_usage():
         async def call(self, method, _params):
             if method == 'account/read':
                 return {'account': {'type': 'chatgpt'}}
+            if method == 'account/rateLimits/read':
+                return {}
             if method == 'thread/resume':
                 return {'thread': {'id': 'existing-thread'}}
             if method == 'turn/start':
@@ -156,7 +158,7 @@ async def test_safe_failure_retries_once_on_another_worker(monkeypatch) -> None:
     async def fake_quarantine(worker_id, reason, kind):
         quarantined.append((worker_id, kind))
 
-    async def fake_retry(_principal, _target):
+    async def fake_retry(_principal, _target, _model=None, **kwargs):
         return second
 
     monkeypatch.setattr(main_module, "quarantine_worker", fake_quarantine)
@@ -196,6 +198,8 @@ async def test_worker_quarantine_uses_inference_probe_as_final_verdict(monkeypat
 
     monkeypatch.setattr(main_module, "SessionLocal", FakeSessionContext)
     monkeypatch.setattr(main_module, "probe_worker_record", fake_probe)
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr("codex_gateway.quota.quota_lock", AsyncMock())
 
     assert await main_module.quarantine_worker(worker_id, "request stream failed", "connection") is expected
     assert calls == [worker]

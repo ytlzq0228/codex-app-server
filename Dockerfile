@@ -1,4 +1,6 @@
 FROM python:3.12-slim
+ARG CODEX_GATEWAY_RELEASE=development
+ENV CODEX_GATEWAY_RELEASE=$CODEX_GATEWAY_RELEASE
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 RUN addgroup --system --gid 10001 app && adduser --system --uid 10001 --ingroup app app

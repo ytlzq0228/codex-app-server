@@ -4,7 +4,7 @@ from decimal import Decimal
 import re
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
-from .models import SubscriptionPlan, Worker
+from .models import SubscriptionPlan, Worker, WorkerStatus
 
 DEFAULT_PLAN_COLOR = '#16734a'
 PLAN_COLOR_RE = re.compile(r'^#[0-9a-fA-F]{6}$')
@@ -62,7 +62,9 @@ async def subscription_summary(db):
         color=safe_plan_color(p.color), style=plan_pill_style(p.color), count=0, subtotal=Decimal(0)) for p in plans}
     unknown = 0
     for worker in workers:
-        if worker.endpoint == 'removed://worker' or not worker.auth_mode or worker.failure_kind == 'logged_out':
+        if (worker.endpoint == 'removed://worker' or not worker.auth_mode
+                or worker.failure_kind == 'logged_out'
+                or worker.status not in {WorkerStatus.ready, WorkerStatus.busy, WorkerStatus.draining}):
             continue
         name = plan_key(worker.plan_type, worker.provider or "codex")
         if not name:

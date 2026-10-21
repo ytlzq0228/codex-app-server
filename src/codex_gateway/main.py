@@ -213,13 +213,15 @@ async def invalidate_response_thread(api_key_id, thread_id: str, reason: str) ->
 
 
 async def quarantine_worker(worker_id, reason: str, kind: str = "connection") -> bool:
-    """Confirm a suspected failure with the same inference probe used by Worker 管理."""
+    """Cooldown confirmed quota failures; probe uncertain connection failures."""
     settings = get_settings()
     async with SessionLocal() as session:
+        from .quota import quota_lock
+        await quota_lock(session)
         worker = await session.scalar(select(Worker).where(Worker.id == worker_id).execution_options(populate_existing=True))
         if not worker:
             return False
-        if (getattr(worker, "provider", None) or "codex") in {"gemini", "claude"} and kind != "connection":
+        if kind == "limit" or ((getattr(worker, "provider", None) or "codex") in {"gemini", "claude"} and kind != "connection"):
             worker.status = WorkerStatus.error
             worker.failure_kind = kind
             worker.failure_reason = reason[:500]
@@ -292,6 +294,8 @@ async def worker_recovery_loop() -> None:
         try:
             await asyncio.sleep(settings.worker_recovery_interval_seconds)
             async with SessionLocal() as session:
+                from .quota import quota_lock
+                await quota_lock(session)
                 await expire_response_bindings(session)
                 workers = (await session.scalars(select(Worker).where(Worker.enabled.is_(True), ((Worker.status == WorkerStatus.error) | ((Worker.provider.in_(["gemini", "claude"])) & (Worker.status == WorkerStatus.offline) & Worker.auth_mode.is_not(None)))).with_for_update(skip_locked=True))).all()
                 if settings.node_id:
@@ -512,7 +516,7 @@ async def choose_target(
     if binding and (getattr(binding, "provider", None) or "codex") != provider:
         reject("model", "Continuation cannot change provider", "provider_mismatch")
     candidates: list[Worker] = []
-    saturated = set()
+    active, usage, saturated = await pool_routing_signals(session, str(principal.key_id or "development"))
     if binding:
         worker = await session.get(Worker, binding.worker_id)
         candidates = [worker] if worker else []
@@ -521,7 +525,6 @@ async def choose_target(
         candidates = [worker] if worker else []
     else:
         candidates = list((await session.scalars(select(Worker).where(Worker.provider == provider, Worker.enabled.is_(True), Worker.status.in_([WorkerStatus.ready, WorkerStatus.busy])).order_by(func.random()))).all())
-        active, usage, saturated = await pool_routing_signals(session, str(principal.key_id or "development"))
         scope = f"{principal.key_id or 'development'}:{cache_affinity}" if cache_affinity else None
         candidates = rank_pool_workers(candidates, active, usage, scope)
         if principal.key_id:
@@ -545,6 +548,11 @@ async def choose_target(
         # Bound continuations and explicitly pinned keys never take this path.
         candidates.sort(key=lambda worker: str(worker.id) in saturated)
     candidates = [worker for worker in candidates if (getattr(worker, "provider", None) or "codex") == provider and worker.id not in excluded and worker.enabled and worker.status in {WorkerStatus.ready, WorkerStatus.busy}]
+    # Reserve account capacity for every route, including bound and pinned workers.
+    from .rate_limits import quota_reserve_reached
+    usage_by_worker = usage.get("workers", {}) if isinstance(usage, dict) else {}
+    candidates = [worker for worker in candidates if not quota_reserve_reached(
+        usage_by_worker.get(str(worker.id), {}), settings.worker_quota_reserve_percent)]
     if model and candidates:
         from .model_capabilities import supports_model, upstream_name
         upstream = await upstream_name(session, model)
@@ -580,13 +588,24 @@ async def validate_pending_worker(backend, target, session):
     if not target or not target.worker_id:
         return
     worker = await session.get(Worker, target.worker_id)
-    if not worker or worker.endpoint == "removed://worker" or (target.worker_generation is not None and worker.execution_generation != target.worker_generation):
+    invalidated = not worker or worker.endpoint == "removed://worker" or (target.worker_generation is not None and worker.execution_generation != target.worker_generation)
+    unavailable = False
+    if not invalidated:
+        from .rate_limits import quota_reserve_reached
+        _, usage, _ = await pool_routing_signals(session)
+        unavailable = (not worker.enabled or worker.status not in {WorkerStatus.ready, WorkerStatus.busy}
+                       or quota_reserve_reached(usage.get("workers", {}).get(str(worker.id), {}),
+                                                get_settings().worker_quota_reserve_percent))
+    if invalidated or unavailable:
         sessions = getattr(backend, "tool_sessions", None)
         if sessions:
             for run in list(sessions.runs):
                 if run.target == target:
                     await sessions.cancel_thread(target.connection_key.split(":", 1)[0], run.thread_id)
-        raise ToolProtocolError("Worker account changed or Worker was removed; start a new user turn with full history", "tool_worker_invalidated")
+        raise ToolProtocolError(
+            "Worker is unavailable; start a new user turn with full history and confirmed tool results" if unavailable else
+            "Worker account changed or Worker was removed; start a new user turn with full history",
+            "tool_worker_unavailable" if unavailable else "tool_worker_invalidated")
 
 
 def reset_auto_resume(body, reason):
@@ -603,15 +622,15 @@ async def choose_execution_target(principal, session, binding, body):
     try:
         return await choose_target(principal, session, binding, cache_affinity=body.prompt_cache_key, provider=provider_for(body.model), model=body.model)
     except HTTPException:
-        if not body._execution_auto_resume or principal.pinned_worker_id or provider_for(body.model) != "codex":
+        if not body._execution_auto_resume or principal.pinned_worker_id:
             raise
         reset_auto_resume(body, "bound_worker_unavailable")
-        return await choose_target(principal, session, cache_affinity=body.prompt_cache_key, provider=provider_for(body.model), model=body.model)
+        return await choose_target(principal, session, exclude_worker_ids={binding.worker_id} if binding else None, cache_affinity=body.prompt_cache_key, provider=provider_for(body.model), model=body.model)
 
 
-async def retry_target(principal: ApiPrincipal, failed: BackendTarget, model: str | None = None) -> BackendTarget:
+async def retry_target(principal: ApiPrincipal, failed: BackendTarget, model: str | None = None, *, exclude_worker_ids=None) -> BackendTarget:
     async with SessionLocal() as session:
-        return await choose_target(principal, session, exclude_worker_ids={failed.worker_id}, provider=failed.provider, model=model)
+        return await choose_target(principal, session, exclude_worker_ids={failed.worker_id, *(exclude_worker_ids or ())}, provider=failed.provider, model=model)
 
 
 async def release_request_session(session: AsyncSession) -> None:
@@ -621,18 +640,24 @@ async def release_request_session(session: AsyncSession) -> None:
     await session.close()
 
 
-async def complete_with_failover(body: ResponseRequest, backend: CompletionBackend, principal: ApiPrincipal, target: BackendTarget, *, allow_retry: bool) -> tuple[BackendResult, BackendTarget]:
+async def complete_with_failover(body: ResponseRequest, backend: CompletionBackend, principal: ApiPrincipal, target: BackendTarget, *, allow_retry: bool, failed_worker_ids=frozenset()) -> tuple[BackendResult, BackendTarget]:
     try:
         return await backend.complete(body, target), target
     except WorkerFailure as exc:
         capture_failure(exc)
-        if allow_retry and exc.kind == "capacity" and exc.safe_to_retry:
-            replacement = await retry_target(principal, target, body.model)
-            return await complete_with_failover(body, backend, principal, replacement, allow_retry=False)
-        if exc.code and exc.status:
-            if exc.kind == "connection" and target.worker_id:
+        if allow_retry and exc.safe_to_retry and exc.kind not in {"request", "session", "execution_conflict"}:
+            if target.worker_id and exc.kind not in {"capacity", "account_changed"}:
                 await quarantine_worker(target.worker_id, str(exc), exc.kind)
-            raise HTTPException(exc.status, detail={"error": {"message": str(exc), "type": "invalid_request_error" if exc.kind == "request" and exc.status < 500 else "server_error", "code": exc.code, "param": None}}) from exc
+            reset_auto_resume(body, "worker_pre_turn_failure")
+            failed_worker_ids = failed_worker_ids | {target.worker_id}
+            replacement = await retry_target(principal, target, body.model, exclude_worker_ids=failed_worker_ids)
+            return await complete_with_failover(body, backend, principal, replacement,
+                                                allow_retry=replacement.worker_id not in failed_worker_ids,
+                                                failed_worker_ids=failed_worker_ids)
+        if exc.code and exc.status:
+            if exc.kind in {"connection", "limit", "logged_out"} and target.worker_id:
+                await quarantine_worker(target.worker_id, str(exc), exc.kind)
+            raise HTTPException(exc.status, detail={"error": {"message": str(exc), "type": "rate_limit_error" if exc.kind == "limit" else "invalid_request_error" if exc.kind == "request" and exc.status < 500 else "server_error", "code": exc.code, "param": None}}, headers={"Retry-After": "60"} if exc.kind == "limit" else None) from exc
         if exc.kind == "request":
             raise HTTPException(400, detail={"error": {"message": worker_failure_message(exc), "type": "invalid_request_error", "code": exc.__cause__.code if isinstance(exc.__cause__, ToolProtocolError) else "invalid_request", "param": "tools" if isinstance(exc.__cause__, ToolProtocolError) else "model"}}) from exc
         if exc.kind == "session":
@@ -641,18 +666,9 @@ async def complete_with_failover(body: ResponseRequest, backend: CompletionBacke
             raise HTTPException(503, detail={"error": {"message": f"Timed out waiting for an available {target.provider} worker connection", "type": "server_error", "code": "worker_capacity_exceeded", "param": None}}, headers={"Retry-After": "5"}) from exc
         if target.worker_id and exc.kind != "account_changed":
             await quarantine_worker(target.worker_id, str(exc), exc.kind)
-        if target.provider in {"gemini", "claude"} and exc.kind == "limit":
+        if exc.kind == "limit":
             raise HTTPException(429, detail={"error": {"message": f"{target.provider.title()} subscription quota is exhausted; retry later", "type": "rate_limit_error", "code": "provider_quota_exhausted", "param": None}}, headers={"Retry-After": "60"}) from exc
-        if not (allow_retry and exc.safe_to_retry):
-            raise
-        reset_auto_resume(body, "worker_pre_turn_failure")
-        replacement = await retry_target(principal, target, body.model)
-        try:
-            return await backend.complete(body, replacement), replacement
-        except WorkerFailure as retry_exc:
-            if retry_exc.kind not in {"request", "session", "capacity", "execution_conflict", "account_changed"} and replacement.worker_id:
-                await quarantine_worker(replacement.worker_id, str(retry_exc), retry_exc.kind)
-            raise
+        raise
 
 
 def worker_failure_message(exc: Exception) -> str:
@@ -738,7 +754,7 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
     thread_id = ""
     input_tokens = output_tokens = cache_read_tokens = cache_write_tokens = 0
     usage_accounting = None
-    retried = False
+    failed_worker_ids = set()
     try:
         while True:
             try:
@@ -786,13 +802,13 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
                 capture_failure(exc)
                 if exc.kind not in {"request", "session", "capacity", "execution_conflict", "account_changed"} and target.worker_id:
                     await quarantine_worker(target.worker_id, str(exc), exc.kind)
-                # Retry once only when Codex confirms the turn could not have begun and
+                # Retry only when the backend confirms replay is safe and
                 # no model content has reached the client.
-                if retried or chunks or native_items or not allow_retry or not exc.safe_to_retry:
+                if target.worker_id in failed_worker_ids or chunks or native_items or tool_calls or not allow_retry or not exc.safe_to_retry:
                     raise
                 reset_auto_resume(body if isinstance(body, ResponseRequest) else request, "worker_pre_turn_failure")
-                target = await retry_target(principal, target, body.model)
-                retried = True
+                failed_worker_ids.add(target.worker_id)
+                target = await retry_target(principal, target, body.model, exclude_worker_ids=failed_worker_ids)
     except Exception as exc:
         capture_failure(exc)
         session_failure = isinstance(exc, WorkerFailure) and exc.kind == "session"
@@ -816,8 +832,10 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
             error = {"code": "invalid_request", "message": worker_failure_message(exc)}
         if isinstance(exc, WorkerFailure) and exc.code:
             error = {"code": exc.code, "message": str(exc)}
+        if isinstance(exc, HTTPException) and isinstance(exc.detail, dict):
+            error = exc.detail.get("error", error)
         if audit := current_audit.get(): audit["rejection"] = error
-        await save_usage(response_id, principal, target, body.model, exc.status if isinstance(exc, WorkerFailure) and exc.status else 429 if target.provider == "claude" and error["code"] == "provider_quota_exhausted" else 400 if request_failure else 404 if session_failure else 503 if capacity_failure else 502, started, error_code=error["code"], previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))
+        await save_usage(response_id, principal, target, body.model, exc.status_code if isinstance(exc, HTTPException) else exc.status if isinstance(exc, WorkerFailure) and exc.status else 429 if error["code"] == "provider_quota_exhausted" else 400 if request_failure else 404 if session_failure else 503 if capacity_failure else 502, started, error_code=error["code"], previous_response_id=public_previous_id, thread_id=body.previous_response_id, request_params=body.model_dump(mode="json"))
         yield sse({"type": "error", "sequence_number": sequence, **error, "param": None}); sequence += 1
         failed = {**created, "status": "failed", "error": error}
         yield sse({"type": "response.failed", "sequence_number": sequence, "response": failed})
@@ -869,7 +887,7 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
     output_chunks = []
     tool_calls = []
     content_emitted = False
-    retried = False
+    failed_worker_ids = set()
     try:
         while True:
             try:
@@ -896,11 +914,11 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
                 capture_failure(exc)
                 if exc.kind not in {"request", "session", "capacity", "execution_conflict", "account_changed"} and target.worker_id:
                     await quarantine_worker(target.worker_id, str(exc), exc.kind)
-                if retried or content_emitted or not allow_retry or not exc.safe_to_retry:
+                if target.worker_id in failed_worker_ids or content_emitted or tool_calls or not allow_retry or not exc.safe_to_retry:
                     raise
                 reset_auto_resume(body if isinstance(body, ResponseRequest) else request, "worker_pre_turn_failure")
-                target = await retry_target(principal, target, body.model)
-                retried = True
+                failed_worker_ids.add(target.worker_id)
+                target = await retry_target(principal, target, body.model, exclude_worker_ids=failed_worker_ids)
     except Exception as exc:
         capture_failure(exc)
         tool_failure = isinstance(exc, WorkerFailure) and isinstance(exc.__cause__, ToolProtocolError)
@@ -916,8 +934,11 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
             error_code, error_message = "invalid_request", worker_failure_message(exc)
         if isinstance(exc, WorkerFailure) and exc.code:
             error_code, error_message = exc.code, str(exc)
+        if isinstance(exc, HTTPException) and isinstance(exc.detail, dict):
+            error = exc.detail.get("error", {})
+            error_code, error_message = error.get("code", error_code), error.get("message", error_message)
         if audit := current_audit.get(): audit["rejection"] = {"code": error_code, "message": error_message}
-        await save_usage(completion_id, principal, target, body.model, exc.status if isinstance(exc, WorkerFailure) and exc.status else 429 if target.provider == "claude" and error_code == "provider_quota_exhausted" else 400 if request_failure else 503 if capacity_failure else 502, started, error_code=error_code, request_params=body.model_dump(mode="json"))
+        await save_usage(completion_id, principal, target, body.model, exc.status_code if isinstance(exc, HTTPException) else exc.status if isinstance(exc, WorkerFailure) and exc.status else 429 if error_code == "provider_quota_exhausted" else 400 if request_failure else 503 if capacity_failure else 502, started, error_code=error_code, request_params=body.model_dump(mode="json"))
         yield chat_sse({"error": {"message": error_message, "type": "invalid_request_error" if request_failure else "server_error", "code": error_code}})
         yield chat_sse("[DONE]")
         return
@@ -1048,7 +1069,7 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
     if not pending_target:
         from .audit import track_backend
         track_backend(target, None, source="selected_worker")
-    allow_retry = not pending_target and (execution_binding is None or (request._execution_auto_resume and target.provider == "codex")) and principal.pinned_worker_id is None
+    allow_retry = not pending_target and (execution_binding is None or request._execution_auto_resume) and principal.pinned_worker_id is None
     await release_request_session(session)
     if body.stream:
         return StreamingResponse(keepalive(chat_completion_stream(body, request, backend, principal, target, allow_retry)), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", **({"x-gateway-generation-policy": "worker-defaults"} if provider_for(body.model) == "claude" else {})})
@@ -1124,10 +1145,10 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
         track_backend(target, None, source="selected_worker")
     await release_request_session(session)
     if body.stream:
-        return StreamingResponse(keepalive(response_stream(body, backend, principal, target, public_previous_id, not pending_target and (binding is None or (body._execution_auto_resume and target.provider == "codex")) and principal.pinned_worker_id is None)), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", **({"x-gateway-generation-policy": "worker-defaults"} if provider_for(body.model) == "claude" else {})})
+        return StreamingResponse(keepalive(response_stream(body, backend, principal, target, public_previous_id, not pending_target and (binding is None or body._execution_auto_resume) and principal.pinned_worker_id is None)), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", **({"x-gateway-generation-policy": "worker-defaults"} if provider_for(body.model) == "claude" else {})})
     started = time.monotonic()
     try:
-        result, target = await complete_with_failover(body, backend, principal, target, allow_retry=not pending_target and (binding is None or (body._execution_auto_resume and target.provider == "codex")) and principal.pinned_worker_id is None)
+        result, target = await complete_with_failover(body, backend, principal, target, allow_retry=not pending_target and (binding is None or body._execution_auto_resume) and principal.pinned_worker_id is None)
     except HTTPException as exc:
         if audit := current_audit.get(): audit["rejection"] = exc.detail.get("error", {}) if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
         response_id = f"resp_{uuid4().hex}"

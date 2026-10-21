@@ -143,7 +143,7 @@ async def test_failover_replays_full_input_only_before_turn_started(monkeypatch,
     r=req([{'role':'user','content':'old'},{'role':'assistant','content':'answer'},{'role':'user','content':'next'}],previous_response_id='old-thread')
     r._execution_auto_resume=True;r._execution_input_text='USER:\nnext';r._execution_input_items=[r.input[-1]]
     first=BackendTarget('k:first','ws://first','/tmp');second=BackendTarget('k:second','ws://second','/tmp')
-    async def replacement(*a):return second
+    async def replacement(*a, **kwargs):return second
     monkeypatch.setattr(main,'retry_target',replacement)
     class Backend:
         async def complete(self,body,target):

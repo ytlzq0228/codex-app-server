@@ -138,10 +138,10 @@ class ClaudeAdapter:
                         code = detail.get("code") if isinstance(detail, dict) else None
                         if code in errors:
                             kind, status, message = errors[code]
-                            raise WorkerFailure(message, kind=kind, code=code, status=status)
+                            raise WorkerFailure(message, kind=kind, code=code, status=status, safe_to_retry=kind == "capacity")
                         if response.status_code == 409 and detail != "Worker capacity exhausted":
                             raise WorkerFailure("Claude worker execution conflict", kind="execution_conflict", code="worker_execution_conflict", status=409)
-                        raise WorkerFailure("Claude worker rejected execution", kind={409: "capacity", 400: "request", 422: "request", 401: "logged_out", 429: "limit"}.get(response.status_code, "connection"))
+                        raise WorkerFailure("Claude worker rejected execution", kind={409: "capacity", 400: "request", 422: "request", 401: "logged_out", 429: "limit"}.get(response.status_code, "connection"), safe_to_retry=response.status_code in {401, 429})
                     async for line in response.aiter_lines():
                         if not line:
                             continue
@@ -153,7 +153,7 @@ class ClaudeAdapter:
                         if data.get("heartbeat"):
                             continue
                         if data.get("error"):
-                            raise WorkerFailure(data["error"], kind=data.get("kind", "connection"), code=data.get("code"), status=data.get("status"))
+                            raise WorkerFailure(data["error"], kind=data.get("kind", "connection"), code=data.get("code"), status=data.get("status"), safe_to_retry=data.get("safe_to_retry") is True)
                         thread = data.get("thread_id") or thread
                         if data.get("event") == "usage":
                             yield BackendStreamEvent(thread_id=thread, usage_accounting=accounting,
@@ -240,7 +240,7 @@ class ClaudeAdapter:
             raise WorkerFailure("Claude stream ended without a final result", code="claude_stream_incomplete", status=502)
         except httpx.TimeoutException as exc:
             code = "worker_connection_timeout" if isinstance(exc, (httpx.ConnectTimeout, httpx.PoolTimeout)) else "worker_transport_timeout"
-            raise WorkerFailure("Claude worker connection timed out" if code == "worker_connection_timeout" else "Claude worker transport timed out", code=code, status=504) from exc
+            raise WorkerFailure("Claude worker connection timed out" if code == "worker_connection_timeout" else "Claude worker transport timed out", code=code, status=504, safe_to_retry=code == "worker_connection_timeout") from exc
         except httpx.HTTPStatusError as exc:
             if exc.request.url.path == "/tool-result" and exc.response.status_code == 409:
                 raise ToolProtocolError(
@@ -248,7 +248,7 @@ class ClaudeAdapter:
                     "client_tool_call_unavailable") from exc
             raise WorkerFailure("Claude worker connection failed", code="claude_transport_error", status=502) from exc
         except httpx.HTTPError as exc:
-            raise WorkerFailure("Claude worker connection failed", code="claude_transport_error", status=502) from exc
+            raise WorkerFailure("Claude worker connection failed", code="claude_transport_error", status=502, safe_to_retry=isinstance(exc, httpx.ConnectError)) from exc
         except (ValueError, KeyError, TypeError) as exc:
             if isinstance(exc, ToolProtocolError):
                 raise

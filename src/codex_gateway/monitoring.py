@@ -71,6 +71,7 @@ def _pool_usage(workers, weights, readings):
             windows['risk'] = max(windows.values())
         week_used = windows.get('week')
         worker_windows[str(worker.id)] = {
+            'five_hour_used': windows.get('five_hour'),
             'week_used': week_used,
             'weight': weight,
             'weighted_remaining': (100.0 - week_used) * weight if week_used is not None else None,
@@ -90,7 +91,7 @@ def _pool_usage(workers, weights, readings):
 def pool_usage(workers, weights, readings):
     # Preserve per-worker routing signals; never combine providers in the UI.
     result = _pool_usage(workers, weights, readings)
-    result['version'] = 4
+    result['version'] = 5
     result['providers'] = {
         provider: _pool_usage([w for w in workers if (getattr(w, 'provider', None) or 'codex') == provider], weights, readings)
         for provider in ('codex', 'gemini', 'claude')
@@ -126,7 +127,7 @@ async def record_snapshot(metric, minutes, now):
         if not await db.scalar(text('SELECT pg_try_advisory_xact_lock(:key)'), {'key': lock}):
             return
         existing = await db.get(MetricSnapshot, (metric, bucket))
-        if existing and (metric != 'subscription_usage' or existing.payload.get('version', 0) >= 4):
+        if existing and (metric != 'subscription_usage' or existing.payload.get('version', 0) >= 5):
             return
         workers = (await db.scalars(select(Worker))).all()
         if metric == 'worker_states':
@@ -157,7 +158,7 @@ async def record_snapshot(metric, minutes, now):
 
 async def monitoring_loop():
     while True:
-        for metric, minutes in (('worker_states', 10), ('subscription_usage', 60)):
+        for metric, minutes in (('worker_states', 10), ('subscription_usage', 5)):
             try:
                 await record_snapshot(metric, minutes, datetime.now(timezone.utc))
             except asyncio.CancelledError:

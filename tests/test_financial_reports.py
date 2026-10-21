@@ -99,7 +99,13 @@ def test_report_recalculates_live_subscription_cost(monkeypatch):
         assert '历史已录入成本 + 本月实时成本' in response.text
         live['unpriced'] = 1
         for month in [current, 'all']:
-            assert '<strong>套餐未定价 / —</strong>' in rendered_pages(client, '/admin/reports?month='+month).text
+            response = client.get('/admin/reports/data?month='+month)
+            assert response.status_code == 200
+            data = response.json()
+            assert Decimal(str(data['cost_amount'])) >= Decimal('75')
+            assert Decimal(str(data['savings'])) == Decimal(str(data['total']['amount'])) - Decimal(str(data['cost_amount']))
+        live.update(total=Decimal(0), unpriced=1, count=1, unknown=1)
+        assert '<strong>0.0000 / ' in rendered_pages(client, '/admin/reports?month='+current).text
         live.update(total=Decimal(0), unpriced=0, count=0)
         assert '<strong>0.0000 / ' in rendered_pages(client, '/admin/reports?month='+current).text
         assert 'action="/admin/subscription-cost"' in rendered_pages(client, '/admin/reports?month=2000-01').text

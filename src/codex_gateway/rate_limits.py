@@ -3,6 +3,20 @@ from .i18n import t
 from datetime import datetime, timezone
 
 
+def quota_reserve_reached(usage, reserve_percent):
+    """Any known account window at the threshold makes a Worker unavailable."""
+    return any(isinstance(value, (int, float)) and not isinstance(value, bool)
+               and value >= 100 - reserve_percent
+               for value in (usage.get('five_hour_used'), usage.get('week_used')))
+
+
+def account_reserve_reached(payload, reserve_percent):
+    return any(quota_reserve_reached({
+        'five_hour_used': (bucket.get('five_hour') or {}).get('used'),
+        'week_used': (bucket.get('week') or {}).get('used'),
+    }, reserve_percent) for bucket in summarize_windows(payload).get('buckets', []))
+
+
 def provider_usage(payload):
     """Product policy: a confirmed enterprise response without numeric quota is unlimited."""
     if payload.get('available') is False and payload.get('buckets') == []:

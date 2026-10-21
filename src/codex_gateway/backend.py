@@ -44,11 +44,13 @@ def classify_worker_failure(message: str) -> str:
     if is_input_length_error(message):
         return "request"
     lowered = message.lower().replace("_", " ").replace("-", " ")
+    if "model is at capacity" in lowered or "model is currently at capacity" in lowered:
+        return "capacity"
     if any(term in lowered for term in ("invalid request", "model is not supported", "model is unsupported", "unsupported model")):
         return "request"
     if any(term in lowered for term in ("not logged in", "login", "auth", "unauthorized", "401")):
         return "logged_out"
-    if any(term in lowered for term in ("usage limit", "rate limit", "limit reached", "quota", "too many requests", "429", "5 hour", "five hour")):
+    if any(term in lowered for term in ("usage limit", "rate limit", "limit reached", "quota", "too many requests", "429", "5 hour", "five hour", "out of credits", "insufficient credits")):
         return "limit"
     return "connection"
 
@@ -140,6 +142,7 @@ class TurnUsage:
 
 class AppServerBackend:
     def __init__(self, settings: Settings) -> None:
+        self.settings = settings
         self.token = settings.app_server_token.get_secret_value()
         self.timeout = settings.app_server_timeout_seconds
         self.model_aliases = settings.model_alias_map()
@@ -236,12 +239,19 @@ class AppServerBackend:
         slot_id: int | None = None
         async with self._thread_guard(request.previous_response_id):
             turn_may_have_started = False
+            turn_has_effects = False
             try:
                 async with self.pool.lease(target.connection_key, worker_key, target.endpoint) as (app_server, slot_id):
                     workspace = f"{target.workspace}/ws-{slot_id}"
                     account = await app_server.call("account/read", {"refreshToken": False})
                     if account.get("requiresOpenaiAuth") and not account.get("account"):
                         raise WorkerFailure("Codex worker is not logged in", kind="logged_out", safe_to_retry=True)
+                    if (account.get("account") or {}).get("type") == "chatgpt":
+                        from .rate_limits import account_reserve_reached
+                        limits = await app_server.call("account/rateLimits/read", {"excludeResetCreditDetails": True})
+                        if account_reserve_reached(limits, self.settings.worker_quota_reserve_percent):
+                            raise WorkerFailure("Worker quota reserve reached", kind="limit",
+                                                safe_to_retry=True, code="provider_quota_exhausted", status=429)
                     thread_id = await self._start_thread(app_server, request, workspace)
                     worker_input = request.worker_input()
                     if message := input_length_error(worker_input):
@@ -273,6 +283,9 @@ class AppServerBackend:
                             if message.get("id") is not None and method:
                                 await app_server.reject_server_request(message)
                             continue
+                        if (message.get("id") is not None or method == "item/agentMessage/delta"
+                                or (method == "item/started" and (params.get("item") or {}).get("type") != "reasoning")):
+                            turn_has_effects = True
                         if message.get("id") is not None and method == "item/tool/call":
                             if tool_run is None:
                                 raise WorkerFailure("Unexpected client tool request", kind="request")
@@ -339,7 +352,11 @@ class AppServerBackend:
                                 message = error.get("message", "Codex turn failed")
                                 if is_input_length_error(message):
                                     raise WorkerFailure(message, kind="request", code=INPUT_TOO_LONG_CODE, status=400)
-                                raise WorkerFailure(message, kind=classify_worker_failure(message), safe_to_retry=False)
+                                kind = classify_worker_failure(message)
+                                raise WorkerFailure(message, kind=kind,
+                                    safe_to_retry=kind in {"limit", "capacity", "logged_out"} and not turn_has_effects,
+                                    code="provider_quota_exhausted" if kind == "limit" else "model_capacity_exceeded" if kind == "capacity" else None,
+                                    status=429 if kind == "limit" else 503 if kind == "capacity" else None)
                             input_tokens, output_tokens, cache_read_tokens, cache_write_tokens = turn_usage.counts
                             # Resume config overrides are ignored for loaded threads.
                             # Release the completed thread before returning the boundary;

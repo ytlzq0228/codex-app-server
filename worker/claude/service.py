@@ -535,7 +535,9 @@ async def turn(body: Turn, request: Request = None):
                         yield json.dumps(line) + "\n"
                     elif kind == "result":
                         if item.get("subtype") != "success" or item.get("is_error"):
-                            yield json.dumps(result_failure(item)) + "\n"
+                            failure = result_failure(item)
+                            failure["safe_to_retry"] = failure["kind"] in {"limit", "logged_out"} and not produced_output
+                            yield json.dumps(failure) + "\n"
                             return
                         structured = item.get("structured_output")
                         if body.json_schema is not None:
@@ -556,9 +558,16 @@ async def turn(body: Turn, request: Request = None):
             if terminal is None:
                 await process.wait()
                 tail = await stderr_task
-                yield json.dumps({"error": "Claude ended without a final result", "kind": error_kind(tail.decode(errors="replace")), "code": "claude_process_incomplete", "status": 502}) + "\n"
+                kind = error_kind(tail.decode(errors="replace"))
+                yield json.dumps({"error": f"Claude ended without a final result (exit code {process.returncode})",
+                                  "kind": kind, "code": "provider_quota_exhausted" if kind == "limit" else "claude_process_incomplete",
+                                  "status": 429 if kind == "limit" else 502,
+                                  "safe_to_retry": kind in {"limit", "logged_out"} and not produced_output}) + "\n"
         except asyncio.CancelledError:
             raise
+        except TimeoutError:
+            yield json.dumps({"error": "Claude execution timed out", "kind": "connection",
+                              "code": "claude_process_timeout", "status": 504}) + "\n"
         except Exception as exc:
             yield json.dumps({"error": "Claude execution interrupted or timed out: " + type(exc).__name__, "kind": "connection", "code": "claude_process_interrupted", "status": 502}) + "\n"
         finally:

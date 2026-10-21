@@ -110,7 +110,9 @@ class GeminiAdapter:
                 async with client.stream("POST", target.endpoint + "/turn", json=payload,
                         headers={"Authorization": "Bearer " + self.settings.app_server_token.get_secret_value()}) as response:
                     if response.status_code != 200:
-                        raise WorkerFailure("Gemini worker rejected execution", kind="capacity" if response.status_code == 409 else "connection")
+                        raise WorkerFailure("Gemini worker rejected execution",
+                                            kind={409: "capacity", 401: "logged_out", 429: "limit"}.get(response.status_code, "connection"),
+                                            safe_to_retry=response.status_code in {401, 429})
                     async for line in response.aiter_lines():
                         if not line:
                             continue
@@ -188,7 +190,8 @@ class GeminiAdapter:
                             return
             raise WorkerFailure("Gemini stream ended without a final result")
         except httpx.HTTPError as exc:
-            raise WorkerFailure("Gemini worker connection failed") from exc
+            raise WorkerFailure("Gemini worker connection failed",
+                                safe_to_retry=isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))) from exc
 
     async def complete(self, request, target):
         text = ""

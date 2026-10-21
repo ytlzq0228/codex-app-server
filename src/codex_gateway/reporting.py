@@ -182,13 +182,14 @@ async def financial_reports(request: Request, month: str = "", identity=Depends(
     subscriptions = await subscription_summary(db)
     subscriptions["rows"], subscription_pagination = paginate_list(subscriptions["rows"], request, name="plans_page")
     current_month = datetime.now(timezone.utc).strftime("%Y-%m")
-    live_cost = subscriptions["total"] if not subscriptions["unpriced"] else None
+    # Missing plan prices contribute zero; they must not hide known costs or savings.
+    live_cost = subscriptions["total"]
     if month == current_month:
         cost_amount = live_cost
         cost_note = t('本月按当前已登录 Worker × 最新套餐月费自动重算')
     elif month == "all":
         historical = await db.scalar(select(func.sum(SubscriptionCost.amount)).where(SubscriptionCost.month < current_month))
-        cost_amount = (historical or Decimal(0)) + live_cost if live_cost is not None else None
+        cost_amount = (historical or Decimal(0)) + live_cost
         cost_note = t('历史已录入成本 + 本月实时成本；历史未录入月份未计入')
     else:
         cost = await db.get(SubscriptionCost, month)

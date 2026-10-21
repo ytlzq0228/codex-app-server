@@ -45,7 +45,7 @@ async def test_pinned_incompatible_worker_is_rejected_before_execution():
     principal = ApiPrincipal(uuid4(), "test", pinned_worker_id=worker.id)
     async def get(model, key):
         return worker if model is Worker else None
-    session = SimpleNamespace(get=get)
+    session = SimpleNamespace(get=get, scalar=AsyncMock(return_value=None))
     with pytest.raises(HTTPException) as e:
         await choose_target(principal, session, model="gpt-6.1-sol")
     assert e.value.status_code == 400

@@ -464,6 +464,15 @@ async def _prepare(request, principal, endpoint, audit, *, pending_thread=None, 
             # The public protocol accepts delta-only input. Preserve that
             # behavior, but never mistake it for the Thread's full history.
             checkpoint = None
+            # A verified full history can also rebuild an explicit continuation.
+            # Delta-only requests cannot reconstruct a lost provider thread.
+            delta = appended_items(request, expected)
+            if (row.response_id == binding.response_id and delta is not None
+                    and not tool_outputs(request)):
+                checkpoint = hashes(items)
+                request._execution_auto_resume = True
+                request._execution_input_items = delta
+                request._execution_input_text = "\n\n".join(request._item_text(i) for i in delta)
         elif row.state != "new":
             if orphaned:
                 reason = "pending_tool_superseded" if superseded else "pending_tool_lost"

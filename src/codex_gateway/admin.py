@@ -395,6 +395,7 @@ async def delete_active_session(request: Request, response_id: str, csrf_token: 
 
 
 async def default_worker(session: AsyncSession, settings: Settings) -> Worker:
+    await quota_lock(session)
     worker = await session.scalar(select(Worker).where(Worker.container_name == "codex-worker-1").with_for_update())
     if not worker:
         worker = Worker(owner_username=settings.admin_username, name="worker-1", container_name="codex-worker-1", endpoint=settings.app_server_url)
@@ -442,6 +443,7 @@ async def create_worker(request: Request, name: str = Form(min_length=1, max_len
 @router.post("/workers/{worker_id}/state")
 async def toggle_worker_state(request: Request, worker_id: UUID, csrf_token: str = Form(...), admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     verify_csrf(request, admin, csrf_token)
+    await quota_lock(session)
     worker = await session.scalar(select(Worker).where(Worker.id == worker_id).with_for_update().execution_options(populate_existing=True))
     if not worker or worker.endpoint == "removed://worker":
         raise HTTPException(404, "Worker not found")
@@ -461,6 +463,7 @@ async def toggle_worker_state(request: Request, worker_id: UUID, csrf_token: str
 @router.post("/workers/{worker_id}/delete")
 async def delete_worker(request: Request, worker_id: UUID, csrf_token: str = Form(...), admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
     verify_csrf(request, admin, csrf_token)
+    await quota_lock(session)
     worker = await session.scalar(select(Worker).where(Worker.id == worker_id).with_for_update().execution_options(populate_existing=True))
     if not worker or worker.endpoint == "removed://worker":
         raise HTTPException(404, "Worker not found")
@@ -498,6 +501,7 @@ async def delete_worker(request: Request, worker_id: UUID, csrf_token: str = For
 
 
 async def probe_worker_record(worker: Worker, session: AsyncSession, settings: Settings) -> dict:
+    await quota_lock(session)
     if (worker.provider or "codex") in {"gemini", "claude"}:
         from .provider_accounts import probe_provider
         return await probe_provider(worker, session, settings)
@@ -552,6 +556,7 @@ async def probe_worker(request: Request, csrf_token: str = Form(...), admin: Adm
 @router.post("/workers/{worker_id}/probe")
 async def probe_selected_worker(request: Request, worker_id: UUID, csrf_token: str = Form(...), admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
     verify_csrf(request, admin, csrf_token)
+    await quota_lock(session)
     worker = await session.scalar(select(Worker).where(Worker.id == worker_id).with_for_update().execution_options(populate_existing=True))
     if not worker or worker.endpoint == "removed://worker":
         raise HTTPException(404, "Worker not found")
@@ -609,6 +614,7 @@ async def login_worker(request: Request, csrf_token: str = Form(...), force: boo
 @router.post("/workers/{worker_id}/login")
 async def login_selected_worker(request: Request, worker_id: UUID, csrf_token: str = Form(...), force: bool = Form(False), admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session), settings: Settings = Depends(get_settings)):
     verify_csrf(request, admin, csrf_token)
+    await quota_lock(session)
     worker = await session.scalar(select(Worker).where(Worker.id == worker_id).with_for_update().execution_options(populate_existing=True))
     if not worker or worker.endpoint == "removed://worker":
         raise HTTPException(404, "Worker not found")

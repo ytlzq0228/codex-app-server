@@ -18,7 +18,7 @@ from .config import get_settings
 from .database import get_session
 from .models import User, Worker, WorkerStatus
 from .self_service import render
-from .quota import reconcile_worker, credited_workers
+from .quota import reconcile_worker, credited_workers, quota_lock
 from .user_auth import require_user
 
 router = APIRouter()
@@ -33,6 +33,7 @@ async def owned_worker(request, db, worker_id, *, lock=True, allow_admin_all=Fal
     if not (allow_admin_all and is_admin(request)):
         query = query.where(Worker.owner_username == request.state.user.username)
     if lock:
+        await quota_lock(db)
         query = query.with_for_update()
     worker = await db.scalar(query.execution_options(populate_existing=True))
     if not worker:
@@ -43,6 +44,8 @@ async def owned_worker(request, db, worker_id, *, lock=True, allow_admin_all=Fal
 async def update_account(worker, account, *, force_invalidate=False):
     from sqlalchemy.ext.asyncio import async_object_session
     from .binding_lifecycle import invalidate_bindings
+    if db := async_object_session(worker):
+        await quota_lock(db)
     before = (worker.auth_mode, worker.account_email, worker.provider_project)
     after = (account.get("type"), account.get("email"), account.get("project")) if account else (None, None, None)
     if force_invalidate or before != after:
@@ -232,6 +235,7 @@ async def refresh_worker_account(worker_id):
     from .admin import probe_worker_record
     settings = get_settings()
     async with SessionLocal() as db:
+        await quota_lock(db)
         worker = await db.scalar(select(Worker).where(Worker.id == worker_id, Worker.enabled.is_(True), Worker.endpoint != "removed://worker").with_for_update(skip_locked=True))
         if not worker:
             return

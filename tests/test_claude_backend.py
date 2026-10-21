@@ -81,7 +81,7 @@ async def test_admission_errors_preserve_reason(backend, monkeypatch, code, stat
     with pytest.raises(WorkerFailure) as caught:
         await backend.complete(ResponseRequest(model="claude-test", input="hi"), TARGET)
     assert (caught.value.code, caught.value.status, caught.value.kind) == (code, status, kind)
-    assert not caught.value.safe_to_retry
+    assert caught.value.safe_to_retry is (kind == "capacity")
     await backend.close()
 
 
@@ -97,7 +97,7 @@ async def test_timeout_reasons(backend, monkeypatch, exception, code):
     with pytest.raises(WorkerFailure) as caught:
         await backend.complete(ResponseRequest(model="claude-test", input="hi"), TARGET)
     assert caught.value.code == code and caught.value.status == 504
-    assert not caught.value.safe_to_retry
+    assert caught.value.safe_to_retry is (exception is httpx.ConnectTimeout)
     await backend.close()
 
 

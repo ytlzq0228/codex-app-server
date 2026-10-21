@@ -20,14 +20,21 @@ def test_plan_prices_discovery_totals_and_permissions():
     ids = []
     async def seed():
         async with SessionLocal() as db:
-            for mode,kind,enabled,removed in [('chatgpt',None,True,False),('chatgpt','limit',True,False),
-                    ('chatgpt',None,False,False),('chatgpt','logged_out',True,False),
-                    (None,None,True,False),('chatgpt',None,True,True)]:
+            for mode,kind,enabled,removed,status in [
+                    ('chatgpt',None,True,False,WorkerStatus.ready),
+                    ('chatgpt',None,True,False,WorkerStatus.busy),
+                    ('chatgpt',None,False,False,WorkerStatus.draining),
+                    ('chatgpt','limit',True,False,WorkerStatus.error),
+                    ('chatgpt','ineligible',True,False,WorkerStatus.error),
+                    ('chatgpt',None,True,False,WorkerStatus.offline),
+                    ('chatgpt','logged_out',True,False,WorkerStatus.ready),
+                    (None,None,True,False,WorkerStatus.ready),
+                    ('chatgpt',None,True,True,WorkerStatus.ready)]:
                 ident=uuid4()
                 ids.append(ident)
                 db.add(Worker(id=ident,name='subscription-'+ident.hex,container_name=ident.hex,
                     endpoint='removed://worker' if removed else 'ws://test',plan_type=plan,
-                    auth_mode=mode,failure_kind=kind,enabled=enabled,status=WorkerStatus.error))
+                    auth_mode=mode,failure_kind=kind,enabled=enabled,status=status))
             await db.commit()
     async def row():
         async with SessionLocal() as db:
@@ -87,7 +94,7 @@ def test_plan_color_validation_and_contrast():
     assert plan_pill_style('invalid') == 'background-color:#16734a;color:#ffffff'
 
 
-def test_limit_preserves_subscription_and_logout_retains_plan(worker_services, monkeypatch):
+def test_limit_excludes_cost_and_logout_retains_plan(worker_services, monkeypatch):
     import codex_gateway.admin as admin
     plan='detected-'+uuid4().hex[:12]
     worker_services['account']['planType']=plan
@@ -108,7 +115,7 @@ def test_limit_preserves_subscription_and_logout_retains_plan(worker_services, m
         result=probe(client,token,worker)
         assert not result['ok'] and result['logged_in']
         mode,kind,row=client.portal.call(snapshot,worker)
-        assert mode=='chatgpt' and kind=='limit' and row['count']==1
+        assert mode=='chatgpt' and kind=='limit' and row['count']==0
         worker_services['account']=None
         probe(client,token,worker)
         mode,kind,row=client.portal.call(snapshot,worker)

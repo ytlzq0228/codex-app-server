@@ -63,7 +63,7 @@ async def test_nonstream_capacity_failover_preserves_pinned_requests(monkeypatch
             if target == first:
                 raise WorkerFailure("full", kind="capacity", code="worker_capacity_exceeded", status=503, safe_to_retry=True)
             return BackendResult(text="ok", thread_id="thread")
-    async def retry(*args):
+    async def retry(*args, **kwargs):
         return second
     monkeypatch.setattr(main, "retry_target", retry)
     args = (ResponseRequest(model="claude-test", input="hi"), Backend(), ApiPrincipal(None, "test"), first)

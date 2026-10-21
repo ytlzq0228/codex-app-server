@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     worker_recovery_interval_seconds: float = 30.0
     worker_failure_cooldown_seconds: int = 300
     worker_limit_cooldown_seconds: int = 1800
+    worker_quota_reserve_percent: float = Field(default=20.0, ge=0, lt=100)
     response_binding_ttl_hours: int = 24  # Legacy setting; ordinary bindings no longer expire.
     execution_resume_enabled: bool = True
     claude_execution_wait_seconds: float = Field(default=5.0, ge=0, le=30)

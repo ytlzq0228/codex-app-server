@@ -68,7 +68,8 @@ async def test_worker_emits_usage_before_tool_and_error(worker, monkeypatch, suc
     if success:
         assert lines[-1]["done"] and lines[-1]["input_tokens"] == 80
     else:
-        assert "TimeoutError" in lines[-1]["error"]
+        assert lines[-1]["code"] == "claude_process_timeout"
+        assert lines[-1]["status"] == 504
 
 
 @pytest.mark.asyncio

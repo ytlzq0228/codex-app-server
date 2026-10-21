@@ -445,6 +445,10 @@ async def remote_stream(url, request, target, settings):
                     data = json.loads(line)
                     if "error" in data:
                         error = data["error"]
+                        from .audit import current_audit
+                        audit = current_audit.get()
+                        if audit is not None and error.get("diagnostic"):
+                            audit["remote_diagnostic"] = error["diagnostic"]
                         if error.get("status"):
                             raise WorkerFailure(error["message"], kind=error.get("kind", "connection"),
                                                 code=error.get("code"), status=error["status"],
@@ -464,7 +468,7 @@ async def remote_stream(url, request, target, settings):
                     raise WorkerFailure("Remote execution ended without a final result")
     except httpx.HTTPError as exc:
         # A timeout/EOF may follow turn/start. Never replay automatically.
-        raise WorkerFailure("Application node connection failed", safe_to_retry=False) from exc
+        raise WorkerFailure("Application node connection failed", safe_to_retry=isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))) from exc
 
 
 async def collect(events):
@@ -518,7 +522,9 @@ async def execute(request: Request):
             yield json.dumps({"error": {"message": str(exc), "code": exc.code}}) + "\n"
         except Exception as exc:
             from .app_server import AppServerCapacityError
+            from .diagnostics import failure_diagnostic
             failure = exc if isinstance(exc, WorkerFailure) else WorkerFailure("Worker execution failed")
             yield json.dumps({"error": {"message": str(failure), "kind": failure.kind,
-                "safe_to_retry": failure.safe_to_retry, "code": failure.code, "status": failure.status, "capacity": isinstance(exc, AppServerCapacityError)}}) + "\n"
+                "safe_to_retry": failure.safe_to_retry, "code": failure.code, "status": failure.status, "capacity": isinstance(exc, AppServerCapacityError),
+                "diagnostic": failure_diagnostic(exc)}}) + "\n"
     return StreamingResponse(events(), media_type="application/x-ndjson")

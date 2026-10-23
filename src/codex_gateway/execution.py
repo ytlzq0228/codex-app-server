@@ -424,6 +424,14 @@ async def _prepare(request, principal, endpoint, audit, *, pending_thread=None, 
             # reinterpret an orphaned tool result as permission to rerun tools.
             items = history_items(request)
             full_history = checkpoint_matches(items, row.history_hashes)
+            if (provider == "claude" and not full_history and not request.tools
+                    and not binding and not request.previous_response_id and not tool_outputs(request)):
+                # A short, tool-free request may be a new CLI helper template.
+                # It cannot prove that the caller intends to replace the main
+                # execution. Answer independently without cancelling its RPC.
+                audit["execution_decision"] = {"action": "auxiliary",
+                    "reason": "unverified_tool_free_context", "tools_disabled": True}
+                return request.model_copy(update={"tools": [], "tool_choice": "none"}), None
             call_id = recovery_call_id(items, len(row.history_hashes or [])) if full_history else None
             if live and call_id and not context_recovery:
                 from .cluster import supersede_tool

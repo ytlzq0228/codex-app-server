@@ -1,6 +1,7 @@
 import hmac
 import os
 import re
+from datetime import datetime, timezone
 
 import docker
 from docker.errors import APIError, NotFound
@@ -107,13 +108,40 @@ def prepare_workspace(name: str, workspace_id: str, authorization: str | None = 
 
 
 @app.delete("/workers/{name}", status_code=204)
-def delete_worker(name: str, authorization: str | None = Header(default=None)) -> None:
+def delete_worker(name: str, authorization: str | None = Header(default=None),
+                  expected_id: str | None = None, stopped_before: datetime | None = None) -> None:
     authorize(authorization)
     container = managed_container(name)
+    if expected_id and container.id != expected_id:
+        raise HTTPException(409, "worker container changed")
+    if stopped_before is not None:
+        from .retention_policy import RETENTION, stopped_since
+        container.reload()
+        stopped = stopped_since(container.attrs)
+        cutoff = min(stopped_before.astimezone(timezone.utc), datetime.now(timezone.utc) - RETENTION)
+        if stopped is None or stopped >= cutoff:
+            raise HTTPException(409, "worker is not stopped for more than seven days")
     try:
-        container.remove(force=True)
+        # Non-forced removal protects a stopped worker restarted after inspection.
+        container.remove(force=stopped_before is None)
     except APIError as exc:
         raise HTTPException(409, "could not remove worker") from exc
+
+
+@app.get("/workers")
+def list_workers(authorization: str | None = Header(default=None)):
+    authorize(authorization)
+    from .retention_policy import stopped_since
+    rows = []
+    for container in client.containers.list(all=True, filters={"label": f"{MANAGED_LABEL}=true"}):
+        try:
+            container.reload()
+        except NotFound:
+            continue
+        stopped = stopped_since(container.attrs)
+        rows.append({"id": container.id, "name": container.name,
+                     "state": container.status, "stopped_since": stopped.isoformat() if stopped else None})
+    return rows
 
 
 @app.get("/infra")

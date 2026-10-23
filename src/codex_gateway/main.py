@@ -121,10 +121,15 @@ async def lifespan(app: FastAPI):
     from .monitoring import monitoring_loop
     monitoring_task = asyncio.create_task(monitoring_loop(), name="monitoring-snapshots")
     from .claude_sessions import session_cleanup_loop
+    from .worker_retention import worker_retention_loop
+    retention_task = asyncio.create_task(worker_retention_loop(), name="worker-retention") if settings.backend != "mock" else None
     cleanup_task = asyncio.create_task(session_cleanup_loop(), name="claude-session-cleanup") if settings.backend != "mock" else None
     from .cluster import heartbeat_loop
     node_task = asyncio.create_task(heartbeat_loop(app.state.backend, settings), name="node-heartbeat") if settings.node_id else None
     yield
+    if retention_task:
+        retention_task.cancel()
+        await asyncio.gather(retention_task, return_exceptions=True)
     notification_task.cancel()
     await asyncio.gather(notification_task, return_exceptions=True)
     if node_task:
@@ -502,6 +507,14 @@ async def pool_routing_signals(session: AsyncSession, key="development"):
     return load["active"], latest.payload if latest else {}, set(load["saturated"])
 
 
+def worker_accepts_request(worker, *, continuation=False):
+    """Limit quarantine stops admission, but does not revoke existing sessions."""
+    return (worker.enabled and worker.endpoint != "removed://worker" and (
+        worker.status in {WorkerStatus.ready, WorkerStatus.busy}
+        or (continuation and worker.status == WorkerStatus.error
+            and getattr(worker, "failure_kind", None) == "limit")))
+
+
 async def choose_target(
     principal: ApiPrincipal,
     session: AsyncSession,
@@ -547,11 +560,11 @@ async def choose_target(
         # only while capacity is available, keeping the load order as fallback.
         # Bound continuations and explicitly pinned keys never take this path.
         candidates.sort(key=lambda worker: str(worker.id) in saturated)
-    candidates = [worker for worker in candidates if (getattr(worker, "provider", None) or "codex") == provider and worker.id not in excluded and worker.enabled and worker.status in {WorkerStatus.ready, WorkerStatus.busy}]
-    # Reserve account capacity for every route, including bound and pinned workers.
+    candidates = [worker for worker in candidates if (getattr(worker, "provider", None) or "codex") == provider and worker.id not in excluded and worker_accepts_request(worker, continuation=binding is not None)]
+    # Reserve capacity for new sessions; existing bindings may continue.
     from .rate_limits import quota_reserve_reached
     usage_by_worker = usage.get("workers", {}) if isinstance(usage, dict) else {}
-    candidates = [worker for worker in candidates if not quota_reserve_reached(
+    candidates = [worker for worker in candidates if binding is not None or not quota_reserve_reached(
         usage_by_worker.get(str(worker.id), {}), settings.worker_quota_reserve_percent)]
     if model and candidates:
         from .model_capabilities import supports_model, upstream_name
@@ -591,11 +604,7 @@ async def validate_pending_worker(backend, target, session):
     invalidated = not worker or worker.endpoint == "removed://worker" or (target.worker_generation is not None and worker.execution_generation != target.worker_generation)
     unavailable = False
     if not invalidated:
-        from .rate_limits import quota_reserve_reached
-        _, usage, _ = await pool_routing_signals(session)
-        unavailable = (not worker.enabled or worker.status not in {WorkerStatus.ready, WorkerStatus.busy}
-                       or quota_reserve_reached(usage.get("workers", {}).get(str(worker.id), {}),
-                                                get_settings().worker_quota_reserve_percent))
+        unavailable = not worker_accepts_request(worker, continuation=True)
     if invalidated or unavailable:
         sessions = getattr(backend, "tool_sessions", None)
         if sessions:

@@ -214,17 +214,16 @@ def test_worker_toggle_does_not_hold_row_while_waiting_for_quota(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_pending_tool_cannot_bypass_quota_reserve(monkeypatch):
+async def test_pending_tool_survives_quota_reserve(monkeypatch):
     from codex_gateway.client_tools import ToolProtocolError
     target = BackendTarget('key:worker', 'http://worker', '/workspace', uuid4(), 1)
     worker = SimpleNamespace(endpoint=target.endpoint, execution_generation=1, enabled=True, status='ready', id=target.worker_id)
     sessions = SimpleNamespace(runs=[SimpleNamespace(target=target, thread_id='thread')], cancel_thread=AsyncMock())
     monkeypatch.setattr(main, 'pool_routing_signals', AsyncMock(return_value=({}, {
         'workers': {str(worker.id): {'week_used': 80}}}, set())))
-    with pytest.raises(ToolProtocolError) as caught:
-        await main.validate_pending_worker(SimpleNamespace(tool_sessions=sessions), target, SimpleNamespace(get=AsyncMock(return_value=worker)))
-    assert caught.value.code == 'tool_worker_unavailable'
-    sessions.cancel_thread.assert_awaited_once_with('key', 'thread')
+    await main.validate_pending_worker(SimpleNamespace(tool_sessions=sessions), target, SimpleNamespace(get=AsyncMock(return_value=worker)))
+    sessions.cancel_thread.assert_not_awaited()
+
 
 
 @pytest.mark.asyncio

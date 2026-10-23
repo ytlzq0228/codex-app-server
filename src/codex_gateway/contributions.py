@@ -56,6 +56,10 @@ async def update_account(worker, account, *, force_invalidate=False):
         worker.failure_kind = None
     worker.provider_project = account.get("project") if account else None
     worker.auth_mode = account.get("type") if account else None
+    if worker.auth_mode:
+        worker.logged_out_since = None
+    elif worker.logged_out_since is None:
+        worker.logged_out_since = datetime.now(timezone.utc)
     worker.plan_type = account.get("planType") if account else None
     worker.account_email = account.get("email") if account else None
     worker.account_checked_at = datetime.now(timezone.utc)

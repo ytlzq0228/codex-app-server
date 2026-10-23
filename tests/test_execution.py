@@ -16,7 +16,7 @@ from codex_gateway.audit import current_audit
 from codex_gateway.backend import BackendTarget, AppServerBackend
 from codex_gateway.database import SessionLocal
 from codex_gateway.main import app
-from codex_gateway.models import ApiKey, ExecutionSession, ResponseBinding, UsageRecord, Worker
+from codex_gateway.models import ApiKey, ExecutionSession, ResponseBinding, UsageRecord, Worker, WorkerStatus
 from codex_gateway.schemas import ResponseRequest, BackendResult
 
 
@@ -408,7 +408,9 @@ def test_explicit_delta_does_not_become_full_history_checkpoint():
         async with SessionLocal() as db:
             key=ApiKey(name='explicit-test',prefix=uuid4().hex[:20],key_hash=uuid4().hex*2)
             db.add(key);await db.commit()
-            worker=await db.scalar(select(Worker).where(Worker.name=='worker-1'))
+            worker=Worker(name='explicit-'+uuid4().hex,container_name='explicit-'+uuid4().hex,
+                endpoint='ws://worker.example.com:4500',status=WorkerStatus.ready)
+            db.add(worker);await db.flush()
             binding=ResponseBinding(response_id='resp_'+uuid4().hex,api_key_id=key.id,worker_id=worker.id,
                 thread_id='explicit-'+uuid4().hex,expires_at=ex.now()+timedelta(hours=1))
             db.add(binding);await db.commit()

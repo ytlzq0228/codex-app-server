@@ -30,7 +30,6 @@ from .subscriptions import DEFAULT_PLAN_COLOR, plan_pill_style
 from .user_auth import issue_session, require_user, digest
 from .login_throttle import clear as clear_login_failures, guard as guard_login, record_failure, scopes as login_scopes
 from .security import generate_api_key, hash_api_key, hash_password, verify_password
-from .worker_names import archived_worker_name
 
 auth_router = APIRouter(prefix="/auth", tags=["auth"])
 user_router = APIRouter(prefix="/user", tags=["user-auth"])
@@ -480,17 +479,8 @@ async def delete_worker(request: Request, worker_id: UUID, csrf_token: str = For
             manager_message = "Worker manager could not remove the container"
         raise HTTPException(502, manager_message)
     container_was_missing = response.status_code == 404
-    from .binding_lifecycle import invalidate_bindings
-    worker.execution_generation = (worker.execution_generation or 0) + 1
-    await invalidate_bindings(session, worker_id=worker.id, reason="worker_deleted")
-    worker.enabled = False
-    worker.status = WorkerStatus.offline
-    worker.endpoint = "removed://worker"
-    names = set((await session.scalars(select(Worker.name).where(Worker.id != worker.id))).all())
-    container_names = set((await session.scalars(select(Worker.container_name).where(Worker.id != worker.id))).all())
-    worker.name = archived_worker_name(worker.name, worker.id, names)
-    worker.container_name = archived_worker_name(worker.container_name, worker.id, container_names)
-    await reconcile_worker(session, worker)
+    from .worker_retention import archive_worker
+    await archive_worker(session, worker)
     await session.commit()
     message = (
         t('{v0} 的容器已经不存在；活动记录已清理，历史记录仍保留用于审计。', v0=f'{original_name}')

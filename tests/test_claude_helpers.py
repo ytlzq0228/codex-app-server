@@ -22,6 +22,66 @@ from codex_gateway.schemas import ResponseRequest
 TEMPLATES = json.loads((Path(__file__).parent / 'fixtures/claude_helpers_2_1_287.json').read_text())
 HEADERS = {'user-agent': ['claude-cli/2.1.287 (external, cli)'], 'x-app': ['cli']}
 TOOLS = [{'type': 'function', 'name': 'lookup', 'parameters': {'type': 'object'}}]
+STATUS_CLASSIFIER = json.loads((Path(__file__).parent / 'fixtures/claude_helpers_2_1_307.json').read_text())['status_classifier']
+
+
+@pytest.mark.parametrize('app_header', ['cli', 'cli-bg'])
+def test_307_status_classifier(app_header):
+    headers = {'user-agent': ['claude-cli/2.1.307 (external, cli)'], 'x-app': [app_header]}
+    params = {'input': [{'role': 'user', 'content': 'Current state: working'}],
+              'instructions': 'x-anthropic-billing-header: cc_version=2.1.307.13a; cc_entrypoint=cli;\n' + STATUS_CLASSIFIER}
+    assert auxiliary_kind(params, headers) == 'status_classifier'
+    for changes in ({'tools': TOOLS}, {'previous_response_id': 'thread'},
+                    {'instructions': params['instructions'] + 'changed'},
+                    {'input': [{'type': 'function_call_output', 'call_id': 'pending', 'output': 'ok'}]}):
+        assert auxiliary_kind(params | changes, headers) is None
+
+
+@pytest.mark.parametrize('recognized', [True, False])
+def test_307_helper_preserves_live_pending_call(monkeypatch, recognized):
+    monkeypatch.setitem(HEADERS, 'user-agent', ['claude-cli/2.1.307 (external, cli)'])
+    monkeypatch.setitem(HEADERS, 'x-app', ['cli-bg'])
+    async def run():
+        from test_tool_recovery import setup_waiting, call
+        monkeypatch.setattr(get_settings(), 'model_providers', 'claude-recovery:claude')
+        principal, worker, target, first, follow, cid, original_id, thread, sessions = await setup_waiting(False)
+        await sessions.close()
+        from codex_gateway.tool_sessions import ToolSessions
+        from codex_gateway.schemas import BackendStreamEvent
+        received = []
+        async def events(request, target, run):
+            await sessions.await_result(run, call())
+            yield BackendStreamEvent(tool_call=call(), thread_id=thread)
+            received.append(await sessions.receive_result(run))
+            yield BackendStreamEvent(done=True, thread_id=thread)
+        sessions = ToolSessions(events)
+        await anext(sessions.stream(first, target))
+        helper = first.model_copy(update={'tools': [], 'input': [{'role':'user', 'content':'Current state: working'}],
+            'instructions': STATUS_CLASSIFIER + ('' if recognized else '\nNew version instructions')})
+        from test_execution import audit_for
+        a = audit_for(helper, cid)
+        a['transport']['headers'].extend([{'name': k, 'value': v[0]} for k, v in HEADERS.items()])
+        try:
+            async with SessionLocal() as db:
+                row = await db.get(ExecutionSession, original_id)
+                before = (row.state, row.thread_id, row.history_hashes, row.response_id, row.lease_token)
+            prepared, binding = await ex.prepare(helper, principal, 'responses', a, tool_sessions=sessions)
+            assert prepared.tools == [] and prepared.tool_choice == 'none' and binding is None
+            assert 'execution' not in a
+            assert a['execution_decision']['reason'] == ('status_classifier' if recognized else 'unverified_tool_free_context')
+            assert sessions.has_pending(principal.key_id, thread)
+            result = first.model_copy(update={'input': [{'type':'function_call_output', 'call_id':call()['call_id'], 'output':'ok'}]})
+            assert sessions.find(result, principal.key_id) is not None
+            async with SessionLocal() as db:
+                row = await db.get(ExecutionSession, original_id)
+                assert (row.state, row.thread_id, row.history_hashes, row.response_id, row.lease_token) == before
+            resumed = [event async for event in sessions.stream(result, target)]
+            assert resumed[-1].done and received == ['ok']
+        finally:
+            await ex.cleanup(a)
+            await sessions.close()
+    with TestClient(app) as client:
+        client.portal.call(run)
 
 
 @pytest.mark.parametrize("version,kind,expected", [
@@ -156,11 +216,12 @@ def test_bounded_wait_rechecks_state_and_cleans_up(monkeypatch, mode):
                     await task
             elif mode in {'release', 'waiting_tool'}:
                 prepared, binding = await task
-                assert b['execution_decision']['action'] == 'new_thread'
+                assert b['execution_decision']['action'] == ('auxiliary' if mode == 'waiting_tool' else 'new_thread')
                 assert b['execution_decision']['wait_ms'] > 0
                 if mode == 'waiting_tool':
                     assert prepared.tool_choice == 'none'
-                    assert b['execution_decision']['reason'] == 'context_only_recovery'
+                    assert b['execution_decision']['reason'] == 'unverified_tool_free_context'
+                    assert 'execution' not in b
             else:
                 with pytest.raises(HTTPException) as error:
                     await task

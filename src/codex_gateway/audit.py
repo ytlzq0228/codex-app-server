@@ -26,13 +26,19 @@ class RequestAuditMiddleware:
         if scope["type"] != "http" or scope["method"] != "POST" or scope["path"] not in {"/v1/responses", "/v1/chat/completions"}:
             return await self.app(scope, receive, send)
         audit = {"body": bytearray(), "saved": False, "principal": None, "status": 500, "complete": False}
+        audit["request_id"] = scope.get("state", {}).get("request_id")
         audit.update(transport=capture_transport(scope), body_bytes_received=0,
                      body_hash=hashlib.sha256(), body_complete=False)
         token = current_audit.set(audit)
         started = time.monotonic()
+        delivery = {"disconnect_observed": False, "body_chunks_sent": 0, "body_bytes_sent": 0}
+        audit["delivery"] = delivery
 
         async def observed_receive():
             message = await receive()
+            if message["type"] == "http.disconnect":
+                delivery["disconnect_observed"] = True
+                delivery["disconnect_ms"] = int((time.monotonic()-started)*1000)
             if message["type"] == "http.request":
                 data = message.get("body", b"")
                 audit["body_bytes_received"] += len(data)
@@ -50,14 +56,24 @@ class RequestAuditMiddleware:
             if message["type"] == "http.response.body" and not message.get("more_body", False):
                 audit["complete"] = True
             await send(message)
+            if message["type"] == "http.response.body":
+                delivery["body_chunks_sent"] += 1
+                delivery["body_bytes_sent"] += len(message.get("body", b""))
+                delivery["last_send_ms"] = int((time.monotonic()-started)*1000)
 
         try:
             await self.app(scope, observed_receive, observed_send)
-        except Exception as exc:
-            from .diagnostics import capture_failure
-            capture_failure(exc)
+        except BaseException as exc:
+            delivery["exception"] = type(exc).__name__
+            if isinstance(exc, Exception):
+                from .diagnostics import capture_failure
+                capture_failure(exc)
             raise
         finally:
+            delivery["elapsed_ms"] = int((time.monotonic()-started)*1000)
+            if not audit["complete"] or delivery.get("exception"):
+                logger.warning("Request transport interrupted: %s", json.dumps({
+                    "request_id": audit.get("request_id"), "http_status": audit["status"], **delivery}))
             try:
                 from .execution import cleanup
                 await cleanup(audit)
@@ -87,7 +103,7 @@ class RequestAuditMiddleware:
                                                worker_id=context.get("worker_id"), thread_id=context.get("thread_id"),
                                                model=str(params.get("model", "unknown"))[:120], request_params=params,
                                                logical_conversation_id=logical, conversation_evidence=evidence,
-                                               request_observation=request_observation(audit),
+                                               request_observation={**request_observation(audit), "delivery": delivery},
                                                status_code=audit["status"] if audit["complete"] else 499,
                                                duration_ms=int((time.monotonic()-started)*1000),
                                                error_code=(audit.get("rejection") or {}).get("code", "request_rejected") if audit["complete"] else "request_interrupted",
@@ -120,7 +136,8 @@ async def save_delivery(audit):
         if record:
             record.request_observation = {**(record.request_observation or {}),
                 "response_http_status": audit["status"],
-                "response_transport_complete": audit["complete"]}
+                "response_transport_complete": audit["complete"],
+                "delivery": audit.get("delivery", {})}
             await db.commit()
 
 

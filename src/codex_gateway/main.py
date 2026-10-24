@@ -155,6 +155,8 @@ app = FastAPI(title="Subscription Gateway", version="0.4.0", lifespan=lifespan,
               docs_url=None, redoc_url=None, openapi_url=None)
 from .i18n import LanguageMiddleware, template_context
 app.add_middleware(LanguageMiddleware)
+from .monitoring import MonitoringCompressionMiddleware
+app.add_middleware(MonitoringCompressionMiddleware)
 app.state.templates = Jinja2Templates(directory=PACKAGE_ROOT / "templates", context_processors=[template_context])
 app.state.templates.env.filters.update(money=money, tokens=tokens)
 app.mount("/static", StaticFiles(directory=PACKAGE_ROOT / "static"), name="static")
@@ -385,6 +387,8 @@ async def validation_error_handler(_: Request, exc: RequestValidationError) -> J
 
 @app.exception_handler(HTTPException)
 async def http_error_handler(request: Request, exc: HTTPException):
+    if hasattr(exc, "gateway_diagnostic"):
+        capture_failure(exc)
     if (
         exc.status_code == 403
         and "text/html" in request.headers.get("accept", "").lower()
@@ -419,6 +423,7 @@ async def backend_error_handler(_: Request, exc: Exception) -> JSONResponse:
 
 @app.exception_handler(ToolProtocolError)
 async def tool_protocol_error_handler(_: Request, exc: ToolProtocolError):
+    capture_failure(exc)
     return openai_error(409 if exc.code == "conversation_waiting_tool" else 400, str(exc), exc.code, param="tools")
 
 

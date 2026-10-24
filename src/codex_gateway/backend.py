@@ -254,6 +254,9 @@ class AppServerBackend:
                                                 safe_to_retry=True, code="provider_quota_exhausted", status=429)
                     thread_id = await self._start_thread(app_server, request, workspace)
                     worker_input = request.worker_input()
+                    from .web_search import model_notice
+                    if notice := model_notice(request):
+                        worker_input = [{"type": "text", "text": notice}, *worker_input]
                     if message := input_length_error(worker_input):
                         raise WorkerFailure(message, kind="request", code=INPUT_TOO_LONG_CODE, status=400)
                     turn_params = {

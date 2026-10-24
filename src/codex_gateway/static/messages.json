@@ -3778,5 +3778,17 @@
   "没有匹配的用户": {
     "CN": "没有匹配的用户",
     "EN": "No matching users"
+  },
+  "每 5 分钟采样，包含仍登录的 Worker（含停用及隔离），排除未登录及已删除记录；同一账号的多个 Worker 分别计入。未知套餐按权重 1；读取成功且确认不限额的窗口按用量 0% 计入，读取失败为未知。历史中尚未按 Provider 区分的采样不混入新图表。": {
+    "CN": "每 5 分钟采样，包含仍登录的 Worker（含停用及隔离），排除未登录及已删除记录；同一账号的多个 Worker 分别计入。未知套餐按权重 1；读取成功且确认不限额的窗口按用量 0% 计入，读取失败为未知。历史中尚未按 Provider 区分的采样不混入新图表。",
+    "EN": "Samples every 5 minutes include signed-in Workers, including disabled and isolated Workers, and exclude signed-out and deleted records. Workers sharing an account are counted separately. Unknown plans use weight 1. Confirmed unlimited windows count as 0% usage; failed reads are unknown. Legacy samples without a provider breakdown are excluded."
+  },
+  "范围": {
+    "CN": "范围",
+    "EN": "Range"
+  },
+  "末值 / 峰值": {
+    "CN": "末值 / 峰值",
+    "EN": "Last / peak"
   }
 }

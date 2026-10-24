@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     auto_create_schema: bool = True
     model_name: str = ""  # Legacy environment setting; no longer exposes a model alias.
     upstream_model: str = "gpt-6-sol"
-    allowed_models: str = "gpt-6-sol,gpt-6-astra,gpt-6-luna,gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna,gpt-5.6"
+    allowed_models: str = "gpt-6.1-sol,gpt-6-sol,gpt-6-astra,gpt-6-luna,gpt-5.6-sol,gpt-5.6-terra,gpt-5.6-luna,gpt-5.6"
     gemini_native_model_aliases: str = ""  # Explicit native CLI model aliases
     claude_native_model_aliases: str = ""
     model_providers: str = ""  # Explicit public-model:provider entries

@@ -201,11 +201,15 @@ async def dashboard(request: Request, admin: AdminSession = Depends(require_admi
 
 
 @router.get("/monitoring")
-async def overview_monitoring(days: int = 7, admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
+async def overview_monitoring(days: int = 7, view: str = 'all', since: datetime | None = None, admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
     if days not in (1, 7, 30, 90):
         raise HTTPException(400, t('历史范围应为 1、7、30 或 90 天'))
     from .monitoring import monitoring_data
-    return JSONResponse(await monitoring_data(session, days), headers={"Cache-Control": "no-store"})
+    if view not in ('all', 'summary', 'history'):
+        raise HTTPException(400, 'Invalid monitoring view')
+    if since is not None and since.tzinfo is None:
+        raise HTTPException(400, 'since must include a timezone')
+    return JSONResponse(await monitoring_data(session, days, view, since), headers={"Cache-Control": "no-store"})
 
 
 @data_page(router, "/api-keys", "admin/dashboard.html", "keys")

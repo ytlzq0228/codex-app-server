@@ -87,6 +87,20 @@ def test_snapshots_api_weights_and_history(monkeypatch):
         assert any(r['at'].startswith(now.strftime('%Y-%m-%d')) for r in response.json()['history']['worker_states'])
         assert not any(r['at'].startswith(now.strftime('%Y-%m-%d')) for r in rendered_pages(client, '/admin/monitoring?days=1').json()['history']['worker_states'])
         assert rendered_pages(client, '/admin/monitoring?days=100').status_code == 400
+        summary = client.get('/admin/monitoring?view=summary').json()
+        assert 'history' not in summary and 'states' in summary
+        history = client.get('/admin/monitoring?view=history&days=7', headers={'Accept-Encoding': 'gzip'})
+        assert history.headers['content-encoding'] == 'gzip'
+        data = history.json()
+        assert 'states' not in data and data['intervals']['subscription_usage'] == 1800000
+        import json
+        assert '"workers"' not in json.dumps(data)
+        assert '"weights"' not in json.dumps(summary)
+        delta = client.get('/admin/monitoring', params={'view':'history', 'since':data['server_time']}).json()
+        assert all(r['at'] >= delta['replace_from']['subscription_usage'] for r in delta['history']['subscription_usage'])
+        assert client.get('/admin/monitoring?view=invalid').status_code == 400
+        assert client.get('/admin/monitoring?since=2026-01-01T00:00:00').status_code == 400
+
         plan = 'monitor-' + uuid4().hex
         for weight in ['0', '-1', 'NaN', 'Infinity', '0.0000001', '1000000000']:
             assert client.post('/admin/subscription-plans', data={'csrf_token':token,'name':plan,'monthly_price':'20','weight':weight},headers=AJAX).status_code in (400,422)
@@ -181,3 +195,28 @@ async def test_gemini_monitor_reads_enterprise_quota_and_keeps_errors_unknown(mo
         raise RuntimeError('failed')
     monkeypatch.setattr(backend, 'worker_rpc', fail)
     assert await read_usage(item, asyncio.Semaphore(1)) == (str(item.id), {})
+
+
+def test_history_aggregation_keeps_extrema_and_missing_samples():
+    from codex_gateway.monitoring import aggregate_history
+    at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    def sample(minutes, used):
+        return SimpleNamespace(bucket_at=at+timedelta(minutes=minutes), observed_at=at+timedelta(minutes=minutes),
+            payload={'providers': {'codex': {'windows': {'risk': {'used': used}}}}})
+    rows = aggregate_history([sample(0, 10), sample(5, 100), sample(10, None), sample(60, None)], 1800, 'subscription_usage')
+    assert len(rows) == 2  # No invented point in the missing 00:30 bucket.
+    assert rows[0]['data']['providers']['codex']['windows']['risk'] == {
+        'used': 55, 'min': 10, 'max': 100, 'samples': 2}
+    assert rows[1]['data']['providers']['codex']['windows']['risk']['used'] is None
+    assert rows[0]['data']['providers']['gemini']['windows']['risk']['used'] is None
+
+
+def test_state_aggregation_uses_last_and_keeps_peak():
+    from codex_gateway.monitoring import aggregate_history
+    at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    rows = [SimpleNamespace(bucket_at=at+timedelta(minutes=i*10), observed_at=at+timedelta(minutes=i*10),
+                            payload={'total': 10, 'counts': {'limited': value}})
+            for i, value in enumerate([0, 8, 1])]
+    data = aggregate_history(rows, 1800, 'worker_states')[0]['data']
+    assert data['counts']['limited'] == 1
+    assert data['max_counts']['limited'] == 8

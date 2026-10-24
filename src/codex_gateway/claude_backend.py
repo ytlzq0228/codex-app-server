@@ -153,7 +153,14 @@ class ClaudeAdapter:
                         if data.get("heartbeat"):
                             continue
                         if data.get("error"):
-                            raise WorkerFailure(data["error"], kind=data.get("kind", "connection"), code=data.get("code"), status=data.get("status"), safe_to_retry=data.get("safe_to_retry") is True)
+                            from .diagnostics import annotate_failure, worker_process_context
+                            failure = WorkerFailure(data["error"], kind=data.get("kind", "connection"),
+                                code=data.get("code"), status=data.get("status"),
+                                safe_to_retry=data.get("safe_to_retry") is True)
+                            details = worker_process_context(data.get("diagnostic"))
+                            if details:
+                                annotate_failure(failure, "claude_process", **details)
+                            raise failure
                         thread = data.get("thread_id") or thread
                         if data.get("event") == "usage":
                             yield BackendStreamEvent(thread_id=thread, usage_accounting=accounting,

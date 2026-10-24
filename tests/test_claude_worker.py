@@ -397,3 +397,32 @@ def test_mcp_transport_and_idle_budgets_outlive_gateway_tool_deadline(worker, mo
     assert config["timeout"] > client_bridge.TOOL_TTL * 1000
     assert int(env["MCP_TOOL_TIMEOUT"]) == config["timeout"]
     assert int(env["CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT"]) == config["timeout"]
+
+
+def test_process_diagnostic_excludes_stderr_and_event_payload(worker):
+    from types import SimpleNamespace
+    import json
+    diagnostic = worker.ProcessDiagnostic()
+    diagnostic.observe_stderr(b"private-prompt Bearer secret ECONNRESET")
+    diagnostic.observe_event("stream_event")
+    snapshot = diagnostic.snapshot(SimpleNamespace(returncode=1), True)
+    assert snapshot["stderr_categories"] == ["network"]
+    assert snapshot["event_count"] == 1 and snapshot["last_event"] == "stream_event"
+    assert snapshot["exit_code"] == 1 and snapshot["produced_output"]
+    assert "secret" not in json.dumps(snapshot) and "private-prompt" not in json.dumps(snapshot)
+
+
+def test_process_diagnostic_handles_split_stderr_and_heartbeat(worker, monkeypatch):
+    from types import SimpleNamespace
+    instant = [100.0]
+    monkeypatch.setattr(worker.time, "monotonic", lambda: instant[0])
+    diagnostic = worker.ProcessDiagnostic()
+    diagnostic.observe_stderr(b"ECONN")
+    diagnostic.observe_stderr(b"RESET")
+    diagnostic.observe_event("system")
+    instant[0] += 10
+    diagnostic.observe_event("heartbeat")
+    result = diagnostic.snapshot(SimpleNamespace(returncode=None), False)
+    assert result["last_event_age_ms"] == 0
+    assert result["last_progress_age_ms"] == 10000
+    assert result["stderr_categories"] == ["network"]

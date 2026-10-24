@@ -10,6 +10,7 @@ import asyncio
 import base64
 import codecs
 import json
+import logging
 import os
 import pty
 import re
@@ -439,6 +440,52 @@ async def acquire_turn(ticket, conversation, request=None, *, key=None):
             turn_keys.pop(ticket, None)
 
 
+class ProcessDiagnostic:
+    """Bounded structural evidence. Never emit stderr or event payloads."""
+    def __init__(self):
+        self.started = self.last_event_at = self.last_progress_at = time.monotonic()
+        self.event_count = self.stderr_bytes = 0
+        self.last_event = "none"
+        self.stderr_categories = set()
+        self.stderr_suffix = b""
+
+    def observe_stderr(self, chunk):
+        self.stderr_bytes += len(chunk)
+        text = (self.stderr_suffix + chunk).decode(errors="replace").lower()
+        self.stderr_suffix = chunk[-32:]
+        for name, patterns in {
+            "auth": ("unauthorized", "authentication", "not logged in"),
+            "quota": ("rate limit", "quota", "too many requests"),
+            "network": ("econnreset", "econnrefused", "enotfound", "fetch failed"),
+            "timeout": ("timed out", "timeout"),
+            "memory": ("out of memory", "heap limit"),
+            "session": ("session not found", "no conversation found"),
+            "permission": ("permission denied", "eacces"),
+        }.items():
+            if any(pattern in text for pattern in patterns):
+                self.stderr_categories.add(name)
+
+    def observe_event(self, kind):
+        self.event_count += 1
+        self.last_event_at = time.monotonic()
+        if kind != "heartbeat":
+            self.last_progress_at = self.last_event_at
+        self.last_event = kind if isinstance(kind, str) and kind in {
+            "heartbeat", "client_tool", "system", "rate_limit_event",
+            "stream_event", "result", "assistant", "user"} else "other"
+
+    def snapshot(self, process, produced_output):
+        instant = time.monotonic()
+        return {"exit_code": process.returncode if process else None,
+                "elapsed_ms": int((instant-self.started)*1000),
+                "last_event_age_ms": int((instant-self.last_event_at)*1000),
+                "last_progress_age_ms": int((instant-self.last_progress_at)*1000),
+                "event_count": self.event_count, "last_event": self.last_event,
+                "stderr_bytes": self.stderr_bytes,
+                "stderr_categories": sorted(self.stderr_categories),
+                "produced_output": produced_output}
+
+
 @app.post("/turn", dependencies=[Depends(authorize)])
 async def turn(body: Turn, request: Request = None):
     workspace = Path(body.workspace).resolve()
@@ -455,6 +502,15 @@ async def turn(body: Turn, request: Request = None):
         thread = body.conversation or body.session_id
         hidden_blocks = set()
         usage = TurnUsage()
+        diagnostic = ProcessDiagnostic()
+
+        def failure_line(data):
+            data["diagnostic"] = diagnostic.snapshot(process, produced_output)
+            logging.getLogger(__name__).warning("Claude turn failure: %s", json.dumps({
+                "session_id": body.session_id, "code": data.get("code"),
+                **data["diagnostic"]}))
+            return json.dumps(data) + "\n"
+
         try:
             temporary = tempfile.TemporaryDirectory(prefix="gateway-turn-", dir="/tmp")
             bridge = ToolBridge(body.tools)
@@ -480,6 +536,7 @@ async def turn(body: Turn, request: Request = None):
             async def drain():
                 tail = b""
                 while chunk := await process.stderr.read(8192):
+                    diagnostic.observe_stderr(chunk)
                     tail = (tail + chunk)[-8192:]
                 return tail
             stderr_task = asyncio.create_task(drain())
@@ -493,6 +550,7 @@ async def turn(body: Turn, request: Request = None):
                         yield json.dumps({"event": "usage", "thread_id": thread, **usage.counts()}) + "\n"
                     # Relay events carry a string "event"; CLI stream_event lines nest a dict there.
                     kind = item["event"] if isinstance(item.get("event"), str) else item.get("type")
+                    diagnostic.observe_event(kind)
                     if kind == "heartbeat":
                         yield json.dumps({"heartbeat": True}) + "\n"
                     elif kind == "client_tool":
@@ -537,7 +595,7 @@ async def turn(body: Turn, request: Request = None):
                         if item.get("subtype") != "success" or item.get("is_error"):
                             failure = result_failure(item)
                             failure["safe_to_retry"] = failure["kind"] in {"limit", "logged_out"} and not produced_output
-                            yield json.dumps(failure) + "\n"
+                            yield failure_line(failure)
                             return
                         structured = item.get("structured_output")
                         if body.json_schema is not None:
@@ -559,17 +617,17 @@ async def turn(body: Turn, request: Request = None):
                 await process.wait()
                 tail = await stderr_task
                 kind = error_kind(tail.decode(errors="replace"))
-                yield json.dumps({"error": f"Claude ended without a final result (exit code {process.returncode})",
+                yield failure_line({"error": f"Claude ended without a final result (exit code {process.returncode})",
                                   "kind": kind, "code": "provider_quota_exhausted" if kind == "limit" else "claude_process_incomplete",
                                   "status": 429 if kind == "limit" else 502,
-                                  "safe_to_retry": kind in {"limit", "logged_out"} and not produced_output}) + "\n"
+                                  "safe_to_retry": kind in {"limit", "logged_out"} and not produced_output})
         except asyncio.CancelledError:
             raise
         except TimeoutError:
-            yield json.dumps({"error": "Claude execution timed out", "kind": "connection",
-                              "code": "claude_process_timeout", "status": 504}) + "\n"
+            yield failure_line({"error": "Claude execution timed out", "kind": "connection",
+                                "code": "claude_process_timeout", "status": 504})
         except Exception as exc:
-            yield json.dumps({"error": "Claude execution interrupted or timed out: " + type(exc).__name__, "kind": "connection", "code": "claude_process_interrupted", "status": 502}) + "\n"
+            yield failure_line({"error": "Claude execution interrupted or timed out: " + type(exc).__name__, "kind": "connection", "code": "claude_process_interrupted", "status": 502})
         finally:
             # StreamingResponse cancellation propagates here on client disconnect.
             try:

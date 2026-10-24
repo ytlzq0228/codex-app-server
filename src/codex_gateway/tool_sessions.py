@@ -25,6 +25,7 @@ class ToolRun:
     claimed: bool = False
     thread_id: str | None = None
     delivered_usage: tuple = (0,0,0,0)
+    created_at: float = field(default_factory=time.monotonic)
 
 
 class ToolSessions:
@@ -236,8 +237,27 @@ class ToolSessions:
                                           and item.get("is_error") is True for item in items)
             run.reply.set_result(output)
         else:
-            if len(self.runs)>=self.limit or sum(r.target.connection_key.split(":",1)[0] == key for r in self.runs) >= self.provider_key_limits.get(getattr(target, "provider", None), self.per_key_limit):
-                raise ToolProtocolError('Too many pending client tool sessions; return outstanding tool results and reduce concurrency', 'client_tool_capacity_exceeded')
+            key_runs = [r for r in self.runs if r.target.connection_key.split(":", 1)[0] == key]
+            key_limit = self.provider_key_limits.get(getattr(target, "provider", None), self.per_key_limit)
+            if len(self.runs) >= self.limit or len(key_runs) >= key_limit:
+                from .diagnostics import annotate_failure
+                instant = time.monotonic()
+                raise annotate_failure(ToolProtocolError(
+                    'Too many pending client tool sessions; return outstanding tool results and reduce concurrency',
+                    'client_tool_capacity_exceeded'), "tool_capacity",
+                    scope="global" if len(self.runs) >= self.limit else "key",
+                    global_runs=len(self.runs), global_limit=self.limit,
+                    global_waiting=sum(r.reply is not None and not r.reply.done() for r in self.runs),
+                    global_done=sum(r.task is not None and r.task.done() for r in self.runs),
+                    oldest_global_age_ms=int(max((instant-r.created_at for r in self.runs), default=0)*1000),
+                    key_runs=len(key_runs), key_limit=key_limit,
+                    key_waiting=sum(r.reply is not None and not r.reply.done() for r in key_runs),
+                    key_claimed=sum(r.claimed for r in key_runs),
+                    key_done=sum(r.task is not None and r.task.done() for r in key_runs),
+                    oldest_key_age_ms=int(max((instant-r.created_at for r in key_runs), default=0)*1000),
+                    oldest_key_wait_ms=int(max((instant-r.waiting_since for r in key_runs
+                                               if r.waiting_since is not None and r.reply is not None
+                                               and not r.reply.done()), default=0)*1000))
             run=ToolRun(request,target)
             self.runs.add(run)
             run.task=asyncio.create_task(self.pump(run),name='gateway-client-tool')

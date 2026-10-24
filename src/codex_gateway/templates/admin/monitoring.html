@@ -8,7 +8,7 @@
     <div class="monitor-provider-grid"> {% for provider, label in [('codex', 'Codex'), ('gemini', 'Gemini'), ('claude', 'Claude')] %}
     <section class="monitor-provider" aria-labelledby="monitor-{{ provider }}-title"><h3 id="monitor-{{ provider }}-title">{{ label }}</h3><div id="monitor-usage-{{ provider }}" class="monitor-metrics"></div><div id="monitor-chart-{{ provider }}" class="monitor-chart"></div></section>
     {% endfor %} </div>
-    <p class="muted">{{ t('每小时采样，包含仍登录的 Worker（含停用及隔离），排除未登录及已删除记录；同一账号的多个 Worker 分别计入。未知套餐按权重 1；读取成功且确认不限额的窗口按用量 0% 计入，读取失败为未知。历史中尚未按 Provider 区分的采样不混入新图表。') }}</p>
+    <p class="muted">{{ t('每 5 分钟采样，包含仍登录的 Worker（含停用及隔离），排除未登录及已删除记录；同一账号的多个 Worker 分别计入。未知套餐按权重 1；读取成功且确认不限额的窗口按用量 0% 计入，读取失败为未知。历史中尚未按 Provider 区分的采样不混入新图表。') }}</p>
   </section>
   <section class="panel monitor-health-panel">
     <div class="monitor-health-current"><div class="section-head"><div><p class="eyebrow">{{ t('WORKER HEALTH') }}</p><h2>{{ t('Worker 状态') }}</h2></div></div><div id="monitor-pie" class="monitor-pie-layout"></div><p class="muted">{{ t('分母为未删除的 Worker；停用、排空及无法归类的故障计入其他异常，登录状态沿用最近探测结果。') }}</p></div>

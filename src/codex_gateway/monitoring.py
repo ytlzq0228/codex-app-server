@@ -5,7 +5,7 @@ import logging
 import math
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, text
+from sqlalchemy import select, text, func
 from sqlalchemy.dialects.postgresql import insert
 
 from .app_server import open_app_server
@@ -169,16 +169,99 @@ async def monitoring_loop():
         await asyncio.sleep(60 - now.second)
 
 
-async def monitoring_data(db, days):
+PROVIDERS = ('codex', 'gemini', 'claude')
+WINDOWS = ('risk', 'five_hour', 'week')
+
+
+class MonitoringCompressionMiddleware:
+    """Compress monitoring JSON without touching streaming gateway responses."""
+    def __init__(self, app):
+        from starlette.middleware.gzip import GZipMiddleware
+        self.app = app
+        self.compressed = GZipMiddleware(app, minimum_size=500, compresslevel=5)
+
+    async def __call__(self, scope, receive, send):
+        app = self.compressed if scope['type'] == 'http' and scope['path'] == '/admin/monitoring' else self.app
+        await app(scope, receive, send)
+
+
+def history_interval(days, metric):
+    return {1: 600 if metric == 'worker_states' else 300,
+            7: 1800, 30: 7200, 90: 21600}[days]
+
+
+def bucket_time(at, seconds):
+    return datetime.fromtimestamp(int(at.timestamp()) // seconds * seconds, timezone.utc)
+
+
+def aggregate_history(rows, seconds, metric):
+    buckets = {}
+    for row in rows:
+        at = bucket_time(row.bucket_at, seconds)
+        buckets.setdefault(at, []).append(row)
+    result = []
+    for at, samples in sorted(buckets.items()):
+        last = samples[-1]
+        if metric == 'worker_states':
+            data = dict(last.payload)
+            data['max_counts'] = {key: max(s.payload.get('counts', {}).get(key, 0) for s in samples)
+                                  for key in STATES}
+        else:
+            data = {'providers': {}}
+            for provider in PROVIDERS:
+                windows = {}
+                for key in WINDOWS:
+                    values = [(s.payload.get('providers', {}).get(provider, {}).get('windows') or {}).get(key, {}).get('used')
+                              for s in samples]
+                    valid = [v for v in values if isinstance(v, (int, float)) and math.isfinite(v)]
+                    windows[key] = {'used': sum(valid) / len(valid) if valid else None,
+                                    'min': min(valid) if valid else None,
+                                    'max': max(valid) if valid else None,
+                                    'samples': len(valid)}
+                data['providers'][provider] = {'windows': windows}
+        result.append({'at': at.isoformat(), 'observed_at': last.observed_at.isoformat(),
+                       'samples': len(samples), 'data': data})
+    return result
+
+
+def usage_projection():
+    # Project in PostgreSQL so per-worker routing payloads never reach Python.
+    payload = MetricSnapshot.payload
+    return func.json_build_object('providers', func.json_build_object(*[
+        part for provider in PROVIDERS for part in (
+            provider, func.json_build_object(*[
+                item for key in ('eligible', 'total_weight', 'unknown_plans', 'windows')
+                for item in (key, payload['providers'][provider][key])
+            ]))
+    ]))
+
+
+async def monitoring_data(db, days, view='all', since=None):
     now = datetime.now(timezone.utc)
-    rows = (await db.scalars(select(MetricSnapshot).where(
-        MetricSnapshot.metric.in_(('worker_states', 'subscription_usage')),
-        MetricSnapshot.bucket_at >= now - timedelta(days=days)).order_by(MetricSnapshot.bucket_at))).all()
-    latest = await db.scalar(select(MetricSnapshot).where(MetricSnapshot.metric == 'subscription_usage')
-                             .order_by(MetricSnapshot.bucket_at.desc()).limit(1))
-    def serialize(row):
-        return {'at': row.bucket_at.isoformat(), 'observed_at': row.observed_at.isoformat(), 'data': row.payload}
-    return {'states': state_counts((await db.scalars(select(Worker))).all()), 'labels': {key: t(label) for key, label in STATES.items()},
-            'current_usage': serialize(latest) if latest else None,
-            'history': {metric: [serialize(r) for r in rows if r.metric == metric]
-                        for metric in ('worker_states', 'subscription_usage')}}
+    result = {'server_time': now.isoformat()}
+    if view in ('all', 'summary'):
+        latest = (await db.execute(select(MetricSnapshot.bucket_at, MetricSnapshot.observed_at,
+                                          usage_projection().label('payload'))
+            .where(MetricSnapshot.metric == 'subscription_usage')
+            .order_by(MetricSnapshot.bucket_at.desc()).limit(1))).first()
+        result.update(states=state_counts((await db.scalars(select(Worker))).all()),
+                      labels={key: t(label) for key, label in STATES.items()},
+                      current_usage={'at': latest.bucket_at.isoformat(), 'observed_at': latest.observed_at.isoformat(),
+                                     'data': latest.payload} if latest else None)
+    if view in ('all', 'history'):
+        result['history'], result['intervals'], result['replace_from'] = {}, {}, {}
+        for metric in ('worker_states', 'subscription_usage'):
+            seconds = history_interval(days, metric)
+            start = bucket_time(now - timedelta(days=days), seconds)
+            # Resend the mutable bucket with all its samples, rather than appending it.
+            if since:
+                start = max(start, bucket_time(min(since, now), seconds) - timedelta(seconds=seconds))
+            projection = usage_projection() if metric == 'subscription_usage' else MetricSnapshot.payload
+            rows = (await db.execute(select(MetricSnapshot.bucket_at, MetricSnapshot.observed_at,
+                                             projection.label('payload'))
+                .where(MetricSnapshot.metric == metric, MetricSnapshot.bucket_at >= start,
+                       MetricSnapshot.bucket_at <= now).order_by(MetricSnapshot.bucket_at))).all()
+            result['history'][metric] = aggregate_history(rows, seconds, metric)
+            result['intervals'][metric] = seconds * 1000
+            result['replace_from'][metric] = start.isoformat()
+    return result

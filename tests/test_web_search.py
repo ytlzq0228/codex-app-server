@@ -58,7 +58,8 @@ def test_search_conversion_and_citations():
     assert len(anns)==1 and text[anns[0]["start_index"]:anns[0]["end_index"]]=="[source](https://example.com/a#part)"
 
 @pytest.mark.asyncio
-async def test_real_backend_event_mapping_and_resume_policy():
+@pytest.mark.parametrize("content_types,expected_mode", [(None,"live"), (["text","image"],"live"), (["image"],"disabled")])
+async def test_real_backend_event_mapping_and_resume_policy(content_types,expected_mode):
     backend=AppServerBackend(Settings())
     calls=[]
     class Server:
@@ -77,11 +78,20 @@ async def test_real_backend_event_mapping_and_resume_policy():
         async def lease(self,*args): yield Server(),0
         async def close(self): pass
     backend.pool=Pool()
-    result=await backend.complete(request(),TARGET)
+    tool = {"type": "web_search"}
+    if content_types is not None:
+        tool["search_content_types"] = content_types
+    result=await backend.complete(request(tools=[tool]),TARGET)
     assert len(result.native_items)==1 and not result.tool_calls
     assert result.web_sources[0]["title"]=="Source"
     assert calls[-1] == ("thread/unsubscribe", {"threadId": "thread-a"})
-    assert next(p for m,p in calls if m=="thread/start")["config"]["web_search"]=="live"
+    assert next(p for m,p in calls if m=="thread/start")["config"]["web_search"]==expected_mode
+    sent = next(p for m,p in calls if m=="turn/start")["input"]
+    if content_types and "image" in content_types:
+        assert "Image search is unavailable and has not been performed" in sent[0]["text"]
+        assert ("Text web search is available" if expected_mode == "live" else "Hosted web search is disabled") in sent[0]["text"]
+    else:
+        assert sent == [{"type": "text", "text": "hello"}]
     await backend._start_thread(Server(),request(tools=[],previous_response_id="thread-a"),"/workspace")
     assert calls[-1][1]["config"]["web_search"]=="disabled"
     await backend.close()
@@ -165,5 +175,24 @@ def test_text_search_content_types_has_native_semantics():
     explicit = request(tools=[{"type": "web_search", "search_content_types": ["text"]}])
     assert explicit.unsupported() is None
     assert mode(explicit) == mode(request())
-    for value in (["image"], [], "text", ["text", "image"]):
+    for value in ([], "text", ["video"], None, [{}]):
         assert request(tools=[{"type": "web_search", "search_content_types": value}]).unsupported()
+
+
+def test_image_search_fallback_contract():
+    from codex_gateway.web_search import model_notice
+    mixed = request(tools=[{"type": "web_search", "search_content_types": ["text", "image"]}])
+    assert mixed.unsupported() is None
+    assert configuration(mixed) != configuration(request())
+    cached = mixed.model_copy(update={"tools": [{**mixed.tools[0], "external_web_access": False}]})
+    assert mode(cached) == "cached"
+    disabled = mixed.model_copy(update={"tool_choice": "none"})
+    assert mode(disabled) == "disabled"
+    assert "Hosted web search is disabled" in model_notice(disabled)
+    assert model_notice(request()) is None
+
+
+def test_gpt_61_sol_default_allowlist():
+    settings = Settings(_env_file=None)
+    assert "gpt-6.1-sol" in settings.allowed_models.split(",")
+    assert settings.model_auth_restrictions["gpt-6.1-sol"] == ["chatgpt"]

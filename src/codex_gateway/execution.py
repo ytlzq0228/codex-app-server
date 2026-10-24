@@ -335,10 +335,17 @@ async def prepare(request, principal, endpoint, audit, *, pending_thread=None, b
                 logical = getattr(exc, "execution_logical_id", None)
                 remaining = timeout - (time.monotonic() - started)
                 if not logical or remaining <= 0:
+                    if logical and hasattr(exc, "gateway_diagnostic"):
+                        exc.gateway_diagnostic.update(wait_ms=int((time.monotonic()-started)*1000),
+                                                      attempts=attempts, wait_outcome="deadline")
                     raise
                 if scope is None:
                     scope = (id(asyncio.get_running_loop()), logical)
                     if _waiters.get(scope, 0) >= settings.claude_execution_max_waiters or sum(_waiters.values()) >= 128:
+                        if hasattr(exc, "gateway_diagnostic"):
+                            exc.gateway_diagnostic.update(wait_outcome="queue_full",
+                                conversation_waiters=_waiters.get(scope, 0),
+                                process_waiters=sum(_waiters.values()))
                         scope = None
                         raise
                     _waiters[scope] = _waiters.get(scope, 0) + 1
@@ -401,6 +408,13 @@ async def _prepare(request, principal, endpoint, audit, *, pending_thread=None, 
             raise conflict("Tool recovery checkpoint changed", "client_tool_call_unavailable")
         if row.lease_token and row.lease_until and row.lease_until > instant:
             error = conflict("Another request is executing in this conversation; retry after it completes")
+            from .diagnostics import annotate_failure
+            annotate_failure(error, "conversation_busy", logical_id=logical, state=row.state,
+                             worker_id=str(row.worker_id) if row.worker_id else None,
+                             response_id=row.response_id,
+                             lease_remaining_ms=int((row.lease_until-instant).total_seconds()*1000),
+                             pending_tool=bool(pending_thread),
+                             incoming_tools=len(request.tools or []))
             error.execution_logical_id = logical
             raise error
         if row.state == "invalid" and tool_sessions and row.thread_id:

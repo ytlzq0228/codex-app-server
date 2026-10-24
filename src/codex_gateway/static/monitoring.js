@@ -19,7 +19,7 @@
     const left = 48, right = width - 16, bottom = height - 36;
     const svg = svgNode('svg', {width, height, viewBox:`0 0 ${width} ${height}`, role:'img', 'aria-label': percent ? globalThis.I18n.t("订阅池用量历史折线图") : globalThis.I18n.t("Worker 状态历史折线图")});
     const end = Date.now(), start = end - days * 86400000;
-    const rawMax = Math.max(1, ...rows.map(r => r.data.total || 0));
+    const rawMax = rows.reduce((max, r) => Math.max(max, r.data.total || 0), 1);
     const step = percent ? 25 : Math.max(1, Math.ceil(rawMax/4));
     const max = step*4;
     const x = at => left + (new Date(at).getTime() - start) / (end-start) * (right-left);
@@ -36,16 +36,34 @@
         last=time;
         if(value == null) return;
         points.push(`${x(row.at)},${y(value)}`);
-        const dot=svgNode('circle',{cx:x(row.at),cy:y(value),r:2.5,fill:s.color});
-        dot.append(svgNode('title',{},`${stamp(row.observed_at)} · ${s.label}：${value.toFixed(1)}${percent?'%':globalThis.I18n.t(" 个")}`));svg.append(dot);
       }); flush();
     });
-    target.append(svg);
+    const hover = svgNode('g', {'pointer-events':'none', visibility:'hidden'});
+    const markers = series.map(s => { const dot = svgNode('circle', {r:4, fill:s.color}); hover.append(dot); return dot; });
+    svg.append(hover);
+    const tooltip = el('small', '', 'monitor-tooltip');
+    svg.addEventListener('pointermove', event => {
+      const at = start + (event.offsetX-left)/(right-left)*(end-start);
+      const row = rows.reduce((best, row) => Math.abs(new Date(row.at)-at) < Math.abs(new Date(best.at)-at) ? row : best);
+      hover.setAttribute('visibility', 'visible');
+      const details = series.map((s, i) => {
+        const value = s.value(row.data);
+        markers[i].setAttribute('visibility', value == null ? 'hidden' : 'visible');
+        if (value == null) return '';
+        markers[i].setAttribute('cx', x(row.at)); markers[i].setAttribute('cy', y(value));
+        const range = s.range?.(row.data);
+        return s.label + ': ' + value.toFixed(1) + (percent ? '%' : '') +
+          (range ? ' ' + globalThis.I18n.t(percent ? '范围' : '末值 / 峰值') + ' [' + range.map(v => v.toFixed(1)).join('–') + ']' : '');
+      });
+      tooltip.textContent = stamp(row.at) + ' · ' + details.filter(Boolean).join(' · ');
+    });
+    svg.addEventListener('pointerleave', () => { hover.setAttribute('visibility', 'hidden'); tooltip.textContent=''; });
+    target.append(svg, tooltip);
     if (!rows.some(row => series.some(s => s.value(row.data) != null))) target.append(el('p', globalThis.I18n.t("此范围已有采样，但尚无有效额度数据"), 'monitor-empty'));
   }
   function render(data, days) {
     $('monitor-worker-total').textContent = data.states.total;
-    const series = Object.entries(data.labels).map(([key,label],i) => ({key,label,color:colors[i],value:d=>d.counts[key]}));
+    const series = Object.entries(data.labels).map(([key,label],i) => ({key,label,color:colors[i],value:d=>d.counts[key],range:d=>[d.counts[key],d.max_counts?.[key] ?? d.counts[key]]}));
     const pie = el('div', null, 'monitor-pie'); let angle=0; const stops=[];
     const list=el('ul',null,'monitor-state-list');
     series.forEach(s=>{const count=data.states.counts[s.key], share=data.states.total?count/data.states.total*100:0; stops.push(`${s.color} ${angle}% ${angle+share}%`);angle+=share; const li=el('li'); const dot=el('i',null,'monitor-dot');dot.style.background=s.color;li.append(dot,el('span',s.label),el('strong',`${count} · ${share.toFixed(1)}%`));list.append(li);});
@@ -54,9 +72,9 @@
     const current = data.current_usage;
     for (const provider of ['codex', 'gemini', 'claude']) {
       const target = $('monitor-usage-' + provider), pool = current?.data.providers?.[provider];
-      const usageSeries = [['risk',globalThis.I18n.t("综合风险")],['five_hour',globalThis.I18n.t("5 小时窗口")],['week',globalThis.I18n.t("周窗口")]].map(([key,label],i) => ({key,label,color:['#e35b5b','#168aad','#8462cf'][i],value:d=>d.providers?.[provider]?.windows[key]?.used ?? null}));
+      const usageSeries = [['risk',globalThis.I18n.t("综合风险")],['five_hour',globalThis.I18n.t("5 小时窗口")],['week',globalThis.I18n.t("周窗口")]].map(([key,label],i) => ({key,label,color:['#e35b5b','#168aad','#8462cf'][i],value:d=>d.providers?.[provider]?.windows?.[key]?.used ?? null,range:d=>{const w=d.providers?.[provider]?.windows?.[key];return w?.min != null ? [w.min,w.max] : null;}}));
       target.replaceChildren();
-      if (pool) {
+      if (pool?.windows) {
         usageSeries.forEach(s => {
           const w = pool.windows[s.key], article = el('article'), bar = el('div', null, 'monitor-progress');
           bar.setAttribute('role', 'progressbar'); bar.setAttribute('aria-label', provider + ' ' + s.label);
@@ -73,15 +91,61 @@
         const stale = Date.now()-new Date(current.observed_at).getTime() > 2*3600000;
         target.append(el('small', globalThis.I18n.t("{v0}采样：{v1} · 未知套餐 {v2} 个 Worker", undefined, {v0:stale ? globalThis.I18n.t("数据已过期 · ") : '',v1:stamp(current.observed_at),v2:pool.unknown_plans})));
       } else target.append(el('p', globalThis.I18n.t("等待首次按 Provider 采样")));
-      chart($('monitor-chart-' + provider), data.history.subscription_usage, usageSeries, 3600000, true, days);
+      if (data.history) chart($('monitor-chart-' + provider), data.history.subscription_usage, usageSeries, data.intervals.subscription_usage, true, days);
     }
-    chart($('monitor-state-chart'),data.history.worker_states,series,600000,false,days);
+    if (data.history) chart($('monitor-state-chart'),data.history.worker_states,series,data.intervals.worker_states,false,days);
   }
-  let generation=0, latest=null, latestDays=7;
-  async function load(){const version=++generation, days=Number($('monitor-days').value);$('monitor-status').textContent=globalThis.I18n.t("正在读取监控数据…");try{const response=await fetch(`/admin/monitoring?days=${days}`,{headers:{Accept:'application/json'}});if(!response.ok)throw Error();const data=await response.json();if(version!==generation)return;latest=data;latestDays=days;render(data,days);$('monitor-status').textContent=globalThis.I18n.t("状态更新于 {v0}", undefined, {v0:new Date().toLocaleTimeString(globalThis.I18n.locale)});}catch{if(version===generation)$('monitor-status').textContent=globalThis.I18n.t("监控读取失败，将自动重试");}}
+  let generation=0, latest=null, latestDays=7, cursor=null, controller=null, timer;
+  function redraw() { if (latest?.states) render(latest, latestDays); }
+  async function load(reset=false) {
+    clearTimeout(timer);
+    controller?.abort();
+    if (document.hidden) return;
+    const version=++generation, days=Number($('monitor-days').value);
+    controller=new AbortController();
+    const signal=controller.signal;
+    if (reset || days!==latestDays) {
+      latest=null; cursor=null; latestDays=days;
+      for (const id of ['monitor-state-chart', ...['codex','gemini','claude'].map(p=>'monitor-chart-'+p)]) $(id).replaceChildren();
+    }
+    $('monitor-status').textContent=globalThis.I18n.t("正在读取监控数据…");
+    const request = async view => {
+      const query = new URLSearchParams({days,view});
+      if (view==='history' && cursor) query.set('since',cursor);
+      const response=await fetch('/admin/monitoring?'+query,{headers:{Accept:'application/json'},signal:AbortSignal.any([signal,AbortSignal.timeout(45000)])});
+      if (!response.ok) throw Error();
+      const data=await response.json();
+      if (version!==generation || signal.aborted) return;
+      latest ||= {};
+      if (view==='summary') Object.assign(latest,data);
+      else {
+        const merged={};
+        for (const metric of ['worker_states','subscription_usage']) {
+          const interval=data.intervals[metric];
+          const cutoff=Math.floor((new Date(data.server_time).getTime()-days*86400000)/interval)*interval;
+          merged[metric]=[...(latest.history?.[metric] || []).filter(r =>
+            new Date(r.at).getTime()>=cutoff && r.at<data.replace_from[metric]),...data.history[metric]];
+        }
+        Object.assign(latest,{history:merged,intervals:data.intervals});
+        cursor=data.server_time;
+      }
+      redraw();
+    };
+    const results=await Promise.allSettled([request('summary'),request('history')]);
+    if (version!==generation || signal.aborted) return;
+    $('monitor-status').textContent=results.some(r=>r.status==='rejected') ?
+      globalThis.I18n.t("监控读取失败，将自动重试") :
+      globalThis.I18n.t("状态更新于 {v0}", undefined, {v0:new Date().toLocaleTimeString(globalThis.I18n.locale)});
+    timer=setTimeout(()=>load(),60000);
+  }
   let lastWidth = 0, resizeFrame;
-  new ResizeObserver(entries => { const width = entries[0].contentRect.width; if (Math.abs(width-lastWidth)<1) return; lastWidth=width; cancelAnimationFrame(resizeFrame); resizeFrame=requestAnimationFrame(() => { if(latest) render(latest,latestDays); }); }).observe($('monitoring'));
-  $('monitor-days').addEventListener('change',load);load();setInterval(load,60000);
+  new ResizeObserver(entries => { const width = entries[0].contentRect.width; if (Math.abs(width-lastWidth)<1) return; lastWidth=width; cancelAnimationFrame(resizeFrame); resizeFrame=requestAnimationFrame(() => { redraw(); }); }).observe($('monitoring'));
+  $('monitor-days').addEventListener('change',()=>load(true));
+  document.addEventListener('visibilitychange',()=>{
+    if (document.hidden) { clearTimeout(timer); controller?.abort(); }
+    else load();
+  });
+  load();
 })();
 
 })();

@@ -17,8 +17,10 @@ def configuration(request):
             raise ToolProtocolError('Unsupported web_search option: ' + sorted(unknown)[0])
         if 'external_web_access' in tool and not isinstance(tool['external_web_access'], bool):
             raise ToolProtocolError('web_search.external_web_access must be a boolean')
-        if tool.get('search_content_types', ['text']) != ['text']:
-            raise ToolProtocolError("Image search is not supported by this gateway transport; set web_search.search_content_types to ['text'] or omit it to use text search. Image search has not been performed.")
+        content_types = tool.get('search_content_types', ['text'])
+        if (not isinstance(content_types, list) or not content_types
+                or any(value not in ('text', 'image') for value in content_types)):
+            raise ToolProtocolError("web_search.search_content_types must be a non-empty list containing text or image")
         declarations.append(tool)
     if len(declarations) > 1:
         raise ToolProtocolError('Declare web_search at most once')
@@ -26,8 +28,25 @@ def configuration(request):
         return None
     if request.max_tool_calls is not None:
         raise ToolProtocolError('max_tool_calls is not supported with web_search')
-    return {'mode': 'disabled' if request.tool_choice == 'none' else
-            'live' if declarations[0].get('external_web_access', True) else 'cached'}
+    tool = declarations[0]
+    content_types = tool.get('search_content_types', ['text'])
+    config = {'mode': 'disabled' if request.tool_choice == 'none' or 'text' not in content_types else
+              'live' if tool.get('external_web_access', True) else 'cached'}
+    if 'image' in content_types:
+        config['image_search_unavailable'] = True
+    return config
+
+
+def model_notice(request):
+    config = configuration(request) or {}
+    if not config.get('image_search_unavailable'):
+        return None
+    fallback = ('Text web search is available; use text queries to find relevant web pages instead.'
+                if config['mode'] != 'disabled' else
+                'Hosted web search is disabled for this request; use other available search tools if appropriate.')
+    return ('Gateway capability notice: Image search is unavailable and has not been performed. '
+            + fallback + ' Do not claim to have searched images. If no suitable tool is available, '
+            'explain this limitation to the user rather than inventing search results.')
 
 
 def mode(request):

@@ -245,14 +245,31 @@ def cancellation_operation(request, action, payload):
 
 async def request_cancellation(url, action, payload, settings):
     import time
+    from .diagnostics import annotate_failure
+    started = time.monotonic()
+    progress = {"attempts": 0, "phase": "connect"}
+    try:
+        return await _request_cancellation(url, action, payload, settings, progress)
+    except HTTPException as exc:
+        raise annotate_failure(exc, "tool_cancellation", action=action,
+            operation_id=cancellation_id(action, payload),
+            elapsed_ms=int((time.monotonic()-started)*1000), **progress)
+
+
+async def _request_cancellation(url, action, payload, settings, progress):
+    import time
     operation = cancellation_id(action, payload)
     payload = {**payload, "operation_id": operation}
     deadline = time.monotonic() + 8
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(3, connect=2)) as client:
             while True:
+                progress["attempts"] += 1
+                progress["phase"] = "poll" if payload.get("status_only") else "submit"
                 response = await client.post(url + "/internal/tools/" + action, json=payload,
                     headers={"Authorization": "Bearer " + settings.manager_token.get_secret_value()})
+                progress["http_status"] = response.status_code
+                progress["phase"] = "acknowledgement"
                 data = response.json()
                 if response.status_code in {400, 409, 422}:
                     error = data.get("error") if isinstance(data, dict) else None
@@ -297,7 +314,10 @@ async def supersede_tool(db, row, body, sessions):
         AppNode.id == route.node_id, AppNode.enabled.is_(True),
         AppNode.heartbeat_at > cutoff(settings)))
     if not node:
-        raise HTTPException(503, "Pending tool owner is unavailable")
+        from .diagnostics import annotate_failure
+        raise annotate_failure(HTTPException(503, "Pending tool owner is unavailable"),
+                               "tool_owner_unavailable", phase="supersede",
+                               owner_node=route.node_id, logical_id=row.logical_id)
     payload = {"logical_id": row.logical_id, "key_id": str(row.api_key_id),
                "response_id": row.response_id, "request": body.model_dump(mode="json")}
     confirmed = await request_cancellation(node.gateway_url, "supersede", payload, settings)
@@ -371,7 +391,10 @@ async def abandon_tool(db, row, sessions):
             AppNode.id == owner, AppNode.enabled.is_(True),
             AppNode.heartbeat_at > cutoff(settings)))
         if not node:
-            raise HTTPException(503, "Pending tool owner is unavailable")
+            from .diagnostics import annotate_failure
+            raise annotate_failure(HTTPException(503, "Pending tool owner is unavailable"),
+                                   "tool_owner_unavailable", phase="abandon",
+                                   owner_node=owner, logical_id=row.logical_id)
         if not await request_cancellation(node.gateway_url, "abandon", payload, settings):
             return False
     for route in routes:
@@ -519,7 +542,9 @@ async def execute(request: Request):
                 async for event in stream:
                     yield event.model_dump_json() + "\n"
         except ToolProtocolError as exc:
-            yield json.dumps({"error": {"message": str(exc), "code": exc.code}}) + "\n"
+            from .diagnostics import failure_diagnostic
+            yield json.dumps({"error": {"message": str(exc), "code": exc.code,
+                                       "diagnostic": failure_diagnostic(exc)}}) + "\n"
         except Exception as exc:
             from .app_server import AppServerCapacityError
             from .diagnostics import failure_diagnostic

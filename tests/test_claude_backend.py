@@ -353,3 +353,24 @@ async def test_lost_worker_tool_result_is_protocol_error_without_replay(backend,
         assert closed.is_set()
     finally:
         await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_worker_process_diagnostic_survives_backend_failure(backend, monkeypatch):
+    from codex_gateway.diagnostics import failure_diagnostic
+    async def handler(request):
+        return httpx.Response(200, text=json.dumps({
+            "error": "Claude ended without final result", "code": "claude_process_incomplete",
+            "kind": "connection", "status": 502,
+            "diagnostic": {"exit_code": 1, "event_count": 3, "last_event": "system",
+                           "stderr_categories": ["network"], "stderr": "secret"}}) + "\n")
+    transport(monkeypatch, handler)
+    try:
+        with pytest.raises(WorkerFailure) as caught:
+            await backend.complete(ResponseRequest(model="claude-test", input="hi"), TARGET)
+        result = failure_diagnostic(caught.value)
+        assert result["context"][0]["exit_code"] == 1
+        assert result["context"][0]["stderr_categories"] == ["network"]
+        assert "secret" not in json.dumps(result)
+    finally:
+        await backend.close()

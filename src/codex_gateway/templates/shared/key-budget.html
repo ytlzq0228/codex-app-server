@@ -3,3 +3,7 @@
   <div class="usage-meter"><progress max="100" value="{{ budget.percent }}" class="{{ 'usage-danger' if budget.exhausted else ('usage-warn' if budget.percent >= 80 else '') }}" aria-label="{{ t('本月用量（USD）') }}"></progress><span class="usage-caption"><span>${{ budget.used }} / ${{ budget.limit }}</span></span></div>
   <small>{{ t('已达限额') if budget.exhausted else t('UTC 自然月') }}</small>
 </div>
+
+{% if not key.enabled or key.admin_disabled %}
+<small>{{ t('停用原因') }}：{{ t({'auto_quota': '额度不足自动暂停', 'manual_user': '用户手动停用', 'manual_admin': '管理员手动停用', 'deleted': '已删除', 'owner_deleted': '所属用户已删除'}[key.disabled_reason] or '历史停用（原因未知）') }}</small>
+{% endif %}

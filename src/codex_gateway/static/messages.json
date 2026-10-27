@@ -3790,5 +3790,29 @@
   "末值 / 峰值": {
     "CN": "末值 / 峰值",
     "EN": "Last / peak"
+  },
+  "停用原因": {
+    "CN": "停用原因",
+    "EN": "Disabled reason"
+  },
+  "额度不足自动暂停": {
+    "CN": "额度不足自动暂停",
+    "EN": "Automatically paused: insufficient key allowance"
+  },
+  "用户手动停用": {
+    "CN": "用户手动停用",
+    "EN": "Manually disabled by user"
+  },
+  "管理员手动停用": {
+    "CN": "管理员手动停用",
+    "EN": "Manually disabled by administrator"
+  },
+  "所属用户已删除": {
+    "CN": "所属用户已删除",
+    "EN": "Owner deleted"
+  },
+  "历史停用（原因未知）": {
+    "CN": "历史停用（原因未知）",
+    "EN": "Previously disabled (reason unknown)"
   }
 }

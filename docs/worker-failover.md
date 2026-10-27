@@ -13,9 +13,10 @@ requests can also rebuild when their full history matches the execution checkpoi
 Delta-only requests do not contain enough context to reconstruct a lost thread.
 Pinned keys remain restricted to their configured Worker.
 
-Safe failures exclude each failed Worker for the rest of the request. Quota
-failures put the account into cooldown immediately; a successful inference probe
-does not override that failure. The gateway does not replay a turn after model
+Safe failures exclude each failed Worker for the rest of the request. Worker
+failures immediately quarantine the Worker and apply the appropriate cooldown,
+without waiting for an inference probe. Background probes restore availability
+only after a successful check. The gateway does not replay a turn after model
 content, tool requests, or other execution effects have been observed. A pending
 tool result belongs to its original execution: if that Worker becomes unavailable,
 send a new user turn with history and confirmed tool results. Never repeat an
@@ -39,3 +40,20 @@ the request, not retrying another Worker. Build gateway images with
 `--build-arg CODEX_GATEWAY_RELEASE=<release-id>` so diagnostics identify the release.
 Cross-node diagnostics retain source exception types and stack locations without
 exception messages or local variables.
+
+
+Automatic recovery uses the same inference check as manual probes. Codex checks
+do not force a token refresh. Background account refresh failures still withdraw
+contribution credit immediately; successful recovery restores eligible Keys.
+Recovery commits each Worker independently and logs failed checks. Sweeps wait
+30 seconds by default between runs and honor each Worker cooldown. Busy recovery
+probes leave the Worker isolated for a later attempt. Probes have a
+60-second total deadline (CODEX_GATEWAY_WORKER_PROBE_TIMEOUT_SECONDS).
+
+Keys record their last disabled_reason and disabled_at. Quota enforcement records
+auto_quota; manual user/admin stops, deletion and owner deletion have distinct
+reasons. A healthy Worker reconciliation restores only auto_quota keys, within
+the owner's current allowance, preferring recently used keys. Disabled users,
+admin-disabled keys, deleted keys and legacy keys without a known reason are
+excluded. Automatic pauses/restorations are audited. Existing unknown stop reasons
+are never inferred or backfilled as automatic pauses.

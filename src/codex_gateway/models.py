@@ -165,6 +165,8 @@ class ApiKey(Base):
     __tablename__ = "api_keys"
     key_type: Mapped[str] = mapped_column(String(32), default="general_user_key", server_default="general_user_key", index=True)
     provider_grants: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
+    disabled_reason: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     admin_disabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     monthly_limit_usd: Mapped[Decimal] = mapped_column(Numeric(14, 2), nullable=False, default=default_key_monthly_limit, server_default="3000")
     id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True, default=uuid4)

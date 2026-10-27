@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     manager_url: str = "http://worker-manager:4600"
     manager_token: SecretStr = SecretStr("development-manager-token-change-me")
     max_request_bytes: int = 20_971_520
+    worker_probe_timeout_seconds: float = 60.0
     worker_recovery_interval_seconds: float = 30.0
     worker_failure_cooldown_seconds: int = 300
     worker_limit_cooldown_seconds: int = 1800

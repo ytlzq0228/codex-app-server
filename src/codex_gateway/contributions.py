@@ -240,7 +240,7 @@ async def refresh_worker_account(worker_id):
     settings = get_settings()
     async with SessionLocal() as db:
         await quota_lock(db)
-        worker = await db.scalar(select(Worker).where(Worker.id == worker_id, Worker.enabled.is_(True), Worker.endpoint != "removed://worker").with_for_update(skip_locked=True))
+        worker = await db.scalar(select(Worker).where(Worker.id == worker_id, Worker.enabled.is_(True), Worker.endpoint.not_in(["removed://worker", "provisioning://worker"])).with_for_update(skip_locked=True))
         if not worker:
             return
         if (worker.provider or "codex") in {"gemini", "claude"}:

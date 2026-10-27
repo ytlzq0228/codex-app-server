@@ -7,6 +7,8 @@ from .worker_names import archived_worker_name
 
 async def upgrade(connection):
     await connection.execute(text("ALTER TABLE workers ADD COLUMN IF NOT EXISTS logged_out_since TIMESTAMPTZ"))
+    await connection.execute(text("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS disabled_reason VARCHAR(32)"))
+    await connection.execute(text("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS disabled_at TIMESTAMPTZ"))
     for statement in (
         "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS key_type VARCHAR(32) NOT NULL DEFAULT 'general_user_key'",
         "ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS provider_grants JSON NOT NULL DEFAULT '[]'",

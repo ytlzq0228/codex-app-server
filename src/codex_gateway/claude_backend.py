@@ -281,15 +281,21 @@ async def probe_claude(worker, db, settings, *, inference=True, login_session=No
     from .contributions import update_account
     from .models import WorkerStatus
     from .quota import reconcile_worker
+    import asyncio
+    # A lightweight account read cannot restore an unavailable worker.
+    inference = inference or worker.status in {WorkerStatus.error, WorkerStatus.offline}
     try:
-        payload = await worker_rpc(worker.endpoint, settings, "/login/verify" if login_session else ("/probe" if inference else "/account"),
+        async with asyncio.timeout(settings.worker_probe_timeout_seconds):
+            payload = await worker_rpc(worker.endpoint, settings, "/login/verify" if login_session else ("/probe" if inference else "/account"),
                                    {"session_id": login_session} if login_session else None)
         account = payload.get("account")
         if not account:
             raise WorkerFailure("Claude account or inference unavailable", kind=payload.get("kind", "logged_out"))
-        await update_account(worker, account)
         if payload.get("available") is False:
             raise WorkerFailure("Claude inference unavailable", kind=payload.get("kind", "connection"))
+        await update_account(worker, account)
+        if worker.status == WorkerStatus.error:
+            worker.recovered_at = datetime.now(timezone.utc)
         worker.status = WorkerStatus.ready
         worker.failure_kind = worker.failure_reason = worker.retry_after = worker.quarantined_at = None
         worker.last_seen_at = datetime.now(timezone.utc)
@@ -298,19 +304,26 @@ async def probe_claude(worker, db, settings, *, inference=True, login_session=No
         if exc.response.status_code == 409:
             return {"ok": False, "busy": True, "logged_in": bool(worker.auth_mode), "message": "Claude 正在执行或登录，请稍后探测"}
         worker.status = WorkerStatus.error
+        worker.quarantined_at = datetime.now(timezone.utc)
+        worker.failure_reason = "Provider inference HTTP error: " + str(exc.response.status_code)
         worker.failure_kind = "connection"
         worker.retry_after = datetime.now(timezone.utc) + timedelta(seconds=settings.worker_failure_cooldown_seconds)
         ok, message = False, "Claude 服务暂时不可用"
     except Exception as exc:
         kind = exc.kind if isinstance(exc, WorkerFailure) else classify_worker_failure(str(exc))
         worker.status = WorkerStatus.error
+        worker.quarantined_at = datetime.now(timezone.utc)
         worker.failure_kind = kind
         if kind == "logged_out":
             await update_account(worker, None)
         worker.failure_reason = ("账号已登录，但未通过 Claude 资格检查，请更换账号或联系管理员。"
-                                 if kind == "ineligible" else "Claude account check failed")
+                                 if kind == "ineligible" else "Claude account check failed (" + type(exc).__name__ + ")")
         worker.retry_after = datetime.now(timezone.utc) + timedelta(seconds=settings.worker_limit_cooldown_seconds if kind == "limit" else settings.worker_failure_cooldown_seconds)
         ok, message = False, (worker.failure_reason if kind == "ineligible" else "Claude 检查失败，请检查登录状态或稍后重试")
+    import logging
+    logging.getLogger(__name__).log(logging.INFO if ok else logging.WARNING,
+        "Worker probe: worker_id=%s ok=%s kind=%s reason=%s",
+        worker.id, ok, worker.failure_kind, worker.failure_reason)
     await reconcile_worker(db, worker)
     await db.commit()
     return {"ok": ok, "logged_in": bool(worker.auth_mode), "message": message}

@@ -311,9 +311,15 @@ async def toggle_key(request: Request, key_id: UUID, csrf_token: str = Form(...)
     if record.key_type == "project_service_key":
         from .service_keys import log_event
         record.admin_disabled = not record.admin_disabled
+        if record.admin_disabled:
+            record.disabled_reason = "manual_admin"
+            record.disabled_at = datetime.now(timezone.utc)
         log_event(session, admin.username, "admin_disabled" if record.admin_disabled else "admin_enabled", key=record)
     else:
         record.enabled = not record.enabled
+        if not record.enabled:
+            from .quota import mark_key_disabled
+            mark_key_disabled(record, "manual_admin")
     await session.commit()
     enabled = record.enabled and not record.admin_disabled
     return result(t('Key 状态已更新'), t('{v0} 已{v1}。', v0=f'{record.name}', v1=t('启用' if enabled else '停用')))
@@ -365,7 +371,8 @@ async def delete_key(request: Request, key_id: UUID, csrf_token: str = Form(...)
     record = await session.scalar(select(ApiKey).where(ApiKey.id == key_id).with_for_update())
     if not record or record.deleted_at:
         raise HTTPException(404, "API key not found")
-    record.enabled = False
+    from .quota import mark_key_disabled
+    mark_key_disabled(record, "deleted")
     record.deleted_at = datetime.now(timezone.utc)
     from .binding_lifecycle import invalidate_bindings
     await invalidate_bindings(session, api_key_id=key_id, reason="key_deleted")
@@ -500,14 +507,16 @@ async def probe_worker_record(worker: Worker, session: AsyncSession, settings: S
         from .provider_accounts import probe_provider
         return await probe_provider(worker, session, settings)
     from .contributions import update_account
+    import asyncio
     try:
-        async with open_app_server(worker.endpoint, settings.app_server_token.get_secret_value(), settings.app_server_timeout_seconds) as app_server:
-            response = await app_server.call("account/read", {"refreshToken": False})
-            account = response.get("account") or {}
-            if not account:
-                raise WorkerFailure("Codex worker is not logged in", kind="logged_out", safe_to_retry=True)
-            await update_account(worker, account)
-            await run_healthcheck_turn(app_server, settings.upstream_model)
+        async with asyncio.timeout(settings.worker_probe_timeout_seconds):
+            async with open_app_server(worker.endpoint, settings.app_server_token.get_secret_value(), min(settings.app_server_timeout_seconds, settings.worker_probe_timeout_seconds)) as app_server:
+                response = await app_server.call("account/read", {"refreshToken": False})
+                account = response.get("account") or {}
+                if not account:
+                    raise WorkerFailure("Codex worker is not logged in", kind="logged_out", safe_to_retry=True)
+                await update_account(worker, account)
+                await run_healthcheck_turn(app_server, settings.upstream_model)
         was_error = worker.status == WorkerStatus.error
         worker.status = WorkerStatus.ready
         worker.auth_mode = account.get("type")
@@ -529,12 +538,16 @@ async def probe_worker_record(worker: Worker, session: AsyncSession, settings: S
         if kind == "logged_out":
             await update_account(worker, None)
         worker.failure_kind = kind
-        worker.failure_reason = str(exc)[:500]
+        worker.failure_reason = (str(exc) or type(exc).__name__)[:500]
         worker.quarantined_at = datetime.now(timezone.utc)
         cooldown = settings.worker_limit_cooldown_seconds if kind == "limit" else settings.worker_failure_cooldown_seconds
         worker.retry_after = datetime.now(timezone.utc) + timedelta(seconds=cooldown)
         ok = False
         logged_in = bool(worker.auth_mode)
+    import logging
+    logging.getLogger(__name__).log(logging.INFO if ok else logging.WARNING,
+        "Worker final probe: worker_id=%s ok=%s kind=%s reason=%s",
+        worker.id, ok, worker.failure_kind, worker.failure_reason)
     await reconcile_worker(session, worker)
     await session.commit()
     return {"title": t('探测完成') if ok else t('探测失败'), "message": message, "ok": ok, "logged_in": logged_in, "auth_mode": worker.auth_mode, "plan_type": worker.plan_type}

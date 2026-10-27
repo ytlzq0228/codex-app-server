@@ -220,7 +220,7 @@ async def invalidate_response_thread(api_key_id, thread_id: str, reason: str) ->
 
 
 async def quarantine_worker(worker_id, reason: str, kind: str = "connection") -> bool:
-    """Cooldown confirmed quota failures; probe uncertain connection failures."""
+    """Stop routing to a failed worker immediately; probe only for recovery."""
     settings = get_settings()
     async with SessionLocal() as session:
         from .quota import quota_lock
@@ -228,96 +228,50 @@ async def quarantine_worker(worker_id, reason: str, kind: str = "connection") ->
         worker = await session.scalar(select(Worker).where(Worker.id == worker_id).execution_options(populate_existing=True))
         if not worker:
             return False
-        if kind == "limit" or ((getattr(worker, "provider", None) or "codex") in {"gemini", "claude"} and kind != "connection"):
-            worker.status = WorkerStatus.error
-            worker.failure_kind = kind
-            worker.failure_reason = reason[:500]
-            worker.quarantined_at = utcnow()
-            worker.retry_after = utcnow() + timedelta(seconds=settings.worker_limit_cooldown_seconds if kind == "limit" else settings.worker_failure_cooldown_seconds)
-            await reconcile_worker(session, worker)
-            await session.commit()
-            return True
-        result = await probe_worker_record(worker, session, settings)
-        if result.get("busy"):
-            return False
-        if result["ok"]:
-            logger.warning(
-                "Worker failure rejected by inference probe: worker_id=%s reported_kind=%s reported_reason=%s",
-                worker_id, kind, reason,
-            )
-            return False
-        logger.warning(
-            "Worker failure confirmed by inference probe: worker_id=%s reported_kind=%s reported_reason=%s final_kind=%s final_reason=%s",
-            worker_id, kind, reason, worker.failure_kind, worker.failure_reason,
-        )
-        return True
-
-
-async def recover_worker(worker: Worker) -> bool:
-    if (getattr(worker, "provider", None) or "codex") in {"gemini", "claude"}:
-        from .provider_accounts import probe_provider
-        from sqlalchemy.ext.asyncio import async_object_session
-        result = await probe_provider(worker, async_object_session(worker), get_settings())
-        if result["ok"]:
-            worker.recovered_at = utcnow()
-        return result["ok"]
-    settings = get_settings()
-    try:
-        async with open_app_server(worker.endpoint, settings.app_server_token.get_secret_value(), min(settings.app_server_timeout_seconds, 20)) as server:
-            response = await server.call("account/read", {"refreshToken": True})
-            account = response.get("account") or {}
-            await update_account(worker, account)
-            if not account:
-                worker.failure_kind = "logged_out"
-                worker.failure_reason = "Codex worker is not logged in"
-                worker.retry_after = utcnow() + timedelta(seconds=settings.worker_failure_cooldown_seconds)
-                return False
-            await run_healthcheck_turn(server, settings.upstream_model)
-        worker.status = WorkerStatus.ready
-        worker.auth_mode = account.get("type")
-        worker.plan_type = account.get("planType")
-        await update_account(worker, account)
-        worker.last_seen_at = utcnow()
-        worker.recovered_at = utcnow()
-        worker.failure_kind = None
-        worker.failure_reason = None
-        worker.quarantined_at = None
-        worker.retry_after = None
-        return True
-    except Exception as exc:
-        kind = exc.kind if isinstance(exc, WorkerFailure) else classify_worker_failure(str(exc))
+        worker.status = WorkerStatus.error
         worker.failure_kind = kind
-        if kind == "logged_out":
-            await update_account(worker, None)
-        worker.failure_reason = str(exc)[:500]
-        cooldown = settings.worker_limit_cooldown_seconds if kind == "limit" else settings.worker_failure_cooldown_seconds
-        worker.retry_after = utcnow() + timedelta(seconds=cooldown)
-        return False
+        worker.failure_reason = reason[:500]
+        worker.quarantined_at = utcnow()
+        worker.retry_after = utcnow() + timedelta(seconds=settings.worker_limit_cooldown_seconds if kind == "limit" else settings.worker_failure_cooldown_seconds)
+        await reconcile_worker(session, worker)
+        await session.commit()
+        logger.warning("Worker quarantined: worker_id=%s kind=%s reason=%s", worker_id, kind, reason)
+        return True
+
+
+async def worker_recovery_once():
+    from .contributions import refresh_worker_account
+    settings = get_settings()
+    async with SessionLocal() as session:
+        await expire_response_bindings(session)
+        query = select(Worker.id).where(
+            Worker.enabled.is_(True),
+            Worker.endpoint.not_in(["removed://worker", "provisioning://worker"]),
+            Worker.status.in_([WorkerStatus.error, WorkerStatus.offline]),
+        )
+        if settings.node_id:
+            query = query.where(Worker.node_id == settings.node_id)
+        ids = list((await session.scalars(query)).all())
+        await session.commit()
+    # Each worker commits independently: one timeout or rollback must not discard
+    # successful recoveries or prevent the remaining workers from being checked.
+    for worker_id in ids:
+        try:
+            await refresh_worker_account(worker_id)
+        except Exception:
+            logger.exception("Worker recovery failed: worker_id=%s", worker_id)
 
 
 async def worker_recovery_loop() -> None:
     settings = get_settings()
     while True:
+        await asyncio.sleep(settings.worker_recovery_interval_seconds)
         try:
-            await asyncio.sleep(settings.worker_recovery_interval_seconds)
-            async with SessionLocal() as session:
-                from .quota import quota_lock
-                await quota_lock(session)
-                await expire_response_bindings(session)
-                workers = (await session.scalars(select(Worker).where(Worker.enabled.is_(True), ((Worker.status == WorkerStatus.error) | ((Worker.provider.in_(["gemini", "claude"])) & (Worker.status == WorkerStatus.offline) & Worker.auth_mode.is_not(None)))).with_for_update(skip_locked=True))).all()
-                if settings.node_id:
-                    workers = [worker for worker in workers if worker.node_id == settings.node_id]
-                now = utcnow()
-                for worker in workers:
-                    if not worker.retry_after or worker.retry_after <= now:
-                        await recover_worker(worker)
-                        await reconcile_worker(session, worker)
-                await session.commit()
+            await worker_recovery_once()
         except asyncio.CancelledError:
             raise
         except Exception:
-            # A failed sweep must not terminate future recovery attempts.
-            continue
+            logger.exception("Worker recovery sweep failed")
 
 
 BEARER_PATHS = ("/v1/", "/v1beta/models/", "/healthz")

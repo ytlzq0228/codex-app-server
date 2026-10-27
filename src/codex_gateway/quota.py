@@ -1,4 +1,5 @@
 """Enabled-key capacity. All quota mutations serialize before reading capacity."""
+from datetime import datetime, timezone
 from .i18n import t
 from sqlalchemy import and_, or_, func, select, text
 from fastapi import HTTPException
@@ -106,6 +107,12 @@ async def quota_summary(db, username):
     return dict(granted=base, contributed=credits, total=base+credits, used=used, available=max(0,base+credits-used))
 
 
+def mark_key_disabled(key, reason):
+    key.enabled = False
+    key.disabled_reason = reason
+    key.disabled_at = datetime.now(timezone.utc)
+
+
 async def enforce_quota(db, username):
     if not username:
         return 0
@@ -118,7 +125,34 @@ async def enforce_quota(db, username):
     keys = (await db.scalars(select(ApiKey).where(ApiKey.owner_username == username, ApiKey.key_type == "general_user_key", ApiKey.enabled.is_(True), ApiKey.deleted_at.is_(None))
         .order_by(ApiKey.last_used_at.asc().nullsfirst(), ApiKey.created_at.asc(), ApiKey.id.asc()).limit(excess).with_for_update())).all()
     for key in keys:
-        key.enabled = False
+        mark_key_disabled(key, "auto_quota")
+        from .models import ServiceKeyEvent
+        db.add(ServiceKeyEvent(key_id=key.id, actor="system", action="auto_paused",
+                               detail={"reason": "auto_quota"}))
+    await db.flush()
+    return len(keys)
+
+
+async def restore_automatic_keys(db, username):
+    """Restore only explicitly automatic pauses, within the current allowance."""
+    await quota_lock(db)
+    user = await db.get(User, username)
+    if not user or not user.enabled:
+        return 0
+    quota = await quota_summary(db, username)
+    if not quota["available"]:
+        return 0
+    keys = (await db.scalars(select(ApiKey).where(
+        ApiKey.owner_username == username, ApiKey.key_type == "general_user_key",
+        ApiKey.enabled.is_(False), ApiKey.admin_disabled.is_(False),
+        ApiKey.deleted_at.is_(None), ApiKey.disabled_reason == "auto_quota",
+    ).order_by(ApiKey.last_used_at.desc().nullslast(), ApiKey.created_at, ApiKey.id)
+      .limit(quota["available"]).with_for_update())).all()
+    from .models import ServiceKeyEvent
+    for key in keys:
+        key.enabled = True
+        db.add(ServiceKeyEvent(key_id=key.id, actor="system", action="auto_restored",
+                               detail={"previous_disabled_reason": key.disabled_reason}))
     await db.flush()
     return len(keys)
 
@@ -153,3 +187,6 @@ async def reconcile_worker(db, worker, previous_owner=None):
     changed = await sync_credits(db, claimant=worker)
     for owner in sorted({name for name in (worker.owner_username, previous_owner, *changed) if name}):
         await enforce_quota(db, owner)
+    if worker.enabled and worker.status in {WorkerStatus.ready, WorkerStatus.busy}:
+        for owner in sorted({name for name in (worker.owner_username, *changed) if name}):
+            await restore_automatic_keys(db, owner)

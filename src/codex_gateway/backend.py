@@ -84,7 +84,11 @@ async def run_healthcheck_turn(app_server: Any, model: str, cwd: str = "/workspa
                 detail = error.get("message", error) if isinstance(error, dict) else error
                 detail = str(detail or "Codex health-check turn failed")
                 raise WorkerFailure(detail, kind=classify_worker_failure(detail), safe_to_retry=False)
+            if turn.get("status") != "completed":
+                raise WorkerFailure("Codex health-check turn did not complete", kind="connection")
             return
+
+    raise WorkerFailure("Codex health-check stream ended before completion", kind="connection")
 
 
 class CompletionBackend(Protocol):

@@ -358,6 +358,9 @@ async def personal_toggle(request: Request, key_id: UUID, csrf_token: str = Form
     if not key.enabled and key.key_type != "project_service_key":
         await ensure_capacity(db, identity.username)
     key.enabled = not key.enabled
+    if not key.enabled:
+        from .quota import mark_key_disabled
+        mark_key_disabled(key, "manual_user")
     await db.commit()
     return {"message": t('Key 已启用') if key.enabled else t('Key 已停用，额度已释放')}
 
@@ -371,7 +374,8 @@ async def personal_delete(request: Request, key_id: UUID, csrf_token: str = Form
     key = await db.scalar(select(ApiKey).where(ApiKey.id == key_id, ApiKey.owner_username == identity.username, ApiKey.deleted_at.is_(None)).with_for_update())
     if not key:
         raise HTTPException(404, t('Key 不存在'))
-    key.enabled = False
+    from .quota import mark_key_disabled
+    mark_key_disabled(key, "deleted")
     key.deleted_at = datetime.now(timezone.utc)
     from .binding_lifecycle import invalidate_bindings
     await invalidate_bindings(db, api_key_id=key_id, reason="key_deleted")

@@ -135,7 +135,8 @@ async def delete_user(request: Request, username: str, csrf_token: str = Form(..
         if key.key_type == SERVICE:
             log_event(db, identity.username, "owner_deleted", key=key, detail={"owner": username})
         else:
-            key.enabled = False
+            from .quota import mark_key_disabled
+            mark_key_disabled(key, "owner_deleted")
     # Retain history and contributions, detach their live identity references.
     await db.execute(update(Worker).where(Worker.owner_username == username).values(owner_username=None))
     await db.execute(delete(UserSession).where(UserSession.username == username))

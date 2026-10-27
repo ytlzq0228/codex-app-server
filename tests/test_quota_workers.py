@@ -81,7 +81,7 @@ def test_usage_exhaustion_preserves_quota_and_enabled_keys(provider, auth, plan)
             worker.failure_kind = None
             await reconcile_worker(db, worker)
             assert (await quota_summary(db, owner))["total"] == 1
-            assert not key.enabled  # Recovery must not automatically enable keys.
+            assert key.enabled  # Only explicitly automatic pauses are restored.
             # Limit state must not bypass explicit disable, deletion or logout.
             worker.status = WorkerStatus.error
             worker.failure_kind = "limit"
@@ -232,8 +232,8 @@ def test_worker_credit_lifecycle_and_lru(worker_services):
         assert rendered_pages(client, '/v1/models',headers={'Authorization':'Bearer '+newer['secret']}).status_code==200
         worker_services['account']={'type':'chatgpt','email':worker_services['email'],'planType':'pro'}
         probe(client,token,worker)
-        assert client.portal.call(summary,name)['available']==1
-        assert client.post('/user/account/keys/'+older['key_id']+'/toggle',data={'csrf_token':token},headers=AJAX).status_code==200
+        assert client.portal.call(summary,name)['available']==0
+        assert rendered_pages(client, '/v1/models',headers={'Authorization':'Bearer '+older['secret']}).status_code==200
         assert client.post('/user/workers/'+worker+'/delete',data={'csrf_token':token},headers=AJAX).status_code==200
         assert client.portal.call(summary,name)['contributed']==0
         assert client.portal.call(summary,name)['used']==1

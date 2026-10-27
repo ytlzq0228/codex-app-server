@@ -171,14 +171,17 @@ async def test_safe_failure_retries_once_on_another_worker(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(("probe_ok", "expected"), [(True, False), (False, True)])
+@pytest.mark.parametrize("probe_ok", [True, False])
 @pytest.mark.parametrize("provider", ["codex", "gemini"])
-async def test_worker_quarantine_uses_inference_probe_as_final_verdict(monkeypatch, probe_ok, expected, provider) -> None:
+async def test_worker_quarantine_does_not_wait_for_probe(monkeypatch, probe_ok, provider) -> None:
     worker_id = uuid4()
     worker = type("WorkerRecord", (), {"failure_kind": None, "failure_reason": None, "provider": provider})()
     calls = []
 
     class FakeSession:
+        async def commit(self):
+            pass
+
         async def scalar(self, _query):
             return worker
 
@@ -201,8 +204,11 @@ async def test_worker_quarantine_uses_inference_probe_as_final_verdict(monkeypat
     from unittest.mock import AsyncMock
     monkeypatch.setattr("codex_gateway.quota.quota_lock", AsyncMock())
 
-    assert await main_module.quarantine_worker(worker_id, "request stream failed", "connection") is expected
-    assert calls == [worker]
+    monkeypatch.setattr(main_module, "reconcile_worker", AsyncMock())
+    assert await main_module.quarantine_worker(worker_id, "request stream failed", "connection")
+    assert worker.status == "error"
+    assert worker.failure_reason == "request stream failed"
+    assert calls == []
 
 
 @pytest.mark.asyncio

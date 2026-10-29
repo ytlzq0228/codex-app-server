@@ -227,6 +227,9 @@ async def recoverable_pending_route(body, principal, endpoint, backend, audit):
         from .execution import recover_lost_output
         recovered = await recover_lost_output(body, principal, endpoint, audit)
         if recovered is None:
+            from .execution import recover_tool_context
+            recovered = recover_tool_context(body, principal, audit, exc.code)
+        if recovered is None:
             raise
         return recovered, None, None
 

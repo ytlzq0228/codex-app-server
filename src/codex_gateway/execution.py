@@ -273,6 +273,53 @@ def context_only_recovery(request):
     })
 
 
+def recover_tool_context(request, principal, audit, code):
+    """Answer from submitted history without resuming or claiming an execution.
+
+    This is deliberately independent of persisted conversation identity: clients
+    without one can still receive a useful answer after the suspended RPC expires.
+    User-supplied history is context only, never proof of ownership of an RPC.
+    """
+    from .request_observation import request_observation
+    if (code not in {"client_tool_call_unavailable", "client_tool_call_expired", "client_tool_call_cancelled"}
+            or not principal.key_id or not audit or request.previous_response_id
+            or not get_settings().execution_resume_enabled):
+        return None
+    observation = request_observation(audit)
+    if (not observation.get("body_complete") or observation.get("body_capture_truncated")
+            or observation.get("capture_notes")):
+        return None
+    items = history_items(request)
+    outputs = tool_outputs(request)
+    if not items or len(outputs) != 1:
+        return None
+    call_id = outputs[0][0]
+    calls = [(index, item) for index, item in enumerate(items)
+             if item.get("type") in {"function_call", "custom_tool_call"} and item.get("call_id") == call_id]
+    results = [(index, item) for index, item in enumerate(items)
+               if item.get("type") in {"function_call_output", "custom_tool_call_output"}
+               and item.get("call_id") == call_id]
+    if len(calls) != 1 or len(results) != 1:
+        return None
+    call_index, call = calls[0]
+    result_index, result = results[0]
+    if (call_index >= result_index or result["type"] != call["type"] + "_output"
+            or not any(item.get("role") == "user" for item in items[:call_index])):
+        return None
+    recovered = context_only_recovery(request.model_copy(update={"input": [*items, {
+        "role": "user", "content":
+        "Continue answering the latest user request using the tool results above as historical context. "
+        "The original execution is no longer available. Do not repeat tools or claim unconfirmed success; "
+        "explain what can be concluded and ask for any context needed to continue."
+    }]}))
+    recovered._detached_tool_recovery = code
+    recovered._recovery_response_id = None
+    recovered._execution_auto_resume = False
+    recovered._execution_input_text = None
+    recovered._execution_input_items = None
+    return recovered
+
+
 def conflict(message, code="conversation_busy"):
     return HTTPException(409, detail={"error": {"message": message, "type": "invalid_request_error",
                           "code": code, "param": None}}, headers={"Retry-After": "2"})
@@ -361,6 +408,11 @@ async def prepare(request, principal, endpoint, audit, *, pending_thread=None, b
 
 async def _prepare(request, principal, endpoint, audit, *, pending_thread=None, binding=None, tool_sessions=None):
     """Claim identity and return an optional active binding; public previous wins."""
+    if request._detached_tool_recovery:
+        if audit is not None:
+            audit["execution_decision"] = {"action": "new_thread", "reason": "detached_tool_recovery",
+                                           "trigger": request._detached_tool_recovery, "tools_disabled": True}
+        return request, None
     if not audit or not principal.key_id:
         return request, binding
     from .providers import provider_for

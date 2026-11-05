@@ -532,9 +532,12 @@ async def probe_worker_record(worker: Worker, session: AsyncSession, settings: S
         message = t('Worker 推理测试通过；账户类型：{v0}；套餐：{v1}', v0=f'{worker.auth_mode}', v1=f"{worker.plan_type or '—'}")
         ok = True
     except Exception as exc:
+        kind = exc.kind if isinstance(exc, WorkerFailure) else classify_worker_failure(str(exc))
+        if kind == "capacity":
+            return {"ok": False, "busy": True, "logged_in": bool(worker.auth_mode),
+                    "message": "Worker 正忙，请稍后探测"}
         worker.status = WorkerStatus.error
         message = t('Worker 探测失败：{v0}', v0=f'{exc}')
-        kind = exc.kind if isinstance(exc, WorkerFailure) else classify_worker_failure(str(exc))
         if kind == "logged_out":
             await update_account(worker, None)
         worker.failure_kind = kind

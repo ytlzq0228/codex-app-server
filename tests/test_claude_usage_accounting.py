@@ -41,7 +41,7 @@ async def test_worker_emits_usage_before_tool_and_error(worker, monkeypatch, suc
     import json
     async def empty(*args, **kwargs):
         return b""
-    process = SimpleNamespace(stdout=None, stderr=SimpleNamespace(read=empty),
+    process = SimpleNamespace(stdout=None, stderr=SimpleNamespace(read=empty), returncode=None,
         stdin=SimpleNamespace(write=lambda _: None, drain=empty, close=lambda: None))
     async def spawn(*args, **kwargs):
         return process

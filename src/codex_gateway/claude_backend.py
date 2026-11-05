@@ -303,6 +303,8 @@ async def probe_claude(worker, db, settings, *, inference=True, login_session=No
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 409:
             return {"ok": False, "busy": True, "logged_in": bool(worker.auth_mode), "message": "Claude 正在执行或登录，请稍后探测"}
+        if not inference and not login_session:
+            return await probe_claude(worker, db, settings, inference=True)
         worker.status = WorkerStatus.error
         worker.quarantined_at = datetime.now(timezone.utc)
         worker.failure_reason = "Provider inference HTTP error: " + str(exc.response.status_code)
@@ -311,6 +313,8 @@ async def probe_claude(worker, db, settings, *, inference=True, login_session=No
         ok, message = False, "Claude 服务暂时不可用"
     except Exception as exc:
         kind = exc.kind if isinstance(exc, WorkerFailure) else classify_worker_failure(str(exc))
+        if not inference and not login_session:
+            return await probe_claude(worker, db, settings, inference=True)
         worker.status = WorkerStatus.error
         worker.quarantined_at = datetime.now(timezone.utc)
         worker.failure_kind = kind

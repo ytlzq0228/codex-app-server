@@ -145,6 +145,11 @@ async def lifespan(app: FastAPI):
         await asyncio.gather(contribution_task, return_exceptions=True)
     recovery_task.cancel()
     await asyncio.gather(recovery_task, return_exceptions=True)
+    verifications = list(_worker_verifications.values())
+    for task in verifications:
+        task.cancel()
+    await asyncio.gather(*verifications, return_exceptions=True)
+    _worker_verifications.clear()
     await app.state.backend.close()
     await engine.dispose()
 
@@ -219,24 +224,40 @@ async def invalidate_response_thread(api_key_id, thread_id: str, reason: str) ->
         await session.commit()
 
 
+_worker_verifications: dict = {}
+
+
 async def quarantine_worker(worker_id, reason: str, kind: str = "connection") -> bool:
-    """Stop routing to a failed worker immediately; probe only for recovery."""
-    settings = get_settings()
+    """Only a failed inference probe can withdraw availability and credit."""
     async with SessionLocal() as session:
         from .quota import quota_lock
         await quota_lock(session)
-        worker = await session.scalar(select(Worker).where(Worker.id == worker_id).execution_options(populate_existing=True))
+        worker = await session.scalar(select(Worker).where(
+            Worker.id == worker_id, Worker.enabled.is_(True),
+            Worker.endpoint.not_in(["removed://worker", "provisioning://worker"]),
+        ).execution_options(populate_existing=True))
         if not worker:
             return False
-        worker.status = WorkerStatus.error
-        worker.failure_kind = kind
-        worker.failure_reason = reason[:500]
-        worker.quarantined_at = utcnow()
-        worker.retry_after = utcnow() + timedelta(seconds=settings.worker_limit_cooldown_seconds if kind == "limit" else settings.worker_failure_cooldown_seconds)
-        await reconcile_worker(session, worker)
-        await session.commit()
-        logger.warning("Worker quarantined: worker_id=%s kind=%s reason=%s", worker_id, kind, reason)
-        return True
+        result = await probe_worker_record(worker, session, get_settings())
+        logger.info("Worker failure verification: worker_id=%s reported_kind=%s ok=%s busy=%s",
+                    worker_id, kind, result.get("ok"), result.get("busy", False))
+        return not result.get("ok") and not result.get("busy", False)
+
+
+async def verify_worker_failure(worker_id, reason: str, kind: str = "connection") -> None:
+    """Keep inference latency and probe errors outside the conversation path."""
+    if worker_id in _worker_verifications:
+        return
+
+    async def verify():
+        try:
+            await quarantine_worker(worker_id, reason, kind)
+        except Exception:
+            logger.exception("Worker failure verification failed: worker_id=%s", worker_id)
+        finally:
+            _worker_verifications.pop(worker_id, None)
+
+    _worker_verifications[worker_id] = asyncio.create_task(verify(), name=f"worker-verify-{worker_id}")
 
 
 async def worker_recovery_once():
@@ -615,7 +636,7 @@ async def complete_with_failover(body: ResponseRequest, backend: CompletionBacke
         capture_failure(exc)
         if allow_retry and exc.safe_to_retry and exc.kind not in {"request", "session", "execution_conflict"}:
             if target.worker_id and exc.kind not in {"capacity", "account_changed"}:
-                await quarantine_worker(target.worker_id, str(exc), exc.kind)
+                await verify_worker_failure(target.worker_id, str(exc), exc.kind)
             reset_auto_resume(body, "worker_pre_turn_failure")
             failed_worker_ids = failed_worker_ids | {target.worker_id}
             replacement = await retry_target(principal, target, body.model, exclude_worker_ids=failed_worker_ids)
@@ -624,7 +645,7 @@ async def complete_with_failover(body: ResponseRequest, backend: CompletionBacke
                                                 failed_worker_ids=failed_worker_ids)
         if exc.code and exc.status:
             if exc.kind in {"connection", "limit", "logged_out"} and target.worker_id:
-                await quarantine_worker(target.worker_id, str(exc), exc.kind)
+                await verify_worker_failure(target.worker_id, str(exc), exc.kind)
             raise HTTPException(exc.status, detail={"error": {"message": str(exc), "type": "rate_limit_error" if exc.kind == "limit" else "invalid_request_error" if exc.kind == "request" and exc.status < 500 else "server_error", "code": exc.code, "param": None}}, headers={"Retry-After": "60"} if exc.kind == "limit" else None) from exc
         if exc.kind == "request":
             raise HTTPException(400, detail={"error": {"message": worker_failure_message(exc), "type": "invalid_request_error", "code": exc.__cause__.code if isinstance(exc.__cause__, ToolProtocolError) else "invalid_request", "param": "tools" if isinstance(exc.__cause__, ToolProtocolError) else "model"}}) from exc
@@ -633,7 +654,7 @@ async def complete_with_failover(body: ResponseRequest, backend: CompletionBacke
         if exc.kind == "capacity":
             raise HTTPException(503, detail={"error": {"message": f"Timed out waiting for an available {target.provider} worker connection", "type": "server_error", "code": "worker_capacity_exceeded", "param": None}}, headers={"Retry-After": "5"}) from exc
         if target.worker_id and exc.kind != "account_changed":
-            await quarantine_worker(target.worker_id, str(exc), exc.kind)
+            await verify_worker_failure(target.worker_id, str(exc), exc.kind)
         if exc.kind == "limit":
             raise HTTPException(429, detail={"error": {"message": f"{target.provider.title()} subscription quota is exhausted; retry later", "type": "rate_limit_error", "code": "provider_quota_exhausted", "param": None}}, headers={"Retry-After": "60"}) from exc
         raise
@@ -769,7 +790,7 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
             except WorkerFailure as exc:
                 capture_failure(exc)
                 if exc.kind not in {"request", "session", "capacity", "execution_conflict", "account_changed"} and target.worker_id:
-                    await quarantine_worker(target.worker_id, str(exc), exc.kind)
+                    await verify_worker_failure(target.worker_id, str(exc), exc.kind)
                 # Retry only when the backend confirms replay is safe and
                 # no model content has reached the client.
                 if target.worker_id in failed_worker_ids or chunks or native_items or tool_calls or not allow_retry or not exc.safe_to_retry:
@@ -881,7 +902,7 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
             except WorkerFailure as exc:
                 capture_failure(exc)
                 if exc.kind not in {"request", "session", "capacity", "execution_conflict", "account_changed"} and target.worker_id:
-                    await quarantine_worker(target.worker_id, str(exc), exc.kind)
+                    await verify_worker_failure(target.worker_id, str(exc), exc.kind)
                 if target.worker_id in failed_worker_ids or content_emitted or tool_calls or not allow_retry or not exc.safe_to_retry:
                     raise
                 reset_auto_resume(body if isinstance(body, ResponseRequest) else request, "worker_pre_turn_failure")

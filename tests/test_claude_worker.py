@@ -426,3 +426,83 @@ def test_process_diagnostic_handles_split_stderr_and_heartbeat(worker, monkeypat
     assert result["last_event_age_ms"] == 0
     assert result["last_progress_age_ms"] == 10000
     assert result["stderr_categories"] == ["network"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal", ["result", "exit"])
+@pytest.mark.parametrize("effect", [None, "client_tool", "native_tool", "assistant_text"])
+async def test_terminal_failure_retries_only_without_effects(worker, monkeypatch, terminal, effect):
+    import json
+    from types import SimpleNamespace
+    async def empty(*args, **kwargs):
+        return b""
+    process = SimpleNamespace(stdout=None, stderr=SimpleNamespace(read=empty), returncode=1,
+        wait=empty, stdin=SimpleNamespace(write=lambda _: None, drain=empty, close=lambda: None))
+    async def spawn(*args, **kwargs):
+        return process
+    monkeypatch.setattr(worker.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(worker, "stop", empty)
+    async def messages(self, stdout):
+        if effect == "client_tool":
+            yield {"event": "client_tool", "tool": "write"}
+        elif effect == "native_tool":
+            yield {"type": "stream_event", "event": {"type": "content_block_start",
+                   "index": 0, "content_block": {"type": "tool_use", "name": "Bash"}}}
+        elif effect == "assistant_text":
+            yield {"type": "assistant", "message": {"content": [{"type": "text", "text": "partial"}]}}
+        if terminal == "result":
+            yield {"type": "result", "subtype": "error_during_execution", "is_error": True}
+    monkeypatch.setattr(worker.ToolBridge, "messages", messages)
+    workspace = worker.ROOT / "retry"
+    workspace.mkdir()
+    response = await worker.turn(worker.Turn(model="claude-test", session_id=str(uuid4()),
+        workspace=str(workspace), content=[{"type": "text", "text": "hi"}]))
+    lines = [json.loads(line) async for line in response.body_iterator]
+    assert lines[-1]["code"] == ("claude_execution_failed" if terminal == "result" else "claude_process_incomplete")
+    assert lines[-1]["safe_to_retry"] is (effect is None)
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("system", [None, "", "Use the client project instructions."])
+@pytest.mark.parametrize("resume", [False, True])
+async def test_turn_separates_worker_and_client_environment(worker, monkeypatch, system, resume):
+    import json
+    from types import SimpleNamespace
+
+    seen = {}
+    async def empty(*args, **kwargs):
+        return b""
+    process = SimpleNamespace(stdout=None, stderr=SimpleNamespace(read=empty), returncode=0,
+        wait=empty, stdin=SimpleNamespace(write=lambda _: None, drain=empty, close=lambda: None))
+    async def spawn(*args, **kwargs):
+        prompt_file = Path(args[args.index("--system-prompt-file") + 1])
+        seen.update(args=args, cwd=kwargs["cwd"], prompt=prompt_file.read_text(),
+                    path=prompt_file, mode=prompt_file.stat().st_mode & 0o777)
+        return process
+    async def messages(self, stdout):
+        yield {"type": "stream_event", "event": {"type": "content_block_delta",
+               "index": 0, "delta": {"type": "text_delta", "text": "ok"}}}
+        yield {"type": "result", "subtype": "success", "result": "ok"}
+
+    monkeypatch.setattr(worker.asyncio, "create_subprocess_exec", spawn)
+    monkeypatch.setattr(worker, "stop", empty)
+    monkeypatch.setattr(worker.ToolBridge, "messages", messages)
+    workspace = worker.ROOT / "client-environment"
+    workspace.mkdir()
+    session_id = str(uuid4())
+    response = await worker.turn(worker.Turn(model="claude-test", session_id=session_id,
+        conversation=session_id if resume else None, workspace=str(workspace), system=system,
+        content=[{"type": "text", "text": "hi"}]))
+    lines = [json.loads(line) async for line in response.body_iterator]
+
+    assert not any("error" in line for line in lines)
+    assert seen["cwd"] == str(workspace)
+    assert "separate from the client environment" in seen["prompt"]
+    assert "client-provided environment context and client tool results" in seen["prompt"]
+    if system:
+        assert seen["prompt"].endswith(system)
+        assert system not in seen["args"]
+    assert ("--resume" if resume else "--session-id") in seen["args"]
+    assert seen["mode"] == 0o600
+    assert not seen["path"].exists()

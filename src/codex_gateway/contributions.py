@@ -171,24 +171,12 @@ async def contributor_account(request: Request, worker_id: UUID, csrf_token: str
     if (worker.provider or "codex") in {"gemini", "claude"}:
         from .provider_accounts import probe_provider
         return await probe_provider(worker, db, settings)
-    try:
-        async with open_app_server(worker.endpoint, settings.app_server_token.get_secret_value(), 20) as server:
-            account = (await server.call("account/read", {"refreshToken": True})).get("account")
-        await update_account(worker, account)
-        if not account:
-            worker.status = WorkerStatus.error
-            worker.failure_kind = "logged_out"
-        await reconcile_worker(db, worker)
-        await db.commit()
-    except Exception as exc:
-        worker.status = WorkerStatus.error
-        worker.failure_kind = exc.kind if isinstance(exc, WorkerFailure) else classify_worker_failure(str(exc))
-        if worker.failure_kind == "logged_out":
-            await update_account(worker, None)
-        await reconcile_worker(db, worker)
-        await db.commit()
-        raise HTTPException(502, t('无法读取 Worker 账号，贡献额度已撤销，请探测状态后重试'))
-    return {"message": t('账号信息已更新'), "account": {"email": worker.account_email, "type": worker.auth_mode, "plan": worker.plan_type}, "logged_in": bool(account)}
+    from .admin import probe_worker_record
+    result = await probe_worker_record(worker, db, settings)
+    if not result["ok"] and not result.get("busy"):
+        raise HTTPException(502, t('Worker 推理复检失败，请稍后重试'))
+    return {**result, "account": {"email": worker.account_email, "type": worker.auth_mode,
+                                  "plan": worker.plan_type}}
 
 
 @router.post("/user/workers/{worker_id}/delete")
@@ -234,7 +222,6 @@ async def rename_worker(request: Request, worker_id: UUID, name: str = Form(...,
 
 
 async def refresh_worker_account(worker_id):
-    from datetime import timedelta
     from .database import SessionLocal
     from .admin import probe_worker_record
     settings = get_settings()
@@ -257,17 +244,12 @@ async def refresh_worker_account(worker_id):
         try:
             async with open_app_server(worker.endpoint, settings.app_server_token.get_secret_value(), 20) as server:
                 account = (await server.call("account/read", {"refreshToken": True})).get("account")
-            await update_account(worker, account)
-            if not account:
-                worker.status = WorkerStatus.error
-                worker.failure_kind = "logged_out"
-                worker.retry_after = datetime.now(timezone.utc) + timedelta(seconds=settings.worker_failure_cooldown_seconds)
-        except Exception as exc:
-            worker.status = WorkerStatus.error
-            worker.failure_kind = exc.kind if isinstance(exc, WorkerFailure) else classify_worker_failure(str(exc))
-            if worker.failure_kind == "logged_out":
-                await update_account(worker, None)
-            worker.retry_after = datetime.now(timezone.utc) + timedelta(seconds=settings.worker_failure_cooldown_seconds)
+        except Exception:
+            account = None
+        if not account:
+            await probe_worker_record(worker, db, settings)
+            return
+        await update_account(worker, account)
         await reconcile_worker(db, worker)
         await db.commit()
 

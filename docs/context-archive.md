@@ -48,3 +48,18 @@ Validation covers projection, lossless Unicode/NUL-escape storage, repeated runs
 checksum/identity checks, corruption, and filesystem failure. The PostgreSQL
 integration verification uses connection-local temporary tables to verify the
 14-day boundary, preserved accounting fields, retry idempotence, and rollback.
+
+
+Connection loss, database restarts, transient transaction conflicts, and query
+timeouts trigger reconnect with exponential backoff (5, 10, 20, 40, then 60 seconds).
+Each invocation permits at most eight retries; use `--max-retries` and
+`--retry-delay` to configure this. Each new connection reacquires the session
+advisory lock and keeps the original cutoff. The durable archive index is the
+resume checkpoint, including when a COMMIT acknowledgement is lost. Progress
+counters report acknowledged commits and can undercount an uncertain commit.
+Exhausted retries exit nonzero for service monitoring; the next daily run resumes.
+Disk errors, invalid credentials, and integrity failures are not retried.
+Logs include retry number, delay, exception type and committed progress, but never
+database error text or request contents. Connections use a 20-second connect
+timeout, 60-second command timeout and the application name
+`request-context-archiver`.

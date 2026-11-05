@@ -21,7 +21,7 @@ from test_quota_workers import (
 )
 
 
-def test_refresh_failure_immediately_isolates_and_pauses_key(worker_services, monkeypatch):
+def test_refresh_failure_with_successful_inference_keeps_key(worker_services, monkeypatch):
     import codex_gateway.contributions as contributions
     calls = []
     class Server:
@@ -40,12 +40,12 @@ def test_refresh_failure_immediately_isolates_and_pauses_key(worker_services, mo
         monkeypatch.setattr(contributions, "open_app_server", opened)
         client.portal.call(contributions.refresh_worker_account, UUID(wid))
         assert calls == [{"refreshToken": True}]
-        assert client.portal.call(summary, owner)["used"] == 0
+        assert client.portal.call(summary, owner)["used"] == 1
         async def check():
             async with SessionLocal() as db:
-                assert (await db.get(Worker, UUID(wid))).status == WorkerStatus.error
+                assert (await db.get(Worker, UUID(wid))).status == WorkerStatus.ready
                 k = await db.get(ApiKey, UUID(key["key_id"]))
-                assert not k.enabled and k.disabled_reason == "auto_quota"
+                assert k.enabled and k.disabled_reason is None
         client.portal.call(check)
 
 
@@ -199,24 +199,25 @@ def test_automatic_recovery_uses_manual_probe_and_respects_cooldown(worker_servi
 @pytest.mark.asyncio
 @pytest.mark.parametrize("provider", ["codex", "claude", "gemini"])
 @pytest.mark.parametrize("kind", ["limit", "logged_out", "ineligible", "connection"])
-async def test_every_reported_worker_failure_isolates_without_probe(monkeypatch, provider, kind):
-    worker = SimpleNamespace(provider=provider, failure_kind=None, failure_reason=None)
+@pytest.mark.parametrize("verdict", [{"ok": True}, {"ok": False}, {"ok": False, "busy": True}])
+async def test_every_failure_requires_inference_verdict(monkeypatch, provider, kind, verdict):
+    worker = SimpleNamespace(provider=provider, status=WorkerStatus.ready)
     db = SimpleNamespace(scalar=AsyncMock(return_value=worker), commit=AsyncMock())
     @asynccontextmanager
     async def session():
         yield db
     monkeypatch.setattr(main, "SessionLocal", session)
     monkeypatch.setattr("codex_gateway.quota.quota_lock", AsyncMock())
-    probe = AsyncMock(return_value={"ok": True})
+    probe = AsyncMock(return_value=verdict)
     monkeypatch.setattr(main, "probe_worker_record", probe)
     reconcile = AsyncMock()
     monkeypatch.setattr(main, "reconcile_worker", reconcile)
-    assert await main.quarantine_worker(uuid4(), "reported failure", kind)
-    assert worker.status == WorkerStatus.error and worker.failure_kind == kind
-    assert worker.retry_after > worker.quarantined_at
-    probe.assert_not_awaited()
-    reconcile.assert_awaited_once_with(db, worker)
-    db.commit.assert_awaited_once()
+    assert await main.quarantine_worker(uuid4(), "reported failure", kind) is (
+        not verdict["ok"] and not verdict.get("busy", False))
+    probe.assert_awaited_once_with(worker, db, get_settings())
+    # The probe owns the isolation/reconciliation verdict, never the reported error.
+    assert worker.status == WorkerStatus.ready
+    reconcile.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -262,3 +263,90 @@ async def test_unavailable_provider_cannot_recover_from_account_only(monkeypatch
         worker, SimpleNamespace(commit=AsyncMock()), get_settings(), inference=False)
     assert result["ok"] and worker.recovered_at
     assert rpc.await_args.args[2] == "/probe"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["claude", "gemini"])
+@pytest.mark.parametrize("fails", [False, True])
+async def test_account_failure_requires_final_inference(monkeypatch, provider, fails):
+    import importlib
+    module = importlib.import_module("codex_gateway." + provider + "_backend")
+    worker = SimpleNamespace(id=uuid4(), endpoint="http://worker", provider=provider,
+        status=WorkerStatus.ready, auth_mode="subscription", failure_kind=None, failure_reason=None)
+    outcomes = [TimeoutError("account unavailable"), TimeoutError("inference failed") if fails else
+                {"account": {"email": "test@example.com"}, "available": True}]
+    rpc = AsyncMock(side_effect=outcomes)
+    monkeypatch.setattr(module, "worker_rpc", rpc)
+    monkeypatch.setattr("codex_gateway.contributions.update_account", AsyncMock())
+    reconcile = AsyncMock()
+    monkeypatch.setattr("codex_gateway.quota.reconcile_worker", reconcile)
+    result = await getattr(module, "probe_" + provider)(
+        worker, SimpleNamespace(commit=AsyncMock()), get_settings(), inference=False)
+    assert [c.args[2] for c in rpc.await_args_list] == ["/account", "/probe"]
+    assert result["ok"] is not fails
+    assert worker.status == (WorkerStatus.error if fails else WorkerStatus.ready)
+    reconcile.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_verification_deduplicates_and_does_not_block_migration(monkeypatch):
+    import asyncio
+    started, release = asyncio.Event(), asyncio.Event()
+    async def slow_probe(*args):
+        started.set()
+        await release.wait()
+        raise RuntimeError("probe database unavailable")
+    probe = AsyncMock(side_effect=slow_probe)
+    monkeypatch.setattr(main, "quarantine_worker", probe)
+    worker_id = uuid4()
+    await asyncio.wait_for(main.verify_worker_failure(worker_id, "failure"), .1)
+    await started.wait()
+    task = main._worker_verifications[worker_id]
+    await main.verify_worker_failure(worker_id, "duplicate")
+    assert probe.await_count == 1 and not task.done()
+    release.set()
+    await task  # A probe infrastructure failure must not fail the request.
+    assert worker_id not in main._worker_verifications
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_request_failure_isolation_and_key_follow_inference(worker_services, failed):
+    with TestClient(main.app) as client:
+        owner, password = create_person(client)
+        token = user_login(client, owner, password)
+        wid = contribute(client, token)
+        probe(client, token, wid)
+        key = new_key(client, token).json()["key_id"]
+        worker_services["failure"] = failed
+        assert client.portal.call(main.quarantine_worker, UUID(wid), "request failed") is failed
+        async def check():
+            async with SessionLocal() as db:
+                worker = await db.get(Worker, UUID(wid))
+                saved_key = await db.get(ApiKey, UUID(key))
+                assert worker.status == (WorkerStatus.error if failed else WorkerStatus.ready)
+                assert saved_key.enabled is not failed
+                assert saved_key.disabled_reason == ("auto_quota" if failed else None)
+        client.portal.call(check)
+
+
+@pytest.mark.asyncio
+async def test_codex_busy_probe_does_not_isolate(monkeypatch):
+    import codex_gateway.admin as admin
+    from codex_gateway.backend import WorkerFailure
+    worker = SimpleNamespace(id=uuid4(), provider="codex", endpoint="ws://worker",
+        status=WorkerStatus.ready, auth_mode="chatgpt", failure_kind=None, failure_reason=None)
+    class Server:
+        async def call(self, *args):
+            return {"account": {"type": "chatgpt"}}
+    @asynccontextmanager
+    async def opened(*args):
+        yield Server()
+    monkeypatch.setattr(admin, "open_app_server", opened)
+    monkeypatch.setattr(admin, "quota_lock", AsyncMock())
+    monkeypatch.setattr("codex_gateway.contributions.update_account", AsyncMock())
+    monkeypatch.setattr(admin, "run_healthcheck_turn", AsyncMock(side_effect=WorkerFailure("busy", kind="capacity")))
+    reconcile = AsyncMock()
+    monkeypatch.setattr(admin, "reconcile_worker", reconcile)
+    result = await admin.probe_worker_record(worker, SimpleNamespace(commit=AsyncMock()), get_settings())
+    assert result["busy"] and worker.status == WorkerStatus.ready
+    reconcile.assert_not_awaited()

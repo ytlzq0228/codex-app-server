@@ -57,6 +57,22 @@ BASE_ARGS = ["claude", "-p", "--output-format", "stream-json", "--verbose", "--t
              "--disable-slash-commands", "--setting-sources", "user", "--settings", SETTINGS]
 
 
+# Claude Code can report its own cwd even with a replacement system prompt.
+# Client tools run elsewhere; the worker directory only isolates CLI sessions.
+CLIENT_ENVIRONMENT_PROMPT = """Gateway execution environment:
+The Claude Code process runs in a gateway worker, separate from the client environment.
+Its working directory and Git repository status describe only the worker's internal
+session directory. They do not describe the user's project or the environment in
+which client tools execute.
+Use the client-provided environment context and client tool results to determine
+the project directory and repository status. Resolve conflicting or stale client
+paths using available client tools before asking the user for a new location.
+Do not infer that the user's working directory changed or their repository is
+missing merely because the worker reports a different cwd or is not a Git repository.
+If no client tools are available, do not claim to have checked the client's filesystem.
+"""
+
+
 def busy():
     return lock.locked() or bool(active_turns) or bool(waiting_turns)
 
@@ -499,6 +515,7 @@ async def turn(body: Turn, request: Request = None):
         temporary = None
         terminal = None
         produced_output = False
+        turn_has_effects = False
         thread = body.conversation or body.session_id
         hidden_blocks = set()
         usage = TurnUsage()
@@ -520,12 +537,13 @@ async def turn(body: Turn, request: Request = None):
                 args += ["--effort", body.effort]
             if body.json_schema is not None:
                 args += ["--json-schema", json.dumps(body.json_schema)]
-            if body.system is not None:
-                # Customer content stays out of process arguments.
-                prompt_file = Path(temporary.name) / "system-prompt.txt"
-                prompt_file.write_text(body.system)
-                prompt_file.chmod(0o600)
-                args += ["--system-prompt-file", str(prompt_file)]
+            # Always distinguish the worker cwd from the client's environment,
+            # including resumed turns and requests without custom instructions.
+            # Customer content stays out of process arguments.
+            prompt_file = Path(temporary.name) / "system-prompt.txt"
+            prompt_file.write_text(CLIENT_ENVIRONMENT_PROMPT + ("\n" + body.system if body.system else ""))
+            prompt_file.chmod(0o600)
+            args += ["--system-prompt-file", str(prompt_file)]
             if body.tools:
                 args += ["--mcp-config", bridge.mcp_config(), "--allowedTools", f"mcp__{SERVER_NAME}"]
             args += ["--resume", body.conversation] if body.conversation else ["--session-id", body.session_id]
@@ -551,6 +569,18 @@ async def turn(body: Turn, request: Request = None):
                     # Relay events carry a string "event"; CLI stream_event lines nest a dict there.
                     kind = item["event"] if isinstance(item.get("event"), str) else item.get("type")
                     diagnostic.observe_event(kind)
+                    # Native tools and structured output can be hidden from the
+                    # public stream, but still make replay unsafe.
+                    if kind == "assistant" and any(
+                        block.get("type") in {"text", "tool_use"}
+                        for block in (item.get("message") or {}).get("content", [])
+                        if isinstance(block, dict)
+                    ):
+                        turn_has_effects = True
+                    if kind == "stream_event":
+                        block = (item.get("event") or {}).get("content_block") or {}
+                        if block.get("type") == "tool_use":
+                            turn_has_effects = True
                     if kind == "heartbeat":
                         yield json.dumps({"heartbeat": True}) + "\n"
                     elif kind == "client_tool":
@@ -594,7 +624,7 @@ async def turn(body: Turn, request: Request = None):
                     elif kind == "result":
                         if item.get("subtype") != "success" or item.get("is_error"):
                             failure = result_failure(item)
-                            failure["safe_to_retry"] = failure["kind"] in {"limit", "logged_out"} and not produced_output
+                            failure["safe_to_retry"] = failure["kind"] in {"connection", "limit", "logged_out"} and not produced_output and not turn_has_effects
                             yield failure_line(failure)
                             return
                         structured = item.get("structured_output")
@@ -620,7 +650,7 @@ async def turn(body: Turn, request: Request = None):
                 yield failure_line({"error": f"Claude ended without a final result (exit code {process.returncode})",
                                   "kind": kind, "code": "provider_quota_exhausted" if kind == "limit" else "claude_process_incomplete",
                                   "status": 429 if kind == "limit" else 502,
-                                  "safe_to_retry": kind in {"limit", "logged_out"} and not produced_output})
+                                  "safe_to_retry": kind in {"connection", "limit", "logged_out"} and not produced_output and not turn_has_effects})
         except asyncio.CancelledError:
             raise
         except TimeoutError:

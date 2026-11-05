@@ -55,9 +55,9 @@ class GeminiAdapter:
                 if exc.response.status_code == 404:
                     raise ToolProtocolError("Gemini worker must be upgraded to support " + ("image input" if has_images else "client tools"),
                                             "image_input_unavailable" if has_images else "client_tools_unavailable") from exc
-                raise WorkerFailure("Gemini worker capability check failed") from exc
+                raise WorkerFailure("Gemini worker capability check failed", safe_to_retry=True) from exc
             except httpx.HTTPError as exc:
-                raise WorkerFailure("Gemini worker capability check failed") from exc
+                raise WorkerFailure("Gemini worker capability check failed", safe_to_retry=True) from exc
             if has_images and capabilities.get("image_input") != 1:
                 raise ToolProtocolError("Gemini worker must be upgraded to support image input", "image_input_unavailable")
             if (definitions(request) or tool_run is not None) and capabilities.get("client_tools") != 1:
@@ -112,7 +112,7 @@ class GeminiAdapter:
                     if response.status_code != 200:
                         raise WorkerFailure("Gemini worker rejected execution",
                                             kind={409: "capacity", 401: "logged_out", 429: "limit"}.get(response.status_code, "connection"),
-                                            safe_to_retry=response.status_code in {401, 429})
+                                            safe_to_retry=response.status_code in {401, 409, 429})
                     async for line in response.aiter_lines():
                         if not line:
                             continue
@@ -305,6 +305,8 @@ async def probe_gemini(worker, db, settings, *, inference=True, login_session=No
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 409:
             return {"ok": False, "busy": True, "logged_in": bool(worker.auth_mode), "message": "Gemini 正在执行或登录，请稍后探测"}
+        if not inference and not login_session:
+            return await probe_gemini(worker, db, settings, inference=True)
         worker.status = WorkerStatus.error
         worker.quarantined_at = datetime.now(timezone.utc)
         worker.failure_reason = "Provider inference HTTP error: " + str(exc.response.status_code)
@@ -313,6 +315,8 @@ async def probe_gemini(worker, db, settings, *, inference=True, login_session=No
         ok, message = False, "Gemini 服务暂时不可用"
     except Exception as exc:
         kind = exc.kind if isinstance(exc, WorkerFailure) else classify_worker_failure(str(exc))
+        if not inference and not login_session:
+            return await probe_gemini(worker, db, settings, inference=True)
         worker.status = WorkerStatus.error
         worker.quarantined_at = datetime.now(timezone.utc)
         worker.failure_kind = kind

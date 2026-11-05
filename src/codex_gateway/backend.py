@@ -361,7 +361,7 @@ class AppServerBackend:
                                     raise WorkerFailure(message, kind="request", code=INPUT_TOO_LONG_CODE, status=400)
                                 kind = classify_worker_failure(message)
                                 raise WorkerFailure(message, kind=kind,
-                                    safe_to_retry=kind in {"limit", "capacity", "logged_out"} and not turn_has_effects,
+                                    safe_to_retry=kind in {"connection", "limit", "capacity", "logged_out"} and not turn_has_effects,
                                     code="provider_quota_exhausted" if kind == "limit" else "model_capacity_exceeded" if kind == "capacity" else None,
                                     status=429 if kind == "limit" else 503 if kind == "capacity" else None)
                             input_tokens, output_tokens, cache_read_tokens, cache_write_tokens = turn_usage.counts

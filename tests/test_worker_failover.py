@@ -10,7 +10,7 @@ from codex_gateway import main
 from codex_gateway.auth import ApiPrincipal
 from codex_gateway.backend import AppServerBackend, BackendTarget, WorkerFailure, classify_worker_failure
 from codex_gateway.config import Settings
-from codex_gateway.schemas import BackendResult, BackendStreamEvent, ResponseRequest
+from codex_gateway.schemas import BackendResult, BackendStreamEvent, ResponseRequest, ChatCompletionRequest
 
 
 @pytest.mark.parametrize('message,kind', [
@@ -49,7 +49,7 @@ async def test_quota_error_with_status_can_fail_over(monkeypatch, provider):
                       code='provider_quota_exhausted', status=429),
         BackendResult(text='ok', thread_id='new-thread')]))
     quarantine = AsyncMock()
-    monkeypatch.setattr(main, 'quarantine_worker', quarantine)
+    monkeypatch.setattr(main, 'verify_worker_failure', quarantine)
     monkeypatch.setattr(main, 'retry_target', AsyncMock(return_value=second))
     body = ResponseRequest(model='test', input='full history', previous_response_id='old-thread')
     body._execution_auto_resume = True
@@ -97,7 +97,8 @@ async def test_live_quota_checked_before_resuming_thread(used):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('effect', [None, 'item/agentMessage/delta', 'item/started'])
-async def test_terminal_quota_retry_requires_no_prior_effects(effect):
+@pytest.mark.parametrize('message', ['out of credits', 'upstream unavailable'])
+async def test_terminal_failure_retry_requires_no_prior_effects(effect, message):
     class Server:
         async def call(self, method, params):
             if method == 'account/read':
@@ -108,7 +109,7 @@ async def test_terminal_quota_retry_requires_no_prior_effects(effect):
         async def messages(self):
             if effect:
                 yield {'method': effect, 'params': {'delta': 'partial', 'item': {'type': 'commandExecution'}}}
-            yield {'method': 'turn/completed', 'params': {'turn': {'status': 'failed', 'error': {'message': 'out of credits'}}}}
+            yield {'method': 'turn/completed', 'params': {'turn': {'status': 'failed', 'error': {'message': message}}}}
     class Pool:
         @asynccontextmanager
         async def lease(self, *args):
@@ -118,12 +119,13 @@ async def test_terminal_quota_retry_requires_no_prior_effects(effect):
     with pytest.raises(WorkerFailure) as caught:
         await backend.complete(ResponseRequest(model='test', input='hello'), BackendTarget('key', 'http://worker', '/workspace'))
     assert caught.value.safe_to_retry is (effect is None)
-    assert caught.value.status == 429
+    assert caught.value.status == (429 if message == "out of credits" else None)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('stream', [False, True])
-async def test_failover_excludes_all_failed_workers(monkeypatch, stream):
+@pytest.mark.parametrize('kind', ['limit', 'connection'])
+async def test_failover_excludes_all_failed_workers(monkeypatch, stream, kind):
     targets = [BackendTarget(str(i), 'http://worker', '/workspace', uuid4()) for i in range(3)]
     calls = []
     async def replacement(principal, failed, model, *, exclude_worker_ids):
@@ -133,13 +135,13 @@ async def test_failover_excludes_all_failed_workers(monkeypatch, stream):
         async def complete(self, body, target):
             calls.append(target.worker_id)
             if target != targets[-1]:
-                raise WorkerFailure('quota', kind='limit', safe_to_retry=True, code='provider_quota_exhausted', status=429)
+                raise WorkerFailure('failure', kind=kind, safe_to_retry=True, code='upstream_failure', status=502)
             return BackendResult(text='ok', thread_id='new')
         async def stream(self, body, target):
             result = await self.complete(body, target)
             yield BackendStreamEvent(delta=result.text, thread_id=result.thread_id, done=True)
     monkeypatch.setattr(main, 'retry_target', replacement)
-    monkeypatch.setattr(main, 'quarantine_worker', AsyncMock())
+    monkeypatch.setattr(main, 'verify_worker_failure', AsyncMock())
     monkeypatch.setattr(main, 'save_usage', AsyncMock())
     request = ResponseRequest(model='test', input='full history')
     principal = ApiPrincipal(None, 'test')
@@ -160,7 +162,7 @@ async def test_stream_never_replays_after_tool_call(monkeypatch):
             raise WorkerFailure('quota', kind='limit', safe_to_retry=True)
     retry = AsyncMock()
     monkeypatch.setattr(main, 'retry_target', retry)
-    monkeypatch.setattr(main, 'quarantine_worker', AsyncMock())
+    monkeypatch.setattr(main, 'verify_worker_failure', AsyncMock())
     monkeypatch.setattr(main, 'save_usage', AsyncMock())
     events = [e async for e in main.response_stream(ResponseRequest(model='test', input='hello'), Backend(),
               ApiPrincipal(None, 'test'), BackendTarget('old', 'http://worker', '/workspace', uuid4()), None)]
@@ -226,23 +228,6 @@ async def test_pending_tool_survives_quota_reserve(monkeypatch):
 
 
 
-@pytest.mark.asyncio
-async def test_codex_quota_failure_enters_cooldown_without_probe(monkeypatch):
-    worker = SimpleNamespace(provider='codex')
-    session = SimpleNamespace(scalar=AsyncMock(return_value=worker), commit=AsyncMock())
-    @asynccontextmanager
-    async def database():
-        yield session
-    probe = AsyncMock(return_value={'ok': True})
-    monkeypatch.setattr(main, 'SessionLocal', database)
-    monkeypatch.setattr(main, 'probe_worker_record', probe)
-    monkeypatch.setattr(main, 'reconcile_worker', AsyncMock())
-    monkeypatch.setattr('codex_gateway.quota.quota_lock', AsyncMock())
-    assert await main.quarantine_worker(uuid4(), 'out of credits', 'limit')
-    assert worker.status == 'error' and worker.failure_kind == 'limit'
-    assert worker.retry_after > worker.quarantined_at
-    probe.assert_not_awaited()
-    session.commit.assert_awaited_once()
 
 
 def test_explicit_full_history_can_rebuild_on_another_worker(monkeypatch):
@@ -290,3 +275,48 @@ def test_explicit_full_history_can_rebuild_on_another_worker(monkeypatch):
             await execution.cleanup(follow_audit)
     with TestClient(main.app) as client:
         client.portal.call(run)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["complete", "responses", "chat"])
+async def test_migration_completes_while_isolation_probe_is_pending(monkeypatch, mode):
+    import asyncio
+    first = BackendTarget("old", "http://old", "/workspace", uuid4())
+    second = BackendTarget("new", "http://new", "/workspace", uuid4())
+    release = asyncio.Event()
+    async def probe(*args):
+        await release.wait()
+        return False  # A passing probe does not prevent this request's migration.
+    monkeypatch.setattr(main, "quarantine_worker", probe)
+    monkeypatch.setattr(main, "retry_target", AsyncMock(return_value=second))
+    monkeypatch.setattr(main, "save_usage", AsyncMock())
+    class Backend:
+        async def complete(self, body, target):
+            if target == first:
+                raise WorkerFailure("upstream failure", safe_to_retry=True)
+            assert body.previous_response_id is None
+            assert body.input == "verified full history"
+            return BackendResult(text="continued", thread_id="new-thread")
+        async def stream(self, body, target):
+            result = await self.complete(body, target)
+            yield BackendStreamEvent(delta=result.text, thread_id=result.thread_id, done=True)
+    body = ResponseRequest(model="test", input="verified full history", previous_response_id="old-thread")
+    body._execution_auto_resume = True
+    principal = ApiPrincipal(None, "test")
+    async def run():
+        if mode == "responses":
+            events = [e async for e in main.response_stream(body, Backend(), principal, first, None)]
+            assert "response.completed" in events[-1]
+        elif mode == "chat":
+            chat = ChatCompletionRequest(model="test", messages=[{"role": "user", "content": "verified full history"}])
+            events = [e async for e in main.chat_completion_stream(chat, body, Backend(), principal, first)]
+            assert "[DONE]" in events[-1] and any("continued" in e for e in events)
+        else:
+            result, target = await main.complete_with_failover(body, Backend(), principal, first, allow_retry=True)
+            assert result.text == "continued" and target == second
+    try:
+        await asyncio.wait_for(run(), .5)
+        assert first.worker_id in main._worker_verifications
+    finally:
+        release.set()
+        await asyncio.gather(*list(main._worker_verifications.values()))

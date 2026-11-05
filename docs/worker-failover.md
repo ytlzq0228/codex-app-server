@@ -14,9 +14,11 @@ Delta-only requests do not contain enough context to reconstruct a lost thread.
 Pinned keys remain restricted to their configured Worker.
 
 Safe failures exclude each failed Worker for the rest of the request. Worker
-failures immediately quarantine the Worker and apply the appropriate cooldown,
-without waiting for an inference probe. Background probes restore availability
-only after a successful check. The gateway does not replay a turn after model
+failures schedule an independent inference probe; only a failed probe quarantines
+the Worker and applies the appropriate cooldown. A successful or busy probe does
+not isolate a healthy Worker. Migration excludes failed Workers immediately within
+the current request, without waiting for the probe or its isolation verdict.
+Background probes restore availability only after a successful check. The gateway does not replay a turn after model
 content, tool requests, or other execution effects have been observed. A pending
 tool result belongs to its original execution: if that Worker becomes unavailable,
 send a new user turn with history and confirmed tool results. Never repeat an
@@ -43,8 +45,8 @@ exception messages or local variables.
 
 
 Automatic recovery uses the same inference check as manual probes. Codex checks
-do not force a token refresh. Background account refresh failures still withdraw
-contribution credit immediately; successful recovery restores eligible Keys.
+do not force a token refresh. Background account refresh failures trigger a final inference probe before
+withdrawing contribution credit; successful recovery restores eligible Keys.
 Recovery commits each Worker independently and logs failed checks. Sweeps wait
 30 seconds by default between runs and honor each Worker cooldown. Busy recovery
 probes leave the Worker isolated for a later attempt. Probes have a
@@ -57,3 +59,19 @@ the owner's current allowance, preferring recently used keys. Disabled users,
 admin-disabled keys, deleted keys and legacy keys without a known reason are
 excluded. Automatic pauses/restorations are audited. Existing unknown stop reasons
 are never inferred or backfilled as automatic pauses.
+
+Terminal model failures with no observed output or tool effects can safely try
+another Worker. Transport failures after execution may have started remain
+ambiguous and are not blindly replayed. Full verified history is required to
+rebuild a previous thread. Detached tool-result recovery remains in place:
+complete, unambiguous call/result history can produce a context-only continuation
+with tools disabled, instructing the model to use confirmed results without
+repeating tools. Invalid or insufficient history still requires client correction.
+
+Validation of the probe-before-isolation change: 388 tests passed across recovery,
+failover, quota, all three providers, cluster routing and execution history. Two
+pre-existing tests requiring HTTP 409 for a new user turn during a pending tool
+were excluded: existing context-only recovery returns HTTP 200 instead. Tests use
+an isolated local database and mocked providers; this is not a live inference or
+deployment verification. Claude's wider terminal-failure retry classification
+requires the updated Claude worker image as well as the gateway change.

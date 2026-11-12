@@ -1,0 +1,21 @@
+<section class="panel">
+<h2>{{ t('用户准入审核') }}</h2>
+<form data-portal method="post" action="/admin/admissions/settings" class="stack-form">
+{{ csrf() }}
+<label><input {% if loading %}disabled{% endif %} type="checkbox" role="switch" name="enabled" value="true" {{ 'checked' if approval_enabled }}>{{ t('启用新用户准入审核') }}</label>
+<p class="muted">{{ t('开启后，新 SSO 用户须审批通过才能使用系统。现有用户及管理员手动创建的用户不受影响。关闭后，已有待审批申请仍需审批。') }}</p>
+<p data-form-error role="alert" hidden></p>
+<button {% if loading %}disabled{% endif %} class="button button-primary">{{ t('保存') }}</button>
+</form>
+</section>
+<section class="panel"><h2>{{ t('待审批用户') }}</h2>
+<div class="table-wrap"><table><thead><tr><th>{{ t('用户名') }}</th><th>{{ t('邮箱') }}</th><th>{{ t('申请时间') }}</th><th>{{ t('操作') }}</th></tr></thead>
+<tbody>{% for applicant in pending_users %}<tr>
+<td>{{ applicant.username }}</td><td>{{ applicant.email }}</td>
+<td><time data-local-time datetime="{{ applicant.created_at.isoformat() }}">{{ applicant.created_at.isoformat() }}</time></td>
+<td><form data-portal method="post" action="/admin/admissions/approve">{{ csrf() }}
+<input type="hidden" name="subject" value="{{ applicant.google_sub }}">
+<p data-form-error role="alert" hidden></p>
+<button {% if loading %}disabled{% endif %} class="button button-primary">{{ t('审批通过') }}</button></form></td>
+</tr>{% else %}<tr><td colspan="4" class="empty">{{ t('暂无待审批用户') }}</td></tr>{% endfor %}</tbody></table></div>
+</section>

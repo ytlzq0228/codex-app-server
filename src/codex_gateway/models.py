@@ -38,6 +38,21 @@ class User(Base):
     session_version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
+class AdmissionConfig(Base):
+    __tablename__ = "admission_config"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+
+
+class PendingUser(Base):
+    """SSO identities awaiting admission; never usable as application users."""
+    __tablename__ = "pending_users"
+    google_sub: Mapped[str] = mapped_column(String(255), primary_key=True)
+    username: Mapped[str] = mapped_column(String(120))
+    email: Mapped[str] = mapped_column(String(320))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class UserSession(Base):
     __tablename__ = "user_sessions"
     token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)

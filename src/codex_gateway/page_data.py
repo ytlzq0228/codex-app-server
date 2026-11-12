@@ -13,6 +13,7 @@ from sqlalchemy import func, select
 from . import models
 
 FIELDS = {
+    models.PendingUser: "google_sub username email created_at",
     models.User: "username email role enabled must_change_password created_at provider_grants",
     models.ServiceKeyRequest: "id owner_username name reason status key_id created_at",
     models.ServiceKeyEvent: "id request_id key_id actor action detail created_at",

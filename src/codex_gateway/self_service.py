@@ -11,14 +11,15 @@ from uuid import UUID
 import httpx
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import JSONResponse, RedirectResponse
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .admin_auth import AdminSession, require_admin, verify_csrf
 from .config import get_settings
 from .database import get_session
-from .models import ServiceKeyRequest, ApiKey, GoogleAuthConfig, OAuthState, User, Worker, WorkerStatus
+from .admission import lock_policy
+from .models import AdmissionConfig, PendingUser, ServiceKeyRequest, ApiKey, GoogleAuthConfig, OAuthState, User, Worker, WorkerStatus
 from .security import generate_api_key, hash_api_key, hash_password
 from .user_auth import cookie_secure, digest, issue_session, require_user
 
@@ -149,7 +150,12 @@ async def transfer_key(request: Request, key_id: UUID, username: str = Form(...)
 
 @data_page(router, "/admin/users", "account.html", "users")
 async def users(request: Request, identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
-    users, pagination = await paginate(db, select(User).order_by(User.username), request)
+    query = select(User)
+    search = request.query_params.get("q", "").strip()
+    if search:
+        query = query.where(or_(User.username.icontains(search, autoescape=True),
+                                User.email.icontains(search, autoescape=True)))
+    users, pagination = await paginate(db, query.order_by(User.username), request)
     key_counts = dict((await db.execute(select(ApiKey.owner_username, func.count()).where(
         ApiKey.deleted_at.is_(None), ApiKey.owner_username.in_([u.username for u in users])).group_by(ApiKey.owner_username))).all())
     from .quota import quota_summary
@@ -185,6 +191,50 @@ async def create_user(request: Request, username: str = Form(...), email: str = 
         await db.rollback()
         raise HTTPException(409, t('用户名已存在'))
     return {"username": username, "secret": password, "message": t('用户 {v0} 已创建，初始密码仅显示一次，用户下次登录必须修改密码', v0=f'{username}')}
+
+
+@data_page(router, "/admin/admissions", "account.html", "admissions")
+async def admissions(request: Request, identity=Depends(require_admin), db: AsyncSession = Depends(get_session)):
+    pending, pagination = await paginate(db, select(PendingUser).order_by(
+        PendingUser.created_at, PendingUser.google_sub), request)
+    config = await db.get(AdmissionConfig, 1)
+    return render(request, identity, page="admissions", pending_users=pending,
+                  approval_enabled=bool(config and config.enabled), pagination=pagination)
+
+
+@router.post("/admin/admissions/settings")
+async def save_admission_settings(request: Request, enabled: bool = Form(False),
+                                  csrf_token: str = Form(...), identity=Depends(require_admin),
+                                  db: AsyncSession = Depends(get_session)):
+    verify_csrf(request, identity, csrf_token)
+    config = await lock_policy(db)
+    config.enabled = enabled
+    await db.commit()
+    return {"message": t('准入审核设置已保存，立即生效')}
+
+
+@router.post("/admin/admissions/approve")
+async def approve_admission(request: Request, subject: str = Form(..., max_length=255),
+                            csrf_token: str = Form(...), identity=Depends(require_admin),
+                            db: AsyncSession = Depends(get_session)):
+    verify_csrf(request, identity, csrf_token)
+    await lock_policy(db)
+    pending = await db.get(PendingUser, subject)
+    if not pending:
+        raise HTTPException(404, t('待审批申请不存在或已处理'))
+    # Never merge into a manually created account or grant an existing role.
+    if await db.get(User, pending.username) or await db.scalar(
+            select(User).where(User.google_sub == subject)):
+        raise HTTPException(409, t('账号已存在，请处理账号冲突；不会自动合并账号'))
+    db.add(User(username=pending.username, email=pending.email,
+                google_sub=subject, role="user", enabled=True))
+    await db.delete(pending)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(409, t('账号创建冲突，请重试'))
+    return {"message": t('审批通过，用户可重新使用 Google 登录')}
 
 
 @router.post("/admin/users/{username}")
@@ -258,6 +308,7 @@ async def google_callback(request: Request, state: str = "", code: str = "", db:
     domains = [x.strip().lower() for x in config.trusted_domains.split(",") if x.strip()]
     if not sub or profile.get("email_verified") is not True or "@" not in email or (domains and email.split("@")[-1] not in domains):
         raise HTTPException(403, t('Google 邮箱未验证或不在允许的域中'))
+    policy = await lock_policy(db)
     user = await db.scalar(select(User).where(User.google_sub == sub))
     if not user:
         # Never implicitly link an existing local account based on email.
@@ -267,6 +318,18 @@ async def google_callback(request: Request, state: str = "", code: str = "", db:
             raise HTTPException(400, str(exc))
         if await db.get(User, username):
             raise HTTPException(409, t('邮箱前缀对应的用户名已存在，请联系管理员；不会自动合并账号'))
+        pending = await db.get(PendingUser, sub)
+        if pending or policy.enabled:
+            if not pending:
+                db.add(PendingUser(google_sub=sub, username=username, email=email))
+            await db.commit()
+            response = request.app.state.templates.TemplateResponse(
+                request, "login.html",
+                {"next": "/user/overview", "google_enabled": True,
+                 "error": t('准入申请已提交，正在等待管理员审批。审批通过后请重新使用 Google 登录。')},
+                status_code=403, headers={"Cache-Control": "no-store"})
+            response.delete_cookie("google_state")
+            return response
         user = User(username=username, email=email, google_sub=sub, role="user", session_version=1, enabled=True)
         db.add(user)
         try:

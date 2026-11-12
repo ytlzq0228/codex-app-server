@@ -9,7 +9,7 @@ import httpx
 from fastapi.encoders import jsonable_encoder
 from fastapi import Query, APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
-from sqlalchemy import delete, func, select
+from sqlalchemy import String, cast, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .admin_auth import (
@@ -141,8 +141,14 @@ async def render_admin_page(request: Request, page: str, history_page: int, admi
             "output_tokens": await session.scalar(select(func.coalesce(func.sum(UsageRecord.output_tokens), 0))) or 0,
         }
     elif page == "keys":
+        query = select(ApiKey).where(ApiKey.deleted_at.is_(None), ApiKey.key_type == "general_user_key")
+        search = request.query_params.get("q", "").strip()
+        if search:
+            query = query.where(or_(*(column.icontains(search, autoescape=True) for column in (
+                ApiKey.name, ApiKey.owner_username, cast(ApiKey.id, String),
+                func.concat("cag_", ApiKey.prefix, "_")))))
         context["keys"], context["pagination"] = await paginate(session,
-            select(ApiKey).where(ApiKey.deleted_at.is_(None), ApiKey.key_type == "general_user_key").order_by(ApiKey.created_at.desc(), ApiKey.id), request)
+            query.order_by(ApiKey.created_at.desc(), ApiKey.id), request)
         from .key_limits import key_budget_display
         context["key_budgets"] = await key_budget_display(session, context["keys"])
         context["default_key_monthly_limit_usd"] = str(get_settings().default_key_monthly_limit_usd)

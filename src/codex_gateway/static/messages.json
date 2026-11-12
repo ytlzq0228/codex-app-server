@@ -3830,5 +3830,73 @@
   "排名": {
     "CN": "排名",
     "EN": "Rank"
+  },
+  "用户准入审核": {
+    "CN": "用户准入审核",
+    "EN": "User admission review"
+  },
+  "启用新用户准入审核": {
+    "CN": "启用新用户准入审核",
+    "EN": "Require approval for new users"
+  },
+  "开启后，新 SSO 用户须审批通过才能使用系统。现有用户及管理员手动创建的用户不受影响。关闭后，已有待审批申请仍需审批。": {
+    "CN": "开启后，新 SSO 用户须审批通过才能使用系统。现有用户及管理员手动创建的用户不受影响。关闭后，已有待审批申请仍需审批。",
+    "EN": "New SSO users require approval when enabled. Existing and manually created users are unaffected. Pending applications still require approval after disabling this setting."
+  },
+  "待审批用户": {
+    "CN": "待审批用户",
+    "EN": "Pending users"
+  },
+  "申请时间": {
+    "CN": "申请时间",
+    "EN": "Requested at"
+  },
+  "审批通过": {
+    "CN": "审批通过",
+    "EN": "Approve"
+  },
+  "暂无待审批用户": {
+    "CN": "暂无待审批用户",
+    "EN": "No pending applications"
+  },
+  "准入申请已提交，正在等待管理员审批。审批通过后请重新使用 Google 登录。": {
+    "CN": "准入申请已提交，正在等待管理员审批。审批通过后请重新使用 Google 登录。",
+    "EN": "Your application is awaiting administrator approval. Sign in with Google again after approval."
+  },
+  "准入审核设置已保存，立即生效": {
+    "CN": "准入审核设置已保存，立即生效",
+    "EN": "Admission settings saved and effective immediately"
+  },
+  "待审批申请不存在或已处理": {
+    "CN": "待审批申请不存在或已处理",
+    "EN": "Application not found or already processed"
+  },
+  "账号已存在，请处理账号冲突；不会自动合并账号": {
+    "CN": "账号已存在，请处理账号冲突；不会自动合并账号",
+    "EN": "An account already exists. Resolve the conflict; accounts are not merged automatically."
+  },
+  "审批通过，用户可重新使用 Google 登录": {
+    "CN": "审批通过，用户可重新使用 Google 登录",
+    "EN": "Approved. The user can sign in with Google again."
+  },
+  "搜索": {
+    "CN": "搜索",
+    "EN": "Search"
+  },
+  "清除搜索": {
+    "CN": "清除搜索",
+    "EN": "Clear search"
+  },
+  "名称、Key 前缀、ID 或归属用户名": {
+    "CN": "名称、Key 前缀、ID 或归属用户名",
+    "EN": "Name, key prefix, ID or owner username"
+  },
+  "用户名或邮箱": {
+    "CN": "用户名或邮箱",
+    "EN": "Username or email"
+  },
+  "没有匹配的 API Key": {
+    "CN": "没有匹配的 API Key",
+    "EN": "No matching API keys"
   }
 }

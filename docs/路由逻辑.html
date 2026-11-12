@@ -1,0 +1,655 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<title>网关会话路由逻辑</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-type" content="text/html;charset=UTF-8">
+
+<style>
+/* https://github.com/microsoft/vscode/blob/master/extensions/markdown-language-features/media/markdown.css */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+body {
+	font-family: var(--vscode-markdown-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif);
+	font-size: var(--vscode-markdown-font-size, 14px);
+	padding: 0 26px;
+	line-height: var(--vscode-markdown-line-height, 22px);
+	word-wrap: break-word;
+}
+
+#code-csp-warning {
+	position: fixed;
+	top: 0;
+	right: 0;
+	color: white;
+	margin: 16px;
+	text-align: center;
+	font-size: 12px;
+	font-family: sans-serif;
+	background-color:#444444;
+	cursor: pointer;
+	padding: 6px;
+	box-shadow: 1px 1px 1px rgba(0,0,0,.25);
+}
+
+#code-csp-warning:hover {
+	text-decoration: none;
+	background-color:#007acc;
+	box-shadow: 2px 2px 2px rgba(0,0,0,.25);
+}
+
+body.scrollBeyondLastLine {
+	margin-bottom: calc(100vh - 22px);
+}
+
+body.showEditorSelection .code-line {
+	position: relative;
+}
+
+body.showEditorSelection .code-active-line:before,
+body.showEditorSelection .code-line:hover:before {
+	content: "";
+	display: block;
+	position: absolute;
+	top: 0;
+	left: -12px;
+	height: 100%;
+}
+
+body.showEditorSelection li.code-active-line:before,
+body.showEditorSelection li.code-line:hover:before {
+	left: -30px;
+}
+
+.vscode-light.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.15);
+}
+
+.vscode-light.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(0, 0, 0, 0.40);
+}
+
+.vscode-light.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-dark.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.4);
+}
+
+.vscode-dark.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 255, 255, 0.60);
+}
+
+.vscode-dark.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+.vscode-high-contrast.showEditorSelection .code-active-line:before {
+	border-left: 3px solid rgba(255, 160, 0, 0.7);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line:hover:before {
+	border-left: 3px solid rgba(255, 160, 0, 1);
+}
+
+.vscode-high-contrast.showEditorSelection .code-line .code-line:hover:before {
+	border-left: none;
+}
+
+img {
+	max-width: 100%;
+	max-height: 100%;
+}
+
+a {
+	text-decoration: none;
+}
+
+a:hover {
+	text-decoration: underline;
+}
+
+a:focus,
+input:focus,
+select:focus,
+textarea:focus {
+	outline: 1px solid -webkit-focus-ring-color;
+	outline-offset: -1px;
+}
+
+hr {
+	border: 0;
+	height: 2px;
+	border-bottom: 2px solid;
+}
+
+h1 {
+	padding-bottom: 0.3em;
+	line-height: 1.2;
+	border-bottom-width: 1px;
+	border-bottom-style: solid;
+}
+
+h1, h2, h3 {
+	font-weight: normal;
+}
+
+table {
+	border-collapse: collapse;
+}
+
+table > thead > tr > th {
+	text-align: left;
+	border-bottom: 1px solid;
+}
+
+table > thead > tr > th,
+table > thead > tr > td,
+table > tbody > tr > th,
+table > tbody > tr > td {
+	padding: 5px 10px;
+}
+
+table > tbody > tr + tr > td {
+	border-top: 1px solid;
+}
+
+blockquote {
+	margin: 0 7px 0 5px;
+	padding: 0 16px 0 10px;
+	border-left-width: 5px;
+	border-left-style: solid;
+}
+
+code {
+	font-family: Menlo, Monaco, Consolas, "Droid Sans Mono", "Courier New", monospace, "Droid Sans Fallback";
+	font-size: 1em;
+	line-height: 1.357em;
+}
+
+body.wordWrap pre {
+	white-space: pre-wrap;
+}
+
+pre:not(.hljs),
+pre.hljs code > div {
+	padding: 16px;
+	border-radius: 3px;
+	overflow: auto;
+}
+
+pre code {
+	color: var(--vscode-editor-foreground);
+	tab-size: 4;
+}
+
+/** Theming */
+
+.vscode-light pre {
+	background-color: rgba(220, 220, 220, 0.4);
+}
+
+.vscode-dark pre {
+	background-color: rgba(10, 10, 10, 0.4);
+}
+
+.vscode-high-contrast pre {
+	background-color: rgb(0, 0, 0);
+}
+
+.vscode-high-contrast h1 {
+	border-color: rgb(0, 0, 0);
+}
+
+.vscode-light table > thead > tr > th {
+	border-color: rgba(0, 0, 0, 0.69);
+}
+
+.vscode-dark table > thead > tr > th {
+	border-color: rgba(255, 255, 255, 0.69);
+}
+
+.vscode-light h1,
+.vscode-light hr,
+.vscode-light table > tbody > tr + tr > td {
+	border-color: rgba(0, 0, 0, 0.18);
+}
+
+.vscode-dark h1,
+.vscode-dark hr,
+.vscode-dark table > tbody > tr + tr > td {
+	border-color: rgba(255, 255, 255, 0.18);
+}
+
+</style>
+
+<style>
+/* Tomorrow Theme */
+/* http://jmblog.github.com/color-themes-for-google-code-highlightjs */
+/* Original theme - https://github.com/chriskempson/tomorrow-theme */
+
+/* Tomorrow Comment */
+.hljs-comment,
+.hljs-quote {
+	color: #8e908c;
+}
+
+/* Tomorrow Red */
+.hljs-variable,
+.hljs-template-variable,
+.hljs-tag,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-regexp,
+.hljs-deletion {
+	color: #c82829;
+}
+
+/* Tomorrow Orange */
+.hljs-number,
+.hljs-built_in,
+.hljs-builtin-name,
+.hljs-literal,
+.hljs-type,
+.hljs-params,
+.hljs-meta,
+.hljs-link {
+	color: #f5871f;
+}
+
+/* Tomorrow Yellow */
+.hljs-attribute {
+	color: #eab700;
+}
+
+/* Tomorrow Green */
+.hljs-string,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-addition {
+	color: #718c00;
+}
+
+/* Tomorrow Blue */
+.hljs-title,
+.hljs-section {
+	color: #4271ae;
+}
+
+/* Tomorrow Purple */
+.hljs-keyword,
+.hljs-selector-tag {
+	color: #8959a8;
+}
+
+.hljs {
+	display: block;
+	overflow-x: auto;
+	color: #4d4d4c;
+	padding: 0.5em;
+}
+
+.hljs-emphasis {
+	font-style: italic;
+}
+
+.hljs-strong {
+	font-weight: bold;
+}
+</style>
+
+<style>
+/*
+ * Markdown PDF CSS
+ */
+
+ body {
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", "Ubuntu", "Droid Sans", sans-serif, "Meiryo";
+	padding: 0 12px;
+}
+
+pre {
+	background-color: #f8f8f8;
+	border: 1px solid #cccccc;
+	border-radius: 3px;
+	overflow-x: auto;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+}
+
+pre:not(.hljs) {
+	padding: 23px;
+	line-height: 19px;
+}
+
+blockquote {
+	background: rgba(127, 127, 127, 0.1);
+	border-color: rgba(0, 122, 204, 0.5);
+}
+
+.emoji {
+	height: 1.4em;
+}
+
+code {
+	font-size: 14px;
+	line-height: 19px;
+}
+
+/* for inline code */
+:not(pre):not(.hljs) > code {
+	color: #C9AE75; /* Change the old color so it seems less like an error */
+	font-size: inherit;
+}
+
+/* Page Break : use <div class="page"/> or <div class="page"></div> to insert page break
+-------------------------------------------------------- */
+.page {
+	page-break-after: always;
+}
+
+</style>
+
+<script src="https://unpkg.com/mermaid/dist/mermaid.min.js"></script>
+</head>
+<body>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: document.body.classList.contains('vscode-dark') || document.body.classList.contains('vscode-high-contrast')
+          ? 'dark'
+          : 'default'
+    });
+  </script>
+<h1 id="网关会话路由逻辑">网关会话路由逻辑</h1>
+<p>核对日期：2026-11-12。本文以当前工作区代码为准，不代表已部署环境版本。</p>
+<p>当前路由分成两层：先判断能否继续原会话，再决定由哪个 Worker 执行。<code>/v1/responses</code> 和 <code>/v1/chat/completions</code> 共用执行准备与 Worker 选择逻辑，后者先转换为内部 Responses 请求。核心代码位于 <a href="../src/codex_gateway/main.py">main.py</a>、<a href="../src/codex_gateway/execution.py">execution.py</a>、<a href="../src/codex_gateway/app_server.py">app_server.py</a>、<a href="../src/codex_gateway/backend.py">backend.py</a> 和 <a href="../src/codex_gateway/cluster.py">cluster.py</a>。</p>
+<p>Worker 必须属于请求模型对应的厂商；模型可用性、Key 权限和参数能力校验先于调度。下文的 WS、<code>thread/start</code>、<code>thread/resume</code> 描述针对 Codex；Claude/Gemini 共用候选选择规则，但会话恢复由各自后端实现，不能直接套用 Codex 的重建规则。</p>
+<p><strong>规则更新：</strong>池化新 Thread 优先选择请求用户所贡献的合格 Worker（通过 <code>Worker.owner_username</code> 关联当前用户），再应用容量、近期亲和、连接数和额度排序。同一用户贡献多个合格 Worker 时，在这些 Worker 内继续按后续规则排序；没有合格的本人贡献 Worker 时，使用其他池化候选。此规则已在池化调度中实现：使用 API Key 的 <code>owner_username</code> 与 <code>Worker.owner_username</code> 关联；无用户归属的 Key 沿用原排序。</p>
+<h2 id="总体流程图">总体流程图</h2>
+<div class="mermaid">%%{init: {"theme":"base","flowchart":{"curve":"stepAfter","nodeSpacing":28,"rankSpacing":42,"htmlLabels":true},"themeVariables":{"background":"#1d1f1d","primaryTextColor":"#d1d5db","lineColor":"#6b7280","edgeLabelBackground":"#1d1f1d","fontFamily":"Arial, sans-serif","fontSize":"13px"},"themeCSS":".node rect { rx: 8px; ry: 8px; } .edgeLabel p { background-color: #1d1f1d; color: #8fd3ff; border: 1px solid #4b95c4; border-radius: 10px; padding: 1px 5px; }"}}%%
+flowchart TD
+    A[收到 Responses 请求] --> B[是否返回挂起的<br/>客户端工具结果]
+
+    B -- 是 --> B1[原 Worker、Thread、WS RPC<br/>及 call_id 是否仍有效]
+    B1 -- 是 --> B2[回到原挂起调用继续执行]
+    B1 -- 否 --> E1[返回工具绑定或调用已失效错误]
+
+    B -- 否 --> C[是否显式携带<br/>previous_response_id]
+    C -- 是 --> C1[绑定、Worker 身份及<br/>generation 是否有效]
+    C1 -- 否 --> E2[返回 previous_response_not_found<br/>或 session_worker_unavailable]
+    C1 -- 是 --> C2[锁定原 Worker 和原 Thread]
+    C2 --> T2[thread/resume 是否成功]
+    T2 -- 是 --> X[发送本轮 Turn]
+    T2 -- 否 --> E2
+
+    C -- 否 --> D[是否找到自动关联的<br/>历史会话绑定]
+    D -- 是 --> D1[历史、配置、绑定状态、<br/>Worker 身份及策略是否兼容]
+    D1 -- 是 --> D2[选择原 Worker 和原 Thread]
+    D2 --> T4[thread/resume 是否成功]
+    T4 -- 是 --> X
+    T4 -- 否 --> D3[使用客户端完整历史<br/>在当前 Worker 新建 Thread]
+    D3 --> X
+    D1 -- 否 --> D4[放弃旧执行绑定<br/>恢复客户端完整历史]
+
+    D -- 否 --> F[Key 是否固定 Worker]
+    D4 --> F
+    F -- 是 --> F1[固定 Worker 是否<br/>已启用且状态可用]
+    F1 -- 否 --> E3[返回 worker_unavailable]
+    F1 -- 是 --> W[选择固定 Worker]
+
+    F -- 否 --> G[收集健康池化候选<br/>排除失败 Worker、额度保留触线账号<br/>并检查账号模型支持]
+    G --> G1[是否还有同厂商且<br/>节点存活的候选]
+    G1 -- 否 --> E3
+    G1 -- 是 --> GU[优先选择当前用户<br/>名下贡献的 Worker]
+    GU --> G0[未饱和候选优先<br/>同组内最近两小时 Key/厂商亲和优先]
+    G0 --> G2[其余候选按正在占用或建立中的<br/>连接数升序排列]
+    G2 --> G3[连接数相同时<br/>有效额度样本优先]
+    G3 --> G4[按周加权剩余额度降序<br/>剩余 = 100 - 周已用百分比<br/>再乘套餐权重]
+    G4 --> G5[排序是否仍相同]
+    G5 -- 有 prompt_cache_key --> G6[按 API Key、缓存键、Worker ID<br/>的稳定哈希排序]
+    G5 -- 无 prompt_cache_key --> G7[保留候选的随机顺序]
+    G6 --> W
+    G7 --> W
+
+    W --> H[准备工作区是否成功]
+    H -- 否，仍有候选 --> G1
+    H -- 否，无候选 --> E3
+    H -- 是 --> I[申请 WS 并新建 app-server Thread]
+    I --> X
+
+    X --> Y[是否发生后端确认<br/>safe_to_retry 的故障]
+    Y -- 否 --> Z[成功返回结果<br/>不可安全重试的故障直接报错]
+    Y -- 是，池化且未超重试预算 --> Y1[排除失败 Worker]
+    Y1 --> G
+    Y -- 是，但不可重试 --> E4[返回执行错误]
+
+    classDef start fill:#103653,stroke:#174f78,color:#8fd3ff,stroke-width:1.5px;
+    classDef decision fill:#51495b,stroke:#735c8f,color:#e5e7eb,stroke-width:1.5px;
+    classDef validation fill:#202b31,stroke:#4b95c4,color:#7dd3fc,stroke-width:1.5px,stroke-dasharray:4 3;
+    classDef binding fill:#514b3f,stroke:#b7791f,color:#e5e7eb,stroke-width:1.5px;
+    classDef route fill:#263b50,stroke:#4a6fa5,color:#e5e7eb,stroke-width:1.5px;
+    classDef execution fill:#36513d,stroke:#4f8a5b,color:#e5e7eb,stroke-width:1.5px;
+    classDef error fill:#564744,stroke:#b63c2f,color:#e5e7eb,stroke-width:1.5px;
+    class A start;
+    class B1,C1,T2,D1,T4,F1,G1,H validation;
+    class B,C,D,F,G5,Y decision;
+    class B2,C2,D2,W binding;
+    class D3,D4,G,GU,G0,G2,G3,G4,G6,G7,Y1 route;
+    class I,X,Z execution;
+    class E1,E2,E3,E4 error;
+    linkStyle default stroke:#626866,stroke-width:1.2px;
+</div>
+<p>图中紫色节点表示路由判断，蓝色虚线节点表示绑定或运行状态校验，橙色节点表示沿原绑定或固定策略选择 Worker，蓝色节点表示重新调度，绿色节点表示开始或继续执行，红色节点表示错误出口。</p>
+<p>图中“周加权剩余额度”的计算公式为：</p>
+<pre class="hljs"><code><div>(100 - 周已用百分比) × 套餐权重
+</div></code></pre>
+<p>例如，已用 2%、权重 1 的 Worker 得分为 98；已用 15%、权重 10 的 Worker 得分为 850。在贡献归属优先级、容量分组、近期 Key 亲和和活跃连接数均相同时，后者优先。</p>
+<h2 id="1-全新对话">1. 全新对话</h2>
+<h3 id="固定-worker-的-key">固定 Worker 的 Key</h3>
+<p>如果 Key 配置为 <code>pinned</code>，请求只会路由到该 Key 指定的 Worker。</p>
+<p>该 Worker 必须同时满足：</p>
+<ul>
+<li><code>enabled = true</code></li>
+<li>状态为 <code>ready</code> 或 <code>busy</code></li>
+<li>没有被删除</li>
+<li>厂商与请求模型一致，账号支持请求的上游模型；启用集群时，所属节点必须存活</li>
+<li>新 Thread 未触及额度保留阈值（详见下文）</li>
+</ul>
+<p>如果不满足，返回 <code>worker_unavailable</code>；账号不支持模型时可返回 <code>model_account_unsupported</code>。不会自动换到池内其他 Worker。</p>
+<h3 id="自动池化的-key">自动池化的 Key</h3>
+<p>系统从所有满足以下条件的 Worker 中选择：</p>
+<ul>
+<li>已启用</li>
+<li>状态为 <code>ready</code> 或 <code>busy</code></li>
+<li>不在本次排除列表内</li>
+<li>厂商与请求模型一致，账号支持请求的上游模型</li>
+<li>新 Thread 未触及额度保留阈值</li>
+<li>启用集群时，所属节点存活</li>
+</ul>
+<p>具体选择方式：</p>
+<table>
+<thead>
+<tr>
+<th>请求情况</th>
+<th>Worker 选择方式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>存在当前用户名下贡献的候选</td>
+<td>优先选择当前用户贡献的 Worker，优先级高于未饱和、近期 Key/厂商亲和和负载排序；无合格当前用户贡献的候选时使用后续排序</td>
+</tr>
+<tr>
+<td>存在未饱和候选</td>
+<td>贡献归属分组内，未饱和候选排在饱和候选前，优先级高于近期 Key 亲和</td>
+</tr>
+<tr>
+<td>池化请求有近期使用记录</td>
+<td>在贡献归属优先级与容量分组均相同的候选中，优先复用同一 Key、同一厂商过去两小时内最后使用的 Worker（计入 2xx 且无 error_code 的用量记录，以及 499 中断记录；记录必须有 worker_id）</td>
+</tr>
+<tr>
+<td>无近期记录，或最近使用的 Worker 不可用</td>
+<td>回退到池排序，优先选择正在占用的 WS 数最少的 Worker</td>
+</tr>
+<tr>
+<td>活跃连接数相同</td>
+<td>优先选择周加权剩余额度 <code>(100 − 周已用百分比) × 套餐权重</code> 最大的 Worker</td>
+</tr>
+<tr>
+<td>连接数和额度分数都相同，且有 <code>prompt_cache_key</code></td>
+<td>按 <code>API Key + prompt_cache_key + Worker ID</code> 的稳定哈希顺序选择</td>
+</tr>
+<tr>
+<td>连接数和额度分数都相同，且没有 <code>prompt_cache_key</code></td>
+<td>保留数据库随机顺序</td>
+</tr>
+<tr>
+<td>最近两小时没有有效周额度数据</td>
+<td>在同连接数下排在有有效额度数据的 Worker 后，再按缓存亲和或随机顺序选择</td>
+</tr>
+<tr>
+<td>首选 Worker 工作区准备失败</td>
+<td>隔离该 Worker，继续尝试下一个候选</td>
+</tr>
+<tr>
+<td>所有候选均失败</td>
+<td>返回 <code>worker_unavailable</code></td>
+</tr>
+</tbody>
+</table>
+<p>表中连接数、额度和缓存键排序用于贡献归属优先级与容量分组均相同、近期亲和优先之后的候选。只查询最新一条符合条件的用量记录；该 Worker 不可用时，回退到池排序，不逐条追溯更早使用过的 Worker。</p>
+<p>“活跃连接”指连接池中正在租用或建立中的 WS，空闲等待复用的持久 WS 不计入活跃数。容量饱和是另一个判断：对 Codex，如果当前 Key 没有可复用的空闲 WS，且该 Key/Worker 分组或整个 Worker 的连接槽位已达到上限，就标记为饱和。其他 Key 的空闲 WS 仍占用 Worker 槽位，因此活跃数较低也可能饱和。<code>busy</code> 状态仍属于候选状态，真正的并发上限由连接池控制。</p>
+<p>饱和只影响候选顺序，不直接剔除 Worker。全部候选都饱和时，仍按近期亲和及池排序选择，再由后端执行容量准入或等待；不能把“饱和”直接等同于 <code>worker_unavailable</code>。固定 Key 和已有绑定不因容量排序而换 Worker。</p>
+<p>集群模式下，网关汇总存活节点的实时负载和针对当前 Key 的饱和状态；远端负载查询失败时回退到该节点最近心跳的连接数，实际准入仍以后端为准。</p>
+<p>周用量和权重来自最近一次 v3 <code>subscription_usage</code> 快照。快照每小时采集一次，只有采集时间距当前不超过两小时才参与路由。某个 Worker 的额度读取失败时，其分数保持未知；在活跃连接数相同的候选中，有有效额度数据的 Worker 优先于未知数据的 Worker。</p>
+<p><strong>额度保留是候选过滤条件，不是排序条件。</strong>网关读取上述快照的 <code>five_hour_used</code> 和 <code>week_used</code>；任一已知数值达到 <code>100 − worker_quota_reserve_percent</code> 就不再接收新 Thread。默认保留 20%，即已用达到 80% 时排除。固定 Key 的新请求也受此限制；已有 ResponseBinding 跳过这一步快照过滤。未知额度不会仅因缺少数值被排除。账号模型过滤后没有候选时返回 <code>model_account_unsupported</code>，其他无候选情况返回 <code>worker_unavailable</code>（已有绑定为 <code>session_worker_unavailable</code>）。Codex 执行前还会读取 ChatGPT 账号实时额度；触及保留阈值时返回可安全重试的 <code>provider_quota_exhausted</code>，因此跳过快照过滤不保证续接成功。</p>
+<p><code>prompt_cache_key</code> 只帮助相同前缀优先落到相同 Worker，提高缓存复用机会，不创建会话，也不会覆盖已有会话绑定。</p>
+<p>Worker 选定以后，系统才在这个 Worker 内：</p>
+<ol>
+<li>优先复用该 Key 的空闲 WS；</li>
+<li>没有空闲 WS 时按上限创建新连接；</li>
+<li>为本次 WS 使用独立工作目录；</li>
+<li>创建新的 app-server Thread。</li>
+</ol>
+<h2 id="2-已有且有效的自动会话绑定">2. 已有且有效的自动会话绑定</h2>
+<p>启用 <code>execution_resume_enabled</code>、使用持久化 API Key，且请求身份采集完整、可识别稳定会话标识时，系统才会跟踪自动会话。客户端携带完整历史后，系统会查询 <code>ExecutionSession</code> 和 <code>ResponseBinding</code>。</p>
+<p>只有以下条件全部满足才恢复原 Worker 和 Thread：</p>
+<ul>
+<li>历史是已保存历史的追加；</li>
+<li>模型、instructions、工具和输出配置一致；</li>
+<li>ResponseBinding 仍为 <code>active</code>；</li>
+<li>Worker generation 没有改变；</li>
+<li>Worker 已启用且状态为 <code>ready</code> 或 <code>busy</code>；</li>
+<li>固定 Worker 策略没有改变；</li>
+<li>当前没有另一个请求持有该会话执行锁（冲突时返回 <code>conversation_busy</code>，不会另选 Worker）。</li>
+</ul>
+<p>验证成功后：</p>
+<pre class="hljs"><code><div>逻辑会话
+  → 原 ResponseBinding
+  → 原 Worker
+  → 该 Worker 上任意可用 WS
+  → thread/resume 原 Thread
+</div></code></pre>
+<p>这里固定的是 Worker 和 Thread，不固定原来的 WS。</p>
+<h2 id="3-原绑定-worker-已失效">3. 原绑定 Worker 已失效</h2>
+<p>对于通过客户端会话标识自动找到的绑定，系统允许安全重建。</p>
+<p>以下情况会放弃原绑定：</p>
+<ul>
+<li>Worker 被停用、删除或进入异常状态；</li>
+<li>Worker 更换了登录账号，generation 变化；</li>
+<li>Key 后来改成固定到另一个 Worker；</li>
+<li>ResponseBinding 被管理员释放；</li>
+<li>原 Worker 在实际调度前变得不可用。</li>
+</ul>
+<p>处理过程是：</p>
+<pre class="hljs"><code><div>原绑定无法使用
+  → 清除自动恢复参数
+  → 恢复客户端提交的完整历史
+  → 按当前 Key 策略重新选择 Worker
+  → 在新 Worker 上创建新 Thread
+  → 发送本轮请求
+</div></code></pre>
+<p>如果 Key 是池化模式，就重新进入“当前用户贡献的 Worker 优先 → 未饱和优先 → 最近两小时 Key/厂商亲和 → 活跃连接数 → 有效额度样本 → 周加权剩余额度 → 缓存亲和/随机”的优选调度；如果 Key 是固定模式，就路由到当前指定的 Worker。</p>
+<p>需要区分校验阶段和调度阶段：上述绑定失效可在 <code>prepare_execution</code> 中触发重建；若自动绑定通过校验后，原 Worker 在实际选择或工作区准备时才不可用，<code>choose_execution_target</code> 仅对池化 Codex 自动恢复请求再次选路，固定 Key 和其他厂商直接返回错误。</p>
+<p>因此，自动关联的会话在原 Worker 失效时，可以转移到另一个 Worker，但会创建新的后端 Thread。上下文来自客户端提交的完整历史，而不是把原 Thread 跨账号迁移。</p>
+<h2 id="4-worker-有效但原-thread-不存在">4. Worker 有效，但原 Thread 不存在</h2>
+<p>系统会先在原 Worker 上执行 <code>thread/resume</code>。</p>
+<p>如果 <code>thread/resume</code> 返回 <code>AppServerError</code>（包括 Thread 不存在），并且这次恢复属于网关自动识别的 Codex 会话：</p>
+<ul>
+<li>将旧绑定标记为不可恢复；</li>
+<li>清除增量输入；</li>
+<li>恢复客户端的完整历史；</li>
+<li>仍在当前已选 Worker 上执行 <code>thread/start</code>；</li>
+<li>创建新 Thread 后发送本轮请求。</li>
+</ul>
+<p>这个场景通常不会重新选择 Worker，因为 Worker 本身仍然正常，只是 Thread 丢失。</p>
+<h2 id="5-显式-previous_response_id">5. 显式 <code>previous_response_id</code></h2>
+<p>显式 <code>previous_response_id</code> 比自动会话关联更严格。</p>
+<p>如果它指向的绑定：</p>
+<ul>
+<li>已被释放；</li>
+<li>Worker 已删除；</li>
+<li>Worker 换过账号；</li>
+<li>generation 不一致；</li>
+</ul>
+<p>系统返回 <code>previous_response_not_found</code>，不会静默换 Worker。</p>
+<p>如果绑定仍有效，但 Worker 被停用、删除或处于不接受续接的状态，返回 <code>session_worker_unavailable</code>。调度器允许 <code>ready/busy</code>，也允许 <code>status=error</code> 且 <code>failure_kind=limit</code> 的已有绑定继续进入执行检查；后者不接收新 Thread。自动绑定在 <code>prepare_execution</code> 阶段仍要求 <code>ready/busy</code>，可能先放弃旧绑定重建。</p>
+<p>如果 Worker 正常但 <code>thread/resume</code> 失败，也返回 <code>previous_response_not_found</code>，不会用完整历史自动重建。原因是显式请求有可能只携带本轮增量，网关无法证明自己拥有完整上下文。</p>
+<h2 id="6-等待客户端工具结果的会话">6. 等待客户端工具结果的会话</h2>
+<p>工具调用必须回到原来的：</p>
+<ul>
+<li>Worker</li>
+<li>Thread</li>
+<li>WS 中挂起的 app-server RPC</li>
+<li><code>call_id</code></li>
+</ul>
+<p>这类请求不能切换 Worker。Worker 被删除、换账号或挂起调用丢失时，会返回 <code>tool_worker_invalidated</code>、<code>tool_binding_invalidated</code> 或 <code>client_tool_call_unavailable</code> 等错误。</p>
+<p>挂起调用失效后，可携带完整历史和已确认工具结果发起新的用户轮次；部分丢失工具输出也可进入受校验的上下文恢复路径。恢复会新建 Thread，不会把工具结果投递到另一个 Worker 的旧 RPC。</p>
+<h2 id="7-执行前-worker-突然失败">7. 安全故障重试</h2>
+<p>对于全新会话或自动恢复会话，如果满足以下条件：</p>
+<ul>
+<li>Key 是池化模式；</li>
+<li>不是工具结果续接；</li>
+<li>后端确认没有不可重复的执行影响；</li>
+<li>错误被标记为 <code>safe_to_retry</code>；</li>
+</ul>
+<p>系统累积排除已经失败的 Worker，再从池中选择另一个 Worker，最多重试两次（合计最多三个执行目标）。预算耗尽返回 <code>worker_retry_exhausted</code>，HTTP 503，并带 <code>Retry-After: 5</code>；候选提前耗尽则返回无可用 Worker 错误。每次重试重新计入 Key 和 Worker 尝试限流，并执行带随机抖动的指数退避。</p>
+<p>第二次选择排除刚刚失败的 Worker，保持原厂商，并重新应用“当前用户贡献的 Worker 优先 → 未饱和优先 → 最近两小时 Key/厂商亲和 → 活跃连接数 → 有效额度样本 → 周加权剩余额度 → 随机顺序”，最多重试两次。安全重试不会继续携带首次请求的 <code>prompt_cache_key</code> 亲和条件。自动恢复会话的跨 Worker 安全重试仅适用于 Codex；显式绑定和固定 Key 不参与此重试。</p>
+<p>调度后仍可能发生容量竞争。池化新请求在存在其他未饱和候选时会设置目标字段 <code>allow_capacity_fallback</code>；实际是否换 Worker 取决于后端的 <code>safe_to_retry</code> 和剩余重试预算，不能只凭该字段判断。当前 Codex 连接池的 <code>AppServerCapacityError</code> 被映射为不可安全重试的容量错误。连接池容量错误通常返回 <code>worker_capacity_exceeded</code>，不会因此隔离 Worker。流式响应还要求尚未向客户端输出模型内容。</p>
+<p>普通传输或 app-server 异常在 <code>turn/start</code> 可能已经执行后不再重试。不过，Codex 明确收到失败的 <code>turn/completed</code> 时，如果错误属于 connection、limit、capacity 或 logged_out，且尚未观察到执行影响，仍可标记为安全重试。执行影响包括服务端 RPC、助手文本增量和非 reasoning 项开始；因此不能简单地用“Turn 是否已开始”判断。流式重试还要求未输出文本、原生结果项或工具调用。</p>
+<h2 id="8-路由优先级">8. 路由优先级</h2>
+<p>整体优先级可以概括为：</p>
+<pre class="hljs"><code><div>挂起工具调用的原 Worker
+        ↓
+显式 previous_response_id 的原 Worker
+        ↓
+历史和配置验证通过的自动绑定 Worker
+        ↓
+Key 当前固定的 Worker
+        ↓
+同厂商、健康、节点存活且通过额度与模型准入的池化候选
+        ↓
+当前用户名下贡献的 Worker 优先
+        ↓
+贡献归属优先级内，未饱和候选优先
+        ↓
+贡献归属优先级与容量分组均相同时，最近两小时同 Key/厂商的最后使用 Worker
+        ↓
+活跃连接数最少的 Worker
+        ↓
+有有效额度数据的 Worker
+        ↓
+周加权剩余额度最大的 Worker
+        ↓
+prompt_cache_key 亲和或随机兜底
+</div></code></pre>
+<p>前三项优先沿已有执行绑定续接；固定策略只使用指定 Worker，之后的排序用于池化新 Thread。当前用户贡献的 Worker 优先仍须通过候选准入条件，不覆盖已有会话绑定或固定 Worker 策略。近期 Key 亲和是软偏好，在贡献归属优先级内会让位于容量可用性；<code>prompt_cache_key</code> 只用于最终平局排序。<strong>Codex 自动关联会话可在原 Worker 失效后，用完整历史在其他 Worker 重建；显式 <code>previous_response_id</code> 和仍挂起的工具 RPC 不会静默迁移。</strong></p>
+
+</body>
+</html>

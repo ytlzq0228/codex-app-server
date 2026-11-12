@@ -19,6 +19,9 @@ from codex_gateway.models import UsageRecord, Worker, WorkerStatus
     'no_key', 'latest', 'boundary', 'dead_node',
     'interrupted', 'interrupted_expired', 'interrupted_without_worker',
     'recent_saturated', 'all_saturated',
+    'owned', 'owned_saturated', 'owned_disabled', 'owned_excluded',
+    'owned_reserved', 'owned_workspace_failure', 'owned_pinned', 'owned_bound',
+    'owned_no_owner', 'owned_multiple',
 ])
 async def test_recent_key_worker_preference_and_fallback(monkeypatch, scenario):
     now = datetime(2026, 10, 10, tzinfo=timezone.utc)
@@ -40,6 +43,9 @@ async def test_recent_key_worker_preference_and_fallback(monkeypatch, scenario):
         db.add_all([preferred, fallback])
         db.flush()
         key_id = uuid4()
+        if scenario.startswith('owned'):
+            preferred.owner_username = 'alice'
+            fallback.owner_username = 'alice' if scenario == 'owned_multiple' else 'bob'
 
         def usage(worker, **overrides):
             values = dict(request_id=str(uuid4()), api_key_id=key_id,
@@ -61,10 +67,10 @@ async def test_recent_key_worker_preference_and_fallback(monkeypatch, scenario):
             'interrupted_without_worker': dict(status_code=499, error_code='request_interrupted',
                                               worker_id=None),
         }.get(scenario, {})
-        usage(preferred, **overrides)
+        usage(fallback if scenario.startswith('owned') else preferred, **overrides)
         if scenario in {'latest', 'interrupted'}:
             usage(fallback, created_at=now - timedelta(minutes=20))
-        if scenario == 'disabled':
+        if scenario in {'disabled', 'owned_disabled'}:
             preferred.enabled = False
         if scenario == 'offline':
             preferred.status = WorkerStatus.offline
@@ -81,18 +87,19 @@ async def test_recent_key_worker_preference_and_fallback(monkeypatch, scenario):
                 return db.get(model, key)
 
         async def signals(_session, _key):
-            saturated = {str(preferred.id)} if scenario == 'recent_saturated' else (
+            saturated = {str(preferred.id)} if scenario in {'recent_saturated', 'owned_saturated'} else (
                 {str(preferred.id), str(fallback.id)} if scenario == 'all_saturated' else set())
             return {str(preferred.id): 5}, {'workers': {
                 str(fallback.id): {'weighted_remaining': 100},
-                str(preferred.id): {'weighted_remaining': 1},
+                str(preferred.id): {'weighted_remaining': 1,
+                                    'week_used': 80 if scenario == 'owned_reserved' else 0},
             }}, saturated
 
         attempted, quarantined = [], []
 
         async def put(_client, url, **_kwargs):
             attempted.append(url)
-            return httpx.Response(503 if scenario == 'workspace_failure' and
+            return httpx.Response(503 if scenario in {'workspace_failure', 'owned_workspace_failure'} and
                                   '/workers/recent/' in url else 200)
 
         async def quarantine(worker_id, *_args):
@@ -115,17 +122,18 @@ async def test_recent_key_worker_preference_and_fallback(monkeypatch, scenario):
             monkeypatch.setattr(cluster, 'live_nodes', live_nodes)
             monkeypatch.setattr(cluster, 'manager_for', manager_for)
         principal = ApiPrincipal(None if scenario == 'no_key' else key_id, 'test',
-                                 pinned_worker_id=fallback.id if scenario == 'pinned' else None)
+                                 pinned_worker_id=fallback.id if scenario in {'pinned', 'owned_pinned'} else None,
+                                 owner_username='alice' if scenario.startswith('owned') and scenario != 'owned_no_owner' else None)
         target = await main.choose_target(
             principal, AsyncSession(),
-            binding=SimpleNamespace(worker_id=fallback.id) if scenario == 'bound' else None,
-            exclude_worker_ids={preferred.id} if scenario == 'excluded' else None,
+            binding=SimpleNamespace(worker_id=fallback.id) if scenario in {'bound', 'owned_bound'} else None,
+            exclude_worker_ids={preferred.id} if scenario in {'excluded', 'owned_excluded'} else None,
             cache_affinity='shared-prefix',
         )
-        expected = preferred if scenario in {'recent', 'latest', 'boundary', 'interrupted', 'all_saturated'} else fallback
+        expected = preferred if scenario in {'recent', 'latest', 'boundary', 'interrupted', 'all_saturated', 'owned', 'owned_saturated'} else fallback
         assert target.worker_id == expected.id
         if scenario in {'pinned', 'bound', 'all_saturated', 'recent_saturated'}:
             assert not target.allow_capacity_fallback
-        assert len(attempted) == (2 if scenario == 'workspace_failure' else 1)
-        assert quarantined == ([preferred.id] if scenario == 'workspace_failure' else [])
+        assert len(attempted) == (2 if scenario in {'workspace_failure', 'owned_workspace_failure'} else 1)
+        assert quarantined == ([preferred.id] if scenario in {'workspace_failure', 'owned_workspace_failure'} else [])
     engine.dispose()

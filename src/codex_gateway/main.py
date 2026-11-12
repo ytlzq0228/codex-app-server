@@ -543,6 +543,10 @@ async def choose_target(
         # only while capacity is available, keeping the load order as fallback.
         # Bound continuations and explicitly pinned keys never take this path.
         candidates.sort(key=lambda worker: str(worker.id) in saturated)
+        # Prefer the API key owner's contributed workers, retaining capacity,
+        # recent-key affinity and load ordering within each ownership group.
+        if principal.owner_username:
+            candidates.sort(key=lambda worker: getattr(worker, "owner_username", None) != principal.owner_username)
     candidates = [worker for worker in candidates if (getattr(worker, "provider", None) or "codex") == provider and worker.id not in excluded and worker_accepts_request(worker, continuation=binding is not None)]
     # Reserve capacity for new sessions; existing bindings may continue.
     from .rate_limits import quota_reserve_reached

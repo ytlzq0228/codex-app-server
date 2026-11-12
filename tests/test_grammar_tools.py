@@ -140,7 +140,10 @@ async def test_worker_only_exposes_valid_call_and_bounds_corrections(generated):
     backend.tool_sessions.await_result=register
     backend.tool_sessions.receive_result=receive
     async def events():
-        return [e async for e in backend._turn_events(request('regex','[0-9]{2}'),BackendTarget('key:worker','ws://worker','/workspace'),object())]
+        from codex_gateway.tool_sessions import ToolRun
+        body = request('regex','[0-9]{2}')
+        target = BackendTarget('key:worker','ws://worker','/workspace')
+        return [e async for e in backend._turn_events(body, target, ToolRun(body, target))]
     try:
         if generated[-1]=='42':
             result=await events()

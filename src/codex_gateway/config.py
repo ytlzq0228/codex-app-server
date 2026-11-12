@@ -46,11 +46,19 @@ class Settings(BaseSettings):
     claude_execution_wait_seconds: float = Field(default=5.0, ge=0, le=30)
     claude_tool_session_limit: int = Field(default=1024, ge=1, le=8192)
     claude_tool_sessions_per_key: int = Field(default=32, ge=1, le=256)
+    # Worker bridges currently allow at most 300 seconds for a tool reply.
+    client_tool_result_timeout_seconds: float = Field(default=300, gt=0, le=300)
+    client_tool_progress_timeout_seconds: float = Field(default=300, gt=0, le=3600)
+    client_tool_consumer_timeout_seconds: float = Field(default=30, gt=0, le=300)
+    # Compatibility for clients that use a sole StructuredOutput function as a final answer.
+    structured_output_tool_terminal: bool = True
     claude_execution_max_waiters: int = Field(default=8, ge=0, le=64)
     default_key_monthly_limit_usd: Decimal = Field(default=Decimal("3000"), ge=0, max_digits=14, decimal_places=2)
     max_workers_per_user: int = 10
     max_ws_per_key_worker: int = 10
     max_ws_per_worker: int = 40
+    key_requests_per_minute: int = Field(default=60, ge=0, le=10000)
+    worker_requests_per_minute: int = Field(default=30, ge=0, le=10000)
     ws_idle_ttl_seconds: float = 600.0
     ws_acquire_timeout_seconds: float = 30.0
     ws_ping_timeout_seconds: float = 300.0

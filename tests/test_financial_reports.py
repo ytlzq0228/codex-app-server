@@ -109,3 +109,39 @@ def test_report_recalculates_live_subscription_cost(monkeypatch):
         live.update(total=Decimal(0), unpriced=0, count=0)
         assert '<strong>0.0000 / ' in rendered_pages(client, '/admin/reports?month='+current).text
         assert 'action="/admin/subscription-cost"' in rendered_pages(client, '/admin/reports?month=2000-01').text
+
+
+def test_report_top_ten_aggregates_models_and_preserves_key_ownership():
+    rows = [
+        ('alice', 'key', 'Key', f'w{i:02}', f'Worker {i}', 'unknown', 1, i * 100, 10, i * 50, 0)
+        for i in range(12)
+    ]
+    rows += [
+        ('alice', 'key', 'Key', 'w00', 'Worker 0', 'other', 1, 2000, 0, 0, 0),
+        ('bob', 'key', 'Key', 'w00', 'Worker 0', 'unknown', 1, 3000, 0, 0, 0),
+    ]
+    _, users, workers = summarize_latest(rows, {})
+    alice = next(g for g in users if g['owner'] == 'alice')
+    bob = next(g for g in users if g['owner'] == 'bob')
+    assert len(alice['top_workers']) == 10
+    assert [g['worker_id'] for g in alice['top_workers']] == ['w00'] + [f'w{i:02}' for i in range(11, 2, -1)]
+    assert alice['top_workers'][0]['input_tokens'] == 2000
+    assert bob['top_workers'][0]['input_tokens'] == 3000
+    worker = next(g for g in workers if g['worker_id'] == 'w00')
+    assert len(worker['top_keys']) == 1
+    assert worker['top_keys'][0]['input_tokens'] == 5000
+    assert worker['top_keys'][0]['owner'] == 'alice, bob'
+    assert worker['top_keys'][0]['unpriced'] == 3
+
+
+def test_worker_top_keys_limits_and_ties_include_missing_identity():
+    rows = [('alice', f'k{i:02}', 'Key', 'w', 'Worker', 'unknown', 1, i, 0, 0, 0)
+            for i in range(12)]
+    rows += [(None, None, None, None, None, 'unknown', 1, 0, 0, 0, 0)]
+    _, users, workers = summarize_latest(rows, {})
+    ranked = next(g for g in workers if g['worker_id'] == 'w')['top_keys']
+    assert [g['key_id'] for g in ranked] == [f'k{i:02}' for i in range(11, 1, -1)]
+    missing = next(g for g in users if g['key_id'] == '—')
+    assert missing['top_workers'][0]['worker_id'] == '—'
+    tied = [('alice', k, k, 'w', 'Worker', 'unknown', 1, 10, 0, 0, 0) for k in ['b', 'a']]
+    assert [g['key_id'] for g in summarize_latest(tied, {})[2][0]['top_keys']] == ['a', 'b']

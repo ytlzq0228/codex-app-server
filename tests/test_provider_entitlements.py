@@ -95,7 +95,7 @@ def test_subscription_namespaced_by_provider():
         async with SessionLocal() as db:
             for provider in ("codex","gemini"):
                 ident=uuid4().hex
-                db.add(Worker(name=ident,container_name=ident,provider=provider,endpoint="http://test",
+                db.add(Worker(name=ident,container_name=ident,provider=provider,endpoint="http://test",status=WorkerStatus.ready,
                               auth_mode="chatgpt" if provider=="codex" else "google-subscription",plan_type=unique))
             await db.flush()
             summary=await subscription_summary(db)

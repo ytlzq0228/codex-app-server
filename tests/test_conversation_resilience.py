@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from codex_gateway import execution as ex, cluster
 from codex_gateway.auth import ApiPrincipal
-from codex_gateway.client_tools import ToolProtocolError, compatible_definitions, definitions
+from codex_gateway.client_tools import compatible_definitions, definitions
 from codex_gateway.config import get_settings
 from codex_gateway.database import SessionLocal
 from codex_gateway.main import app
@@ -90,9 +90,20 @@ def test_lost_result_requires_persisted_scoped_proof(monkeypatch, case, provider
         backend = SimpleNamespace(continuation_target=lambda request, key: sessions.target_for(request, key))
         try:
             if case in {"arguments", "foreign_key", "wrong_session", "null_checkpoint"}:
-                with pytest.raises(ToolProtocolError) as error:
-                    await cluster.recoverable_pending_route(follow, p, "responses", backend, audit)
-                assert error.value.code in {"client_tool_call_unavailable", "client_tool_call_cancelled"}
+                # Unverified history cannot recover the persisted execution. It
+                # may only become a detached, tool-free context answer.
+                assert await ex.recover_lost_output(follow, p, "responses", audit) is None
+                recovered, target, pending = await cluster.recoverable_pending_route(
+                    follow, p, "responses", backend, audit)
+                assert target is None and pending is None
+                assert recovered._detached_tool_recovery
+                assert recovered._recovery_response_id is None
+                prepared, binding = await ex.prepare(recovered, p, "responses", audit, tool_sessions=sessions)
+                assert binding is None and not prepared.previous_response_id
+                assert not definitions(prepared) and prepared.tool_choice == "none"
+                assert ex.RECOVERY_NOTICE in prepared.instructions
+                assert "execution" not in audit
+                assert audit["execution_decision"]["reason"] == "detached_tool_recovery"
             else:
                 recovered, target, pending = await cluster.recoverable_pending_route(follow, p, "responses", backend, audit)
                 assert target is None and pending is None

@@ -638,12 +638,12 @@ async def finish(db, audit, result, target, response_id):
                    and claim["action"] == "tool_continuation" and expected is not None)
     row.history_hashes = expected if result or failed_tool else None
     row.config_hash = claim["config"]
-    row.state = ("waiting_tool" if result.tool_calls else "ready") if result else "invalid"
+    row.state = ("waiting_tool" if result.tool_calls and not result.terminal_tool else "ready") if result else "invalid"
     row.thread_id = result.thread_id if result else None
     row.worker_id = target.worker_id
     row.provider = target.provider
     row.response_id = response_id
-    row.expires_at = instant + timedelta(seconds=300) if result and result.tool_calls else None
+    row.expires_at = instant + timedelta(seconds=get_settings().client_tool_result_timeout_seconds) if result and result.tool_calls and not result.terminal_tool else None
     row.invalid_reason = None if result else "tool_execution_failed" if failed_tool else "execution_failed"
     row.lease_token = row.lease_until = None
     return True

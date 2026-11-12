@@ -161,7 +161,7 @@ async def test_safe_failure_retries_once_on_another_worker(monkeypatch) -> None:
     async def fake_retry(_principal, _target, _model=None, **kwargs):
         return second
 
-    monkeypatch.setattr(main_module, "quarantine_worker", fake_quarantine)
+    monkeypatch.setattr(main_module, "verify_worker_failure", fake_quarantine)
     monkeypatch.setattr(main_module, "retry_target", fake_retry)
     result, selected = await complete_with_failover(ResponseRequest(model="gpt-6-sol", input="hello"), Backend(), ApiPrincipal(None, "test"), first, allow_retry=True)
     assert result.text == "ok"
@@ -173,7 +173,7 @@ async def test_safe_failure_retries_once_on_another_worker(monkeypatch) -> None:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("probe_ok", [True, False])
 @pytest.mark.parametrize("provider", ["codex", "gemini"])
-async def test_worker_quarantine_does_not_wait_for_probe(monkeypatch, probe_ok, provider) -> None:
+async def test_worker_quarantine_uses_probe_verdict(monkeypatch, probe_ok, provider) -> None:
     worker_id = uuid4()
     worker = type("WorkerRecord", (), {"failure_kind": None, "failure_reason": None, "provider": provider})()
     calls = []
@@ -205,10 +205,10 @@ async def test_worker_quarantine_does_not_wait_for_probe(monkeypatch, probe_ok, 
     monkeypatch.setattr("codex_gateway.quota.quota_lock", AsyncMock())
 
     monkeypatch.setattr(main_module, "reconcile_worker", AsyncMock())
-    assert await main_module.quarantine_worker(worker_id, "request stream failed", "connection")
-    assert worker.status == "error"
-    assert worker.failure_reason == "request stream failed"
-    assert calls == []
+    assert await main_module.quarantine_worker(worker_id, "request stream failed", "connection") is (not probe_ok)
+    assert worker.failure_kind == (None if probe_ok else "connection")
+    assert worker.failure_reason == (None if probe_ok else "health check failed")
+    assert calls == [worker]
 
 
 @pytest.mark.asyncio

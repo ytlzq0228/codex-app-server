@@ -1,6 +1,7 @@
 """Claude Code transport, kept separate from the existing Codex backend."""
 import json
 import logging
+import time
 from collections import Counter
 from contextlib import aclosing
 from datetime import datetime, timedelta, timezone
@@ -19,11 +20,14 @@ class ClaudeAdapter:
         self.settings = settings
         self.active_turns = Counter()
         self.tool_sessions = ToolSessions(self._turn_events, limit=settings.claude_tool_session_limit,
-                                          per_key_limit=settings.claude_tool_sessions_per_key)
+                                          per_key_limit=settings.claude_tool_sessions_per_key,
+                                          ttl=settings.client_tool_result_timeout_seconds,
+                                          progress_timeout=settings.client_tool_progress_timeout_seconds,
+                                          consumer_timeout=settings.client_tool_consumer_timeout_seconds)
 
     async def stream(self, request, target):
         try:
-            events = (self.tool_sessions.stream(request, target) if definitions(request) or tool_outputs(request)
+            events = (self.tool_sessions.stream(request, target) if (request.tool_choice != 'none' and definitions(request)) or tool_outputs(request)
                       else self._turn_events(request, target))
             async with aclosing(events):
                 async for event in events:
@@ -122,6 +126,8 @@ class ClaudeAdapter:
         # remote CLI may already have accepted the prompt.
         try:
             async with httpx.AsyncClient(timeout=self.settings.app_server_timeout_seconds) as client:
+                from .request_rate_limits import admit_worker_dispatch
+                await admit_worker_dispatch(target)
                 async with client.stream("POST", target.endpoint + "/turn", json=payload,
                         headers={"Authorization": "Bearer " + self.settings.app_server_token.get_secret_value()}) as response:
                     if response.status_code != 200:
@@ -152,6 +158,10 @@ class ClaudeAdapter:
                                       if any(k in data for k in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")) else None)
                         if data.get("heartbeat"):
                             continue
+                        if tool_run is not None and (data.get('delta') or data.get('done')
+                                or data.get('event') == 'client_tool'
+                                or (data.get('stream') or {}).get('type') == 'content_block_delta'):
+                            tool_run.last_progress_at = time.monotonic()
                         if data.get("error"):
                             from .diagnostics import annotate_failure, worker_process_context
                             failure = WorkerFailure(data["error"], kind=data.get("kind", "connection"),
@@ -272,7 +282,7 @@ class ClaudeAdapter:
                 calls.append(event.tool_call)
         if not terminal.done and not calls:
             raise WorkerFailure("Claude returned no final result", code="claude_stream_incomplete", status=502)
-        return BackendResult(text=text, tool_calls=calls, thread_id=terminal.thread_id,
+        return BackendResult(terminal_tool=terminal.terminal_tool, text=text, tool_calls=calls, thread_id=terminal.thread_id,
                              usage_accounting=terminal.usage_accounting,
                              input_tokens=terminal.input_tokens, output_tokens=terminal.output_tokens,
                              cache_read_tokens=terminal.cache_read_tokens, cache_write_tokens=terminal.cache_write_tokens)

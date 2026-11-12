@@ -6,6 +6,7 @@ from .worker_names import archived_worker_name
 
 
 async def upgrade(connection):
+    await connection.execute(text("CREATE TABLE IF NOT EXISTS request_rate_windows (scope VARCHAR(100) PRIMARY KEY, attempts JSON NOT NULL)"))
     await connection.execute(text("ALTER TABLE workers ADD COLUMN IF NOT EXISTS logged_out_since TIMESTAMPTZ"))
     await connection.execute(text("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS disabled_reason VARCHAR(32)"))
     await connection.execute(text("ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS disabled_at TIMESTAMPTZ"))

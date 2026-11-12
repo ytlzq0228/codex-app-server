@@ -82,7 +82,8 @@ def test_orphan_wait_rebuilds_but_live_wait_blocks_and_partial_history_rejects()
         live=SimpleNamespace(has_pending=lambda *a:True)
         with pytest.raises(HTTPException) as error:await ex.prepare(follow,p,'responses',b,tool_sessions=live)
         assert error.value.detail['error']['code']=='conversation_waiting_tool'
-        partial=req();c=audit_for(partial,__import__('json').loads(b['body'])['client_metadata']['thread_id'])
+        # Without a new user turn, incomplete history cannot abandon the RPC.
+        partial=req([{'role':'assistant','content':'incomplete history'}]);c=audit_for(partial,__import__('json').loads(b['body'])['client_metadata']['thread_id'])
         with pytest.raises(HTTPException) as error:await ex.prepare(partial,p,'responses',c)
         assert error.value.detail['error']['code']=='conversation_history_required'
         prepared,binding=await ex.prepare(follow,p,'responses',b,tool_sessions=SimpleNamespace(has_pending=lambda *a:False))

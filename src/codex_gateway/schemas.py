@@ -347,6 +347,7 @@ class ChatCompletionRequest(OpenAIRequestModel):
 
 
 class BackendResult(BaseModel):
+    terminal_tool: bool = False
     native_items: list[dict[str, Any]] = Field(default_factory=list)
     web_sources: list[dict[str, str]] = Field(default_factory=list)
     usage_accounting: dict[str, Any] | None = None
@@ -360,6 +361,7 @@ class BackendResult(BaseModel):
 
 
 class BackendStreamEvent(BaseModel):
+    terminal_tool: bool = False
     native_item: dict[str, Any] | None = None
     web_sources: list[dict[str, str]] = Field(default_factory=list)
     usage_accounting: dict[str, Any] | None = None

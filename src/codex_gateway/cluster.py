@@ -192,6 +192,17 @@ async def publish_tool(run, ttl):
         await db.commit()
 
 
+async def unpublish_tool(key, call_id):
+    settings = get_settings()
+    if not settings.node_id:
+        return
+    async with SessionLocal() as db:
+        await db.execute(delete(PendingToolRoute).where(
+            PendingToolRoute.key_id == key, PendingToolRoute.call_id == call_id,
+            PendingToolRoute.node_id == settings.node_id))
+        await db.commit()
+
+
 async def pending_route(request, key, backend):
     settings = get_settings()
     if settings.node_id and tool_outputs(request):
@@ -214,6 +225,7 @@ async def pending_route(request, key, backend):
 
 
 async def recoverable_pending_route(body, principal, endpoint, backend, audit):
+    await release_replaced_result(body, principal, endpoint, backend, audit)
     from .execution import recover_lost_output
     recovered = await recover_lost_output(body, principal, endpoint, audit, failed_only=True)
     if recovered is not None:
@@ -232,6 +244,96 @@ async def recoverable_pending_route(body, principal, endpoint, backend, audit):
         if recovered is None:
             raise
         return recovered, None, None
+
+
+async def release_replaced_result(body, principal, endpoint, backend, audit):
+    """Untracked clients can replace a pending turn using its exact call identity.
+
+    Tracked conversations retain the existing checkpoint/lease cancellation path.
+    A replacement is never admitted until the owner acknowledges cleanup.
+    """
+    from .client_tools import result_before_user_turn
+    if not principal.key_id or not isinstance(body.input, list):
+        return
+    from .conversations import explicit_identity
+    from .audit import request_params
+    from .request_observation import request_observation
+    observation = request_observation(audit)
+    if (not observation.get('body_complete') or observation.get('body_capture_truncated')
+            or observation.get('capture_notes')):
+        return
+    logical, _ = explicit_identity(request_params(audit), observation, principal.key_id, endpoint, '')
+    if logical:
+        return
+    candidate = result_before_user_turn(body)
+    if candidate is None:
+        return
+    call_id = tool_outputs(candidate)[0][0]
+    payload = {'key_id': str(principal.key_id), 'logical_id': call_id, 'response_id': call_id}
+    sessions = getattr(backend, 'tool_sessions', None)
+    replacements = getattr(sessions, 'replacements', None)
+    # A disconnected ingress may retry while the owner is still closing resources.
+    # Consult the cancellation first: find() rejects the already-claimed call.
+    if replacements and cancellation_id('replace-result', payload) in replacements.entries:
+        await replace_local_result(sessions, body, payload)
+        audit['tool_lifecycle'] = {'action': 'replace_result_turn', 'call_id': call_id}
+        return
+    try:
+        target, thread = await pending_route(candidate, principal.key_id, backend)
+    except ToolProtocolError as exc:
+        if exc.code in {'client_tool_call_unavailable', 'client_tool_call_expired', 'client_tool_call_cancelled'}:
+            return
+        raise
+    if target is None:
+        return
+    settings = get_settings()
+    url = await owner_url(target, settings)
+    if url:
+        payload = {'key_id': str(principal.key_id), 'logical_id': call_id,
+                   'response_id': call_id, 'request': body.model_dump(mode='json')}
+        confirmed = await request_cancellation(url, 'replace-result', payload, settings)
+    else:
+        sessions = backend.tool_sessions
+        confirmed = await replace_local_result(sessions, body, payload)
+    if not confirmed:
+        raise cancellation_failure('tool_cancellation_unconfirmed', 'Pending tool cleanup was not confirmed')
+    audit['tool_lifecycle'] = {'action': 'replace_result_turn', 'thread_id': thread, 'call_id': call_id}
+
+
+async def replace_local_result(sessions, body, payload):
+    import time
+    if not hasattr(sessions, 'replacements'):
+        sessions.replacements = Cancellations()
+    operation_id = cancellation_id('replace-result', payload)
+    deadline = time.monotonic() + 8
+    while True:
+        result = await sessions.replacements.run(operation_id,
+            lambda: sessions.replace_result_turn(body, payload['key_id']))
+        if result['cancelled']:
+            return True
+        if time.monotonic() >= deadline:
+            raise cancellation_failure('tool_cancellation_timeout', 'Pending tool cleanup is still running; retry the same request')
+
+
+@router.post('/internal/tools/replace-result', include_in_schema=False)
+async def replace_result(request: Request):
+    settings = get_settings()
+    expected = 'Bearer ' + settings.manager_token.get_secret_value()
+    if not settings.node_id or not hmac.compare_digest(request.headers.get('authorization', ''), expected):
+        raise HTTPException(401, 'Unauthorized')
+    payload = await request.json()
+    body = ResponseRequest.model_validate(payload['request'])
+    from .client_tools import result_before_user_turn
+    candidate = result_before_user_turn(body)
+    if candidate is None:
+        raise HTTPException(400, 'Expected a tool result followed by a new user turn')
+    call_id = tool_outputs(candidate)[0][0]
+    if payload.get('logical_id') != call_id or payload.get('response_id') != call_id:
+        raise HTTPException(409, 'Tool identity changed')
+    operation = cancellation_operation(request, 'replace-result', payload)
+    return await operation.run(cancellation_id('replace-result', payload),
+        lambda: request.app.state.backend.tool_sessions.replace_result_turn(body, payload['key_id']),
+        status_only=payload.get('status_only') is True)
 
 
 from .cancellations import Cancellations, operation_id as cancellation_id, failure as cancellation_failure
@@ -511,7 +613,7 @@ async def collect(events):
             calls.append(event.tool_call)
     if last is None or not (last.done or calls):
         raise WorkerFailure("Execution returned no final result")
-    return BackendResult(text="".join(text_parts), native_items=native_items, web_sources=web_sources, tool_calls=calls,
+    return BackendResult(terminal_tool=last.terminal_tool, text="".join(text_parts), native_items=native_items, web_sources=web_sources, tool_calls=calls,
         usage_accounting=last.usage_accounting,
         thread_id=last.thread_id, input_tokens=last.input_tokens, output_tokens=last.output_tokens,
         cache_read_tokens=last.cache_read_tokens, cache_write_tokens=last.cache_write_tokens)

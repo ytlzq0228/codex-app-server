@@ -236,6 +236,12 @@ class ExecutionSession(Base):
     history_hashes: Mapped[list | None] = mapped_column(JSON, nullable=True)
 
 
+class RequestRateWindow(Base):
+    __tablename__ = "request_rate_windows"
+    scope: Mapped[str] = mapped_column(String(100), primary_key=True)
+    attempts: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+
+
 class UsageRecord(Base):
     __tablename__ = "usage_records"
     provider: Mapped[str] = mapped_column(String(16), default="codex", server_default="codex", index=True)

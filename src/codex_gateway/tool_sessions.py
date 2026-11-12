@@ -6,6 +6,7 @@ result. A restart or expiry fails explicitly instead of rerunning the tool.
 import asyncio
 import logging
 import time
+from contextlib import aclosing
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from .client_tools import ToolProtocolError, tool_outputs, definitions, compatible_definitions
@@ -26,10 +27,15 @@ class ToolRun:
     thread_id: str | None = None
     delivered_usage: tuple = (0,0,0,0)
     created_at: float = field(default_factory=time.monotonic)
+    last_progress_at: float = field(default_factory=time.monotonic)
+    failure: Exception | None = None
+    public_call: dict | None = None
+    published_call_id: str | None = None
 
 
 class ToolSessions:
-    def __init__(self, run_events, ttl=300, limit=512, per_key_limit=8):
+    def __init__(self, run_events, ttl=300, limit=512, per_key_limit=8,
+                 progress_timeout=300, consumer_timeout=30):
         self.run_events=run_events
         self.ttl=ttl
         self.limit=limit
@@ -38,6 +44,50 @@ class ToolSessions:
         self.pending={}
         self.runs=set()
         self.retired=OrderedDict()
+        self.progress_timeout = progress_timeout
+        self.consumer_timeout = consumer_timeout
+
+    async def replace_result_turn(self, request, key):
+        """Release only the authenticated, unclaimed RPC represented by this history."""
+        from .client_tools import result_before_user_turn
+        candidate = result_before_user_turn(request)
+        if candidate is None:
+            raise ToolProtocolError('Expected a tool result followed by a new user turn')
+        run = self.find(candidate, key)
+        call = next(i for i in request.input if isinstance(i, dict) and
+                    i.get('type') in {'function_call', 'custom_tool_call'} and i.get('call_id') == run.call_id)
+        from .execution import normal_item
+        if normal_item(call) != normal_item(run.public_call):
+            raise ToolProtocolError('Tool call history does not match the pending call')
+        run.claimed = True
+        self.retire((str(key), run.call_id), 'client_tool_result_duplicate')
+        run.task.cancel()
+        await asyncio.gather(run.task, return_exceptions=True)
+        return True
+
+    async def watch_progress(self, run):
+        while True:
+            await asyncio.sleep(min(1, self.progress_timeout))
+            waiting = run.reply is not None and not run.reply.done()
+            if not waiting and time.monotonic() - run.last_progress_at >= self.progress_timeout:
+                from .diagnostics import annotate_failure
+                run.failure = annotate_failure(ToolProtocolError(
+                    'Tool execution stopped making progress; continue with full history',
+                    'client_tool_execution_timeout'), 'tool_lifecycle', phase='upstream',
+                    worker_id=str(run.target.worker_id), thread_id=run.thread_id)
+                run.task.cancel()
+                return
+
+    async def unpublish(self, run):
+        call_id, run.published_call_id = run.published_call_id, None
+        if call_id is None:
+            return
+        from .cluster import unpublish_tool
+        try:
+            await asyncio.wait_for(unpublish_tool(run.target.connection_key.split(':', 1)[0], call_id), 3)
+        except Exception:
+            # The route has its own TTL; unavailable DB cleanup must not hold a local slot.
+            logging.getLogger(__name__).warning('Client tool route cleanup deferred: thread_id=%s', run.thread_id)
 
     def retire(self, key, code):
         self.retired[key]=(time.monotonic(),code)
@@ -166,34 +216,65 @@ class ToolSessions:
         return run.target if run else None
 
     async def pump(self,run):
+        watcher = asyncio.create_task(self.watch_progress(run), name='tool-progress-watchdog')
         try:
-            async for event in self.run_events(run.request,run.target,run):
-                run.thread_id = event.thread_id or run.thread_id
-                if event.tool_call:
-                    from .cluster import publish_tool
-                    await publish_tool(run, self.ttl)
-                await run.queue.put(event)
+            async with aclosing(self.run_events(run.request,run.target,run)) as events:
+                async for event in events:
+                    if event.delta or event.tool_call or event.done or event.native_item:
+                        run.last_progress_at = time.monotonic()
+                    run.thread_id = event.thread_id or run.thread_id
+                    if event.tool_call:
+                        from .client_tools import terminal_tool_call
+                        if terminal_tool_call(run.request, event.tool_call):
+                            self.retire((run.target.connection_key.split(':', 1)[0], run.call_id),
+                                        'client_tool_call_completed')
+                            # Close the upstream generator before publishing the final call.
+                            # No route is published and no fabricated tool result is executed.
+                            await events.aclose()
+                            await asyncio.wait_for(run.queue.put(event.model_copy(update={
+                                'terminal_tool': True, 'done': True})), self.consumer_timeout)
+                            return
+                        from .cluster import publish_tool
+                        run.published_call_id = run.call_id
+                        await publish_tool(run, self.ttl)
+                    try:
+                        await asyncio.wait_for(run.queue.put(event), self.consumer_timeout)
+                    except asyncio.TimeoutError as exc:
+                        raise ToolProtocolError('Tool execution consumer stopped reading events',
+                                                'client_tool_consumer_timeout') from exc
         except asyncio.CancelledError:
+            run.failure = run.failure or ToolProtocolError(
+                'The pending execution was cancelled or invalidated', 'client_tool_call_unavailable')
             if run.accepted_call_id:
                 key = run.target.connection_key.split(':', 1)[0]
                 self.retire((key, run.accepted_call_id), 'client_tool_call_unavailable')
             if not run.queue.full():
-                run.queue.put_nowait(ToolProtocolError('The pending execution was cancelled or invalidated', 'client_tool_call_unavailable'))
+                run.queue.put_nowait(run.failure)
             raise
         except Exception as exc:
             if run.accepted_call_id:
                 key = run.target.connection_key.split(':', 1)[0]
                 self.retire((key, run.accepted_call_id), 'client_tool_call_unavailable')
-            await run.queue.put(exc)
+            run.failure = exc
+            if not run.queue.full():
+                run.queue.put_nowait(exc)
         finally:
+            watcher.cancel()
             if run.call_id:
                 self.pending.pop((run.target.connection_key.split(':',1)[0],run.call_id),None)
             self.runs.discard(run)
+            if run.failure:
+                logging.getLogger(__name__).warning(
+                    'Client tool execution ended: code=%s worker_id=%s thread_id=%s active_sessions=%s',
+                    getattr(run.failure, 'code', 'execution_failed'), run.target.worker_id,
+                    run.thread_id, len(self.runs))
             # Consumers stop at done events; sentinel also covers interrupted EOF.
             if not run.queue.full():
                 run.queue.put_nowait(None)
+            await self.unpublish(run)
 
     async def await_result(self,run,call):
+        run.public_call = dict(call)
         run.call_id=call['call_id']
         run.waiting_since=time.monotonic()
         run.reply=asyncio.get_running_loop().create_future()
@@ -220,8 +301,10 @@ class ToolSessions:
                                             run.target.worker_id, run.thread_id, run.call_id)
             raise
         finally:
+            run.last_progress_at = time.monotonic()
             self.pending.pop((run.target.connection_key.split(':',1)[0],run.call_id),None)
             run.call_id=None
+            await self.unpublish(run)
 
     async def stream(self,request,target):
         key=target.connection_key.split(':',1)[0]
@@ -264,6 +347,8 @@ class ToolSessions:
         suspended=False
         try:
             while True:
+                if run.task.done() and run.failure:
+                    raise run.failure
                 event=await run.queue.get()
                 if event is None:
                     break
@@ -279,7 +364,7 @@ class ToolSessions:
                         event=event.model_copy(update=updates)
                     if boundary:
                         run.delivered_usage=counts
-                if event.tool_call:
+                if event.tool_call and not event.terminal_tool:
                     suspended=True
                     run.accepted_call_id=None
                 yield event

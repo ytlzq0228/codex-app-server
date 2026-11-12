@@ -4,6 +4,7 @@ import hashlib
 import logging
 from decimal import Decimal
 import asyncio
+import random
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -28,6 +29,7 @@ from .admin import probe_worker_record, router as admin_router
 from .admin import user_router as admin_user_router
 from .auth import ApiPrincipal, require_api_key
 from .key_limits import require_key_budget
+from .request_rate_limits import count_key_attempt, count_worker_attempt
 from .app_server import open_app_server
 from .providers import provider_for, validate_capabilities, validate_chat_capabilities, reject
 from .gemini_backend import ProviderBackend
@@ -38,6 +40,7 @@ from .database import SessionLocal, engine, get_session
 from .models import MetricSnapshot, ModelPrice, Base, ResponseBinding, UsageRecord, Worker, WorkerStatus
 from .audit import RequestAuditMiddleware, current_audit, request_params as captured_params
 from .request_observation import request_observation
+from .stored_request import stored_request_params
 from .conversations import correlate, durable_write
 from .client_tools import ToolProtocolError
 from .grammar_tools import validate_grammars
@@ -618,8 +621,19 @@ async def choose_execution_target(principal, session, binding, body):
 
 
 async def retry_target(principal: ApiPrincipal, failed: BackendTarget, model: str | None = None, *, exclude_worker_ids=None) -> BackendTarget:
+    # All complete/stream failovers share this cap; never replay unsafe turns.
+    failures = len(set(exclude_worker_ids or ()) | {failed.worker_id})
+    if failures > 2:
+        raise HTTPException(503, detail={"error": {
+            "message": "Automatic retry budget exhausted; retry later.",
+            "type": "server_error", "code": "worker_retry_exhausted", "param": None,
+        }}, headers={"Retry-After": "5"})
+    await count_key_attempt(principal)
+    await asyncio.sleep(random.uniform(0.5, 1.0) * (2 ** (failures - 1)))
     async with SessionLocal() as session:
-        return await choose_target(principal, session, exclude_worker_ids={failed.worker_id, *(exclude_worker_ids or ())}, provider=failed.provider, model=model)
+        target = await choose_target(principal, session, exclude_worker_ids={failed.worker_id, *(exclude_worker_ids or ())}, provider=failed.provider, model=model)
+    await count_worker_attempt(target)
+    return target
 
 
 async def release_request_session(session: AsyncSession) -> None:
@@ -704,23 +718,28 @@ async def save_usage(
             record.logical_conversation_id = audit["execution"]["logical_id"]
         if audit and audit.get("diagnostic"):
             record.conversation_evidence["diagnostic"] = audit["diagnostic"]
+        if audit and audit.get("tool_lifecycle"):
+            record.conversation_evidence["tool_lifecycle"] = audit["tool_lifecycle"]
         if audit and audit.get("rejection"):
             record.conversation_evidence["rejection"] = audit["rejection"]
             record.error_code = audit["rejection"].get("code", record.error_code)
         if result and result.tool_calls:
-            record.conversation_evidence["execution_outcome"] = "waiting_client_tool"
+            record.conversation_evidence["execution_outcome"] = "completed" if result.terminal_tool else "waiting_client_tool"
+            if result.terminal_tool:
+                record.conversation_evidence["tool_lifecycle"] = {"action": "terminal_output"}
             record.conversation_evidence["client_tool_call_ids"] = [c["call_id"] for c in result.tool_calls]
         # Lock before inserting FK references, avoiding concurrent lock upgrades.
         worker = await session.scalar(select(Worker).where(Worker.id == target.worker_id).with_for_update()) if target.worker_id else None
         from .usage_accounting import apply_usage, snapshot
         await apply_usage(session, record, snapshot(result, audit))
+        record.request_params = stored_request_params(record.request_params)
         session.add(record)
         generation_ok = worker is None or target.worker_generation is None or worker.execution_generation == target.worker_generation
         checkpoint_ok = await finish_execution(session, audit, result if status_code == 200 and generation_ok else None, target, response_id)
         retired = await session.scalar(select(ResponseBinding.response_id).where(
             ResponseBinding.api_key_id == principal.key_id, ResponseBinding.thread_id == result.thread_id,
             ResponseBinding.status != "active").limit(1)) if result and principal.key_id else None
-        if (persist_binding or (audit and audit.get("execution"))) and result and principal.key_id and result.thread_id and target.worker_id and generation_ok and checkpoint_ok and not retired:
+        if (persist_binding or (audit and audit.get("execution"))) and result and not result.terminal_tool and principal.key_id and result.thread_id and target.worker_id and generation_ok and checkpoint_ok and not retired:
             now = utcnow()
             session.add(ResponseBinding(response_id=response_id, api_key_id=principal.key_id, worker_id=target.worker_id, thread_id=result.thread_id, last_used_at=now, expires_at=None, status="active", worker_generation=worker.execution_generation, provider=getattr(worker, "provider", None) or "codex"))
         await session.commit()
@@ -737,6 +756,7 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
     yield sse({"type": "response.in_progress", "sequence_number": sequence, "response": created}); sequence += 1
     message_started = False
     tool_calls = []
+    terminal_tool = False
     native_items = {}
     web_sources = []
     chunks: list[str] = []
@@ -748,6 +768,7 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
         while True:
             try:
                 async for event in backend.stream(body, target):
+                    terminal_tool = event.terminal_tool
                     thread_id = event.thread_id or thread_id
                     from .audit import track_backend
                     track_backend(target, thread_id)
@@ -830,7 +851,7 @@ async def response_stream(body: ResponseRequest, backend: CompletionBackend, pri
         yield sse({"type": "response.failed", "sequence_number": sequence, "response": failed})
         return
     text = "".join(chunks).rstrip()
-    result = BackendResult(text=text, native_items=list(native_items.values()), web_sources=web_sources, tool_calls=tool_calls, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens, cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens, usage_accounting=usage_accounting)
+    result = BackendResult(terminal_tool=terminal_tool, text=text, native_items=list(native_items.values()), web_sources=web_sources, tool_calls=tool_calls, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens, cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens, usage_accounting=usage_accounting)
     await save_usage(response_id, principal, target, body.model, 200, started, result, persist_binding=True, previous_response_id=public_previous_id, request_params=body.model_dump(mode="json"))
     if message_started or not tool_calls:
         if not message_started:
@@ -875,12 +896,14 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
     usage_accounting = None
     output_chunks = []
     tool_calls = []
+    terminal_tool = False
     content_emitted = False
     failed_worker_ids = set()
     try:
         while True:
             try:
                 async for event in backend.stream(request, target):
+                    terminal_tool = event.terminal_tool
                     thread_id = event.thread_id or thread_id
                     from .audit import track_backend
                     track_backend(target, thread_id)
@@ -928,10 +951,11 @@ async def chat_completion_stream(body: ChatCompletionRequest, request: ResponseR
             error_code, error_message = error.get("code", error_code), error.get("message", error_message)
         if audit := current_audit.get(): audit["rejection"] = {"code": error_code, "message": error_message}
         await save_usage(completion_id, principal, target, body.model, exc.status_code if isinstance(exc, HTTPException) else exc.status if isinstance(exc, WorkerFailure) and exc.status else 429 if error_code == "provider_quota_exhausted" else 400 if request_failure else 503 if capacity_failure else 502, started, error_code=error_code, request_params=body.model_dump(mode="json"))
-        yield chat_sse({"error": {"message": error_message, "type": "invalid_request_error" if request_failure else "server_error", "code": error_code}})
+        error_type = exc.detail.get("error", {}).get("type", "server_error") if isinstance(exc, HTTPException) and isinstance(exc.detail, dict) else "invalid_request_error" if request_failure else "server_error"
+        yield chat_sse({"error": {"message": error_message, "type": error_type, "code": error_code}})
         yield chat_sse("[DONE]")
         return
-    result = BackendResult(text="".join(output_chunks), tool_calls=tool_calls, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens, cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens, usage_accounting=usage_accounting)
+    result = BackendResult(terminal_tool=terminal_tool, text="".join(output_chunks), tool_calls=tool_calls, thread_id=thread_id, input_tokens=input_tokens, output_tokens=output_tokens, cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens, usage_accounting=usage_accounting)
     await save_usage(completion_id, principal, target, body.model, 200, started, result, request_params=body.model_dump(mode="json"))
     for index, call in enumerate(tool_calls):
         yield chat_sse(chunk({"tool_calls":[{"index":index,"id":call["call_id"],"type":"function","function":{"name":call["name"],"arguments":call["arguments"]}}]}))
@@ -1060,6 +1084,7 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
         track_backend(target, None, source="selected_worker")
     allow_retry = not pending_target and (execution_binding is None or request._execution_auto_resume) and principal.pinned_worker_id is None
     await release_request_session(session)
+    await count_worker_attempt(target)
     if body.stream:
         return StreamingResponse(keepalive(chat_completion_stream(body, request, backend, principal, target, allow_retry)), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", **({"x-gateway-generation-policy": "worker-defaults"} if provider_for(body.model) == "claude" else {})})
     started = time.monotonic()
@@ -1133,6 +1158,7 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
         from .audit import track_backend
         track_backend(target, None, source="selected_worker")
     await release_request_session(session)
+    await count_worker_attempt(target)
     if body.stream:
         return StreamingResponse(keepalive(response_stream(body, backend, principal, target, public_previous_id, not pending_target and (binding is None or body._execution_auto_resume) and principal.pinned_worker_id is None)), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", **({"x-gateway-generation-policy": "worker-defaults"} if provider_for(body.model) == "claude" else {})})
     started = time.monotonic()

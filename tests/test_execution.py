@@ -329,10 +329,6 @@ def test_streaming_continuation_and_pending_tools(endpoint):
             else:
                 call=next(e['choices'][0]['delta']['tool_calls'][0] for e in events if e.get('choices') and e['choices'][0]['delta'].get('tool_calls'))
                 history.extend([{'role':'assistant','tool_calls':[call]},{'role':'tool','tool_call_id':call['id'],'content':'ok'}])
-            # New user turn cannot displace a suspended tool run.
-            payload={'input':[{'role':'user','content':'other'}]} if endpoint=='responses' else {'messages':[{'role':'user','content':'other'}]}
-            busy=client.post(url,headers=headers,json={'model':'gpt-6-sol',**payload})
-            assert busy.status_code==409,busy.text
             # Metadata may be absent on tool return; authenticated call_id recovers it.
             events=send(history,headers={})
             if endpoint=='responses':assert events[-1]['response']['output'][0]['content'][0]['text']=='answer ok'
@@ -341,6 +337,20 @@ def test_streaming_continuation_and_pending_tools(endpoint):
             send(history)
             assert len(calls)==2 and calls[0][0]==calls[1][0] and calls[0][2]==calls[1][2]
             assert calls[1][1]=='USER:\nsecond'
+            # A scoped new user turn can abandon a waiting RPC, but the
+            # replacement must answer independently with tools disabled.
+            assert backend.tool_sessions.has_pending(key, calls[1][0])
+            payload={'input':[{'role':'user','content':'other'}]} if endpoint=='responses' else {'messages':[{'role':'user','content':'other'}]}
+            recovered=client.post(url,headers=headers,json={'model':'gpt-6-sol',**payload})
+            assert recovered.status_code==200,recovered.text
+            assert ex.RECOVERY_NOTICE in recovered.text
+            assert not backend.tool_sessions.has_pending(key, calls[1][0])
+            assert len(calls)==2  # No old RPC or new tool execution was run.
+            async def verify_recovery():
+                async with SessionLocal() as db:
+                    row=await db.scalar(select(UsageRecord).where(UsageRecord.request_id==recovered.json()['id']))
+                    assert row.conversation_evidence['execution']['reason']=='context_only_recovery'
+            client.portal.call(verify_recovery)
         finally:
             client.portal.call(backend.close)
             app.dependency_overrides.pop(get_backend,None)

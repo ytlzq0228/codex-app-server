@@ -145,13 +145,19 @@ def summarize_latest(rows, prices):
         return dict(requests=0, input_tokens=0, output_tokens=0, cache_read_tokens=0,
                     cache_write_tokens=0, amount=Decimal(0), unpriced=0)
     total, users, workers = empty(), {}, {}
+    key_workers, worker_keys = {}, {}
     for row in rows:
         owner, key_id, key_name, worker_id, worker_name, model, count, inp, out, cache_read, cache_write = row
         price = prices.get(model)
         amount = priced_amount(inp, out, cache_read, cache_write, price) if price else Decimal(0)
         key_group = users.setdefault((owner, key_id), {**empty(), "owner": owner or t('开发 / 未归属'), "key_id": str(key_id) if key_id else "—", "name": key_name or t('开发 Key / 未知 Key')})
         worker_group = workers.setdefault(worker_id, {**empty(), "name": worker_name or t('未分配 Worker'), "worker_id": str(worker_id) if worker_id else "—"})
-        for group in (total, key_group, worker_group):
+        key_worker = key_workers.setdefault((owner, key_id), {}).setdefault(
+            worker_id, {**empty(), "name": worker_group["name"], "worker_id": worker_group["worker_id"]})
+        worker_key = worker_keys.setdefault(worker_id, {}).setdefault(
+            key_id, {**empty(), "name": key_group["name"], "key_id": key_group["key_id"], "owners": set()})
+        worker_key["owners"].add(key_group["owner"])
+        for group in (total, key_group, worker_group, key_worker, worker_key):
             group["requests"] += count
             group["input_tokens"] += inp
             group["output_tokens"] += out
@@ -159,6 +165,18 @@ def summarize_latest(rows, prices):
             group["cache_write_tokens"] += cache_write
             group["amount"] += amount
             group["unpriced"] += 0 if price else count
+    def top_ten(groups, id_field):
+        # Cache tokens are included in input_tokens; do not count them twice.
+        return sorted(groups, key=lambda g: (
+            -(g["input_tokens"] + g["output_tokens"]), -g["requests"], g[id_field]))[:10]
+
+    for identity, group in users.items():
+        group["top_workers"] = top_ten(key_workers[identity].values(), "worker_id")
+    for worker_id, group in workers.items():
+        keys = worker_keys[worker_id].values()
+        for key in keys:
+            key["owner"] = ", ".join(sorted(key.pop("owners")))
+        group["top_keys"] = top_ten(keys, "key_id")
     return total, sorted(users.values(), key=lambda g: g["amount"], reverse=True), sorted(workers.values(), key=lambda g: g["amount"], reverse=True)
 
 

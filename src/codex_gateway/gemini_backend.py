@@ -20,11 +20,14 @@ async def worker_rpc(endpoint, settings, path, payload=None):
 class GeminiAdapter:
     def __init__(self, settings):
         self.settings = settings
-        self.tool_sessions = ToolSessions(self._turn_events)
+        self.tool_sessions = ToolSessions(self._turn_events,
+            ttl=settings.client_tool_result_timeout_seconds,
+            progress_timeout=settings.client_tool_progress_timeout_seconds,
+            consumer_timeout=settings.client_tool_consumer_timeout_seconds)
 
     async def stream(self, request, target):
         try:
-            events = (self.tool_sessions.stream(request, target) if definitions(request) or tool_outputs(request)
+            events = (self.tool_sessions.stream(request, target) if (request.tool_choice != 'none' and definitions(request)) or tool_outputs(request)
                       else self._turn_events(request, target))
             async for event in events:
                 yield event
@@ -107,6 +110,8 @@ class GeminiAdapter:
         # remote CLI may already have accepted the prompt.
         try:
             async with httpx.AsyncClient(timeout=self.settings.app_server_timeout_seconds) as client:
+                from .request_rate_limits import admit_worker_dispatch
+                await admit_worker_dispatch(target)
                 async with client.stream("POST", target.endpoint + "/turn", json=payload,
                         headers={"Authorization": "Bearer " + self.settings.app_server_token.get_secret_value()}) as response:
                     if response.status_code != 200:
@@ -204,7 +209,7 @@ class GeminiAdapter:
                 calls.append(event.tool_call)
         if not terminal.done and not calls:
             raise WorkerFailure("Gemini returned no final result")
-        return BackendResult(text=text, tool_calls=calls, thread_id=terminal.thread_id,
+        return BackendResult(terminal_tool=terminal.terminal_tool, text=text, tool_calls=calls, thread_id=terminal.thread_id,
                              input_tokens=terminal.input_tokens, output_tokens=terminal.output_tokens,
                              cache_read_tokens=terminal.cache_read_tokens)
 
@@ -222,11 +227,16 @@ class ProviderBackend:
         self.claude.tool_sessions = self.tool_sessions
         self.tool_sessions.limit = settings.claude_tool_session_limit
         self.tool_sessions.provider_key_limits = {"claude": settings.claude_tool_sessions_per_key}
+        self.tool_sessions.ttl = settings.client_tool_result_timeout_seconds
+        self.tool_sessions.progress_timeout = settings.client_tool_progress_timeout_seconds
+        self.tool_sessions.consumer_timeout = settings.client_tool_consumer_timeout_seconds
         self.tool_sessions.run_events = self._turn_events
 
     async def _turn_events(self, request, target, run):
-        async for event in self.adapter(target)._turn_events(request, target, run):
-            yield event
+        from contextlib import aclosing
+        async with aclosing(self.adapter(target)._turn_events(request, target, run)) as events:
+            async for event in events:
+                yield event
 
     def continuation_target(self, request, key):
         return self.codex.continuation_target(request, key)

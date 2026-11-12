@@ -3,7 +3,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from fastapi import Depends, HTTPException
 from sqlalchemy import select, func
-from .auth import ApiPrincipal, require_api_key
+from .auth import ApiPrincipal
+from .request_rate_limits import require_key_rate_limit
 from .database import get_session
 from .models import ApiKey, UsageRecord
 
@@ -40,7 +41,7 @@ async def key_budget_display(session, keys):
     return result
 
 
-async def require_key_budget(principal: ApiPrincipal = Depends(require_api_key),
+async def require_key_budget(principal: ApiPrincipal = Depends(require_key_rate_limit),
                              session=Depends(get_session)):
     if principal.key_id is not None:
         key = await session.get(ApiKey, principal.key_id)

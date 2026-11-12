@@ -4,6 +4,9 @@ import os
 # The development API key has no default any more; the suite opts into it before
 # any Settings instance is built and cached.
 os.environ.setdefault("CODEX_GATEWAY_DEV_API_KEY", "cag_dev_local")
+# Individual limiter tests opt in; unrelated mock tests need no shared database.
+os.environ.setdefault("CODEX_GATEWAY_KEY_REQUESTS_PER_MINUTE", "0")
+os.environ.setdefault("CODEX_GATEWAY_WORKER_REQUESTS_PER_MINUTE", "0")
 
 import httpx
 import pytest

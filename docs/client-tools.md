@@ -65,7 +65,46 @@ resume the same execution; tools never execute on the gateway.
 
 For JSON-only requests, omit tools and use Anthropic output_config.format
 with type=json_schema and schema, Responses text.format, or Chat response_format.
-The gateway does not infer that a tool named structured_output is safe to replace:
-clients may rely on that tool's execution and result. Pending tool capacity returns
+Arbitrary tools, including a tool named structured_output, retain ordinary
+result-return semantics. Pending tool capacity returns
 client_tool_capacity_exceeded (429 for Claude); reduce concurrent requests, return
 outstanding results, and retry with backoff. Limits are per process, not cluster-wide.
+
+## Completion and cleanup
+
+A single non-namespaced function named exactly `StructuredOutput` is treated as a
+terminal output by default. After its arguments pass the declared JSON Schema,
+the gateway closes the upstream execution and returns the original tool-call
+shape. It does not execute the tool, fabricate a result, publish a pending route,
+or wait for a client reply. Audit marks this output completed, and no resumable
+response binding is created. Subsequent work should submit full history.
+This is a compatibility policy, not a general inference from tool descriptions.
+Disable it with `CODEX_GATEWAY_STRUCTURED_OUTPUT_TOOL_TERMINAL=false` or
+`metadata.gateway_tool_lifecycle="interactive"` for a particular request.
+An explicit `metadata.gateway_tool_lifecycle="terminal"` also enables one-shot
+output for another single non-namespaced function. Multiple tools and custom
+tools cannot opt into terminal mode. Native Claude Messages accepts the same
+metadata option. Prefer native JSON Schema output for new structured-output clients.
+
+For untracked clients, an adjacent tool result followed by a new user message
+now releases the old pending execution before starting a new one from full
+history. The owner verifies API Key, call ID, original call contents, model and
+tool contracts; already claimed results cannot be cancelled. User text/images
+and tool results retain their original roles. Cross-node cleanup requires an
+owner acknowledgement; an unavailable owner fails explicitly rather than
+starting another execution. Tracked conversations keep their existing verified
+checkpoint and lease workflow. Return results without a trailing user message
+to resume the original RPC normally.
+
+The default independent deadlines are 300 seconds waiting for a client result,
+300 seconds without execution progress, and 30 seconds blocked delivering to a
+full consumer queue. Configure `CODEX_GATEWAY_CLIENT_TOOL_RESULT_TIMEOUT_SECONDS`,
+`CODEX_GATEWAY_CLIENT_TOOL_PROGRESS_TIMEOUT_SECONDS`, and
+`CODEX_GATEWAY_CLIENT_TOOL_CONSUMER_TIMEOUT_SECONDS`. The client-result timeout cannot exceed 300 seconds,
+matching the current Worker bridge limit. Heartbeats alone do not
+extend the progress deadline; active tool replies, model output and observed
+Codex reasoning progress do. There is no total-age limit on an active session.
+Timeout/error/cancellation paths close the upstream generator, release local
+capacity, and attempt bounded pending-route deletion (the route TTL remains a
+fallback if the database is unavailable). Logs record lifecycle failure codes
+and remaining active sessions. `tool_choice=none` bypasses tool-session admission.

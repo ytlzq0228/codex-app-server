@@ -7,7 +7,7 @@ from sqlalchemy import select
 from codex_gateway.config import get_settings
 from codex_gateway.database import SessionLocal
 from codex_gateway.main import app
-from codex_gateway.models import Worker, WorkerStatus, UsageRecord
+from codex_gateway.models import ApiKey, Worker, WorkerStatus, UsageRecord
 from test_self_service import AJAX, admin_login, new_user, user_login
 
 
@@ -50,6 +50,15 @@ def test_claude_admin_creation_grants_forwarding_and_revocation(monkeypatch):
         assert response.status_code == 200, response.text
         raw = response.json()["secret"]
         key_id = UUID(response.json()["key_id"])
+        # Other tests leave ready Claude workers in the shared database. Pin
+        # this key so the audit assertion checks the worker created here.
+        async def pin():
+            async with SessionLocal() as db:
+                key = await db.get(ApiKey, key_id)
+                key.scheduling_mode = "pinned"
+                key.pinned_worker_id = worker_id
+                await db.commit()
+        client.portal.call(pin)
         headers = {"Authorization": "Bearer " + raw, "anthropic-version": "2023-06-01"}
         paths = [
             ("/v1/responses", {"input": "hello"}),

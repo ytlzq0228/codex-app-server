@@ -3814,5 +3814,21 @@
   "历史停用（原因未知）": {
     "CN": "历史停用（原因未知）",
     "EN": "Previously disabled (reason unknown)"
+  },
+  "TOP 10 Worker": {
+    "CN": "TOP 10 Worker",
+    "EN": "Top 10 Workers"
+  },
+  "TOP 10 Key": {
+    "CN": "TOP 10 Key",
+    "EN": "Top 10 Keys"
+  },
+  "按读写 Token 总量降序，缓存 Token 已包含在读 Token 中。": {
+    "CN": "按读写 Token 总量降序，缓存 Token 已包含在读 Token 中。",
+    "EN": "Sorted by total input and output tokens; cache tokens are already included in input tokens."
+  },
+  "排名": {
+    "CN": "排名",
+    "EN": "Rank"
   }
 }

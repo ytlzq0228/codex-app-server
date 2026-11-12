@@ -124,7 +124,13 @@ async def test_middleware_preserves_stream_and_records_success_failure_disconnec
     assert captured[0]["body_complete"]
     assert len(records) == (0 if saved else 1)
     if records:
-        assert records[0].request_observation == captured[0]
+        observation = dict(records[0].request_observation)
+        delivery = observation.pop("delivery")
+        assert observation == captured[0]
+        assert delivery["body_chunks_sent"] == 1
+        assert delivery["body_bytes_sent"] == len(outgoing[1]["body"])
+        assert delivery["disconnect_observed"] is False
+        assert 0 <= delivery["last_send_ms"] <= delivery["elapsed_ms"]
         assert records[0].status_code == (status if complete else 499)
     assert audit_module.current_audit.get() is None
 

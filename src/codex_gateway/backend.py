@@ -1,5 +1,7 @@
+from fastapi import HTTPException
 import asyncio
 import json
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -158,7 +160,10 @@ class AppServerBackend:
             acquire_timeout=settings.ws_acquire_timeout_seconds,
             ping_timeout=settings.ws_ping_timeout_seconds,
         )
-        self.tool_sessions = ToolSessions(self._turn_events)
+        self.tool_sessions = ToolSessions(self._turn_events,
+            ttl=settings.client_tool_result_timeout_seconds,
+            progress_timeout=settings.client_tool_progress_timeout_seconds,
+            consumer_timeout=settings.client_tool_consumer_timeout_seconds)
         self._thread_locks: dict[str, tuple[asyncio.Lock, int]] = {}
         self._thread_locks_guard = asyncio.Lock()
 
@@ -220,7 +225,7 @@ class AppServerBackend:
 
     async def _turn(self, request, target):
         try:
-            if definitions(request) or tool_outputs(request):
+            if (request.tool_choice != 'none' and definitions(request)) or tool_outputs(request):
                 async for event in self.tool_sessions.stream(request, target):
                     yield event
             else:
@@ -247,6 +252,8 @@ class AppServerBackend:
             try:
                 async with self.pool.lease(target.connection_key, worker_key, target.endpoint) as (app_server, slot_id):
                     workspace = f"{target.workspace}/ws-{slot_id}"
+                    from .request_rate_limits import admit_worker_dispatch
+                    await admit_worker_dispatch(target)
                     account = await app_server.call("account/read", {"refreshToken": False})
                     if account.get("requiresOpenaiAuth") and not account.get("account"):
                         raise WorkerFailure("Codex worker is not logged in", kind="logged_out", safe_to_retry=True)
@@ -290,6 +297,11 @@ class AppServerBackend:
                             if message.get("id") is not None and method:
                                 await app_server.reject_server_request(message)
                             continue
+                        if tool_run is not None and method in {
+                                'item/agentMessage/delta', 'item/reasoning/textDelta',
+                                'item/reasoning/summaryTextDelta', 'thread/tokenUsage/updated',
+                                'item/started', 'item/completed', 'item/tool/call', 'turn/completed'}:
+                            tool_run.last_progress_at = time.monotonic()
                         if (message.get("id") is not None or method == "item/agentMessage/delta"
                                 or (method == "item/started" and (params.get("item") or {}).get("type") != "reasoning")):
                             turn_has_effects = True
@@ -377,6 +389,8 @@ class AppServerBackend:
                 raise
             except ToolProtocolError as exc:
                 raise WorkerFailure(str(exc), kind="capacity" if exc.code == "client_tool_capacity_exceeded" else "request", code=exc.code, status=429 if exc.code == "client_tool_capacity_exceeded" else 400, safe_to_retry=False) from exc
+            except HTTPException:
+                raise
             except WorkerFailure:
                 raise
             except AppServerCapacityError as exc:
@@ -406,7 +420,7 @@ class AppServerBackend:
                 calls.append(event.tool_call)
             if event.delta:
                 chunks.append(event.delta)
-        return BackendResult(text="".join(chunks), native_items=native_items, web_sources=web_sources, tool_calls=calls, thread_id=terminal.thread_id or "", input_tokens=terminal.input_tokens, output_tokens=terminal.output_tokens, cache_read_tokens=terminal.cache_read_tokens, cache_write_tokens=terminal.cache_write_tokens)
+        return BackendResult(terminal_tool=terminal.terminal_tool, text="".join(chunks), native_items=native_items, web_sources=web_sources, tool_calls=calls, thread_id=terminal.thread_id or "", input_tokens=terminal.input_tokens, output_tokens=terminal.output_tokens, cache_read_tokens=terminal.cache_read_tokens, cache_write_tokens=terminal.cache_write_tokens)
 
     async def stream(self, request: ResponseRequest, target: BackendTarget) -> AsyncIterator[BackendStreamEvent]:
         async for event in self._turn(request, target):

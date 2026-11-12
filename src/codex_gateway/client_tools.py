@@ -115,11 +115,78 @@ def tool_outputs(request):
     return outputs
 
 
+def terminal_tool_call(request, call):
+    """An explicit one-shot contract, or the narrow StructuredOutput compatibility policy."""
+    from .config import get_settings
+    mode = (request.metadata or {}).get('gateway_tool_lifecycle')
+    if mode == 'interactive' or request.tool_choice == 'none':
+        return False
+    specs = definitions(request)
+    if len(specs) != 1:
+        return False
+    spec = specs[0]
+    if spec['kind'] != 'function' or spec['namespace'] or call.get('name') != spec['name']:
+        return False
+    if mode != 'terminal' and not (get_settings().structured_output_tool_terminal and
+                                    spec['name'] == 'StructuredOutput'):
+        return False
+    # Never finish on malformed generated data, including providers without native schema enforcement.
+    from jsonschema.validators import validator_for
+    from jsonschema.exceptions import ValidationError, SchemaError
+    try:
+        validator_for(spec['schema'])(spec['schema']).validate(json.loads(call['arguments']))
+    except (ValueError, KeyError, TypeError, ValidationError, SchemaError) as exc:
+        raise ToolProtocolError('Terminal tool arguments did not match their JSON Schema',
+                                'structured_output_invalid') from exc
+    return True
+
+
+def result_before_user_turn(request):
+    """A single adjacent result followed by a new user message, without losing roles.
+
+    This is only a candidate for authenticated cancellation, never an RPC reply.
+    Require the matching call and earlier user context before replacing a turn.
+    """
+    if request.previous_response_id or not isinstance(request.input, list):
+        return None
+    items = request.input
+    end = len(items)
+    while end and isinstance(items[end-1], dict) and items[end-1].get('role') in {'system', 'developer'}:
+        end -= 1
+    if not end or not isinstance(items[end-1], dict) or items[end-1].get('role') != 'user':
+        return None
+    end -= 1
+    if not end:
+        return None
+    candidate = request.model_copy(update={'input': items[:end]})
+    outputs = tool_outputs(candidate)
+    if not outputs:
+        return None
+    if len(outputs) != 1:
+        raise ToolProtocolError('Return exactly one pending tool result before a new user turn')
+    call_id = outputs[0][0]
+    calls = [i for i in items[:end] if isinstance(i, dict) and
+             i.get('type') in {'function_call', 'custom_tool_call'} and i.get('call_id') == call_id]
+    results = [i for i in items if isinstance(i, dict) and
+               i.get('type') in {'function_call_output', 'custom_tool_call_output'} and i.get('call_id') == call_id]
+    if len(calls) != 1 or len(results) != 1 or not any(
+            isinstance(i, dict) and i.get('role') == 'user' for i in items[:end]):
+        raise ToolProtocolError('A new user turn after a tool result requires unambiguous full history')
+    if items.index(calls[0]) >= items.index(results[0]):
+        raise ToolProtocolError('Tool call must precede its result')
+    return candidate
+
+
 def validate(request):
     for name in FORBIDDEN:
         if (request.model_extra or {}).get(name) is not None:
             raise ToolProtocolError(f'{name} cannot override the Worker security policy')
     specs=definitions(request)
+    lifecycle = (request.metadata or {}).get('gateway_tool_lifecycle')
+    if lifecycle not in {None, 'interactive', 'terminal'}:
+        raise ToolProtocolError('metadata.gateway_tool_lifecycle must be terminal or interactive')
+    if lifecycle == 'terminal' and (len(specs) != 1 or specs[0]['kind'] != 'function' or specs[0]['namespace']):
+        raise ToolProtocolError('Terminal output requires exactly one non-namespaced function tool')
     # Validate historical outputs as well as the pending output at the tail.
     for item in request.input if isinstance(request.input, list) else [request.input]:
         if isinstance(item, dict) and item.get('type') in {'function_call_output', 'custom_tool_call_output'}:

@@ -22,3 +22,5 @@ dialog pre:empty { display: none; }
 .request-output { align-self: flex-start; background: var(--card, white); }
 @media (max-width: 760px) { .request-fields, .request-metadata-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 480px) { .request-fields, .request-metadata-fields { grid-template-columns: minmax(0, 1fr); } .request-bubble { max-width: 100%; } .request-modal .dialog-head, .request-modal #request-detail-content { padding: 16px; } }
+
+dialog.report-ranking{width:min(94vw,1200px);max-width:94vw}

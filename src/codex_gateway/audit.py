@@ -13,6 +13,7 @@ from .models import UsageRecord
 from .conversations import explicit_identity, durable_write
 from sqlalchemy import select
 from .request_observation import capture_transport, request_observation
+from .stored_request import stored_request_params
 
 current_audit: ContextVar[dict | None] = ContextVar("gateway_audit", default=None)
 logger = logging.getLogger(__name__)
@@ -101,7 +102,7 @@ class RequestAuditMiddleware:
                             record = UsageRecord(provider=provider_for(str(params.get("model", ""))), request_id=scope.get("state", {}).get("request_id") or "req_"+uuid4().hex,
                                                api_key_id=principal.key_id, owner_username=principal.owner_username,
                                                worker_id=context.get("worker_id"), thread_id=context.get("thread_id"),
-                                               model=str(params.get("model", "unknown"))[:120], request_params=params,
+                                               model=str(params.get("model", "unknown"))[:120], request_params=stored_request_params(params),
                                                logical_conversation_id=logical, conversation_evidence=evidence,
                                                request_observation={**request_observation(audit), "delivery": delivery},
                                                status_code=audit["status"] if audit["complete"] else 499,

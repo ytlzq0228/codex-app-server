@@ -1,5 +1,15 @@
 # Request context archival
 
+New request audit records retain only the first 64 UTF-8 bytes of each tool result,
+followed by `...` when truncated (up to 67 bytes including the marker). Multibyte
+characters are never split. This applies to Responses tool outputs and Chat tool
+messages, including structured tool results serialized to a preview when oversized.
+Execution still receives the complete input; conversation identity and history
+fingerprints are computed before the storage projection. Tool definitions, call
+IDs, user messages, billing and response text are unchanged. Existing database rows
+are not rewritten. Subsequent archives preserve the stored preview, not the removed
+tool output; the discarded suffix cannot be recovered from these archives.
+
 The archive job runs only on a configured application host with a verified disk UUID.
 Install the host launcher and archiver together outside the application release directory.
 Use a daily systemd timer with `Persistent=false`; do not install it on standby nodes.
@@ -10,8 +20,8 @@ keys `input`, `messages`, `instructions`, `system`, `contents`, and
 `systemInstruction` are moved out. All other parameters, including model, tools,
 metadata, generation settings, and previous response ID, remain in the database.
 Response text, requester identity, request IDs, billing, observation, correlation,
-and history fingerprints are untouched. The original request JSON is archived
-losslessly so its context can be reconstructed.
+and history fingerprints are untouched. The stored request JSON is archived
+losslessly; tool output suffixes discarded during ingestion are not present.
 
 Each gzip archive is published atomically, read back and SHA-256 checked, and synced
 before the row is updated. Row locking and a transaction couple the JSON projection

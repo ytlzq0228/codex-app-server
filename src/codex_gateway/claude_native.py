@@ -131,6 +131,10 @@ def translate_request(body, model=None, stream=None):
             raise ValueError("metadata.user_id must be a string")
         result["metadata"] = {"user_id": metadata["user_id"]}
         result["safety_identifier"] = metadata["user_id"]
+    if 'gateway_tool_lifecycle' in metadata:
+        if metadata['gateway_tool_lifecycle'] not in {'terminal', 'interactive'}:
+            raise ValueError('metadata.gateway_tool_lifecycle must be terminal or interactive')
+        result.setdefault('metadata', {})['gateway_tool_lifecycle'] = metadata['gateway_tool_lifecycle']
     return result
 
 
@@ -162,7 +166,7 @@ def native_error(value, status=400):
     code = error.get("code", "")
     if status in {401, 403}:
         pass
-    elif code in {"provider_quota_exhausted", "client_tool_capacity_exceeded"}:
+    elif code in {"provider_quota_exhausted", "client_tool_capacity_exceeded", "key_rate_limit_exceeded", "worker_rate_limit_exceeded", "key_retry_cooldown"}:
         status = 429
     elif code in {"worker_capacity_exceeded", "worker_queue_timeout"}:
         status = 529

@@ -1,0 +1,58 @@
+.login-card .google-rainbow {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 50px;
+  border: 0;
+  border-radius: 12px;
+  background: #21103f;
+  color: #fff;
+  text-decoration: none;
+  box-shadow: -6px 0 22px #ff378b55, 6px 0 22px #38cfff55;
+  transition: transform .2s ease, box-shadow .2s ease;
+}
+.google-rainbow::before {
+  content: '';
+  position: absolute;
+  width: 160%;
+  aspect-ratio: 1;
+  background: conic-gradient(#ff357f, #ff9f32, #ffe55c, #45efb1, #39cfff, #8660ff, #ff357f);
+  animation: google-rainbow-orbit 3s linear infinite;
+  pointer-events: none;
+}
+.google-rainbow::after {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border-radius: 9px;
+  background: linear-gradient(110deg, #641b64, #3d207b, #123d70, #115043, #641b64);
+  background-size: 300% 100%;
+  animation: google-rainbow-flow 6s ease-in-out infinite alternate;
+  pointer-events: none;
+}
+.google-rainbow span {
+  position: relative;
+  z-index: 1;
+  font-weight: 750;
+  letter-spacing: .03em;
+  text-shadow: 0 1px 4px #0008;
+}
+.login-card .google-rainbow:hover {
+  transform: translateY(-2px);
+  box-shadow: -8px 0 28px #ff378b80, 8px 0 28px #38cfff80;
+}
+.login-card .google-rainbow:focus-visible {
+  outline: 3px solid #7443c5;
+  outline-offset: 4px;
+}
+.login-card .google-rainbow:active { transform: translateY(0); }
+@keyframes google-rainbow-orbit { to { transform: rotate(360deg); } }
+@keyframes google-rainbow-flow { to { background-position: 100% 50%; } }
+@media (prefers-reduced-motion: reduce) {
+  .login-card .google-rainbow { transition: none; }
+  .google-rainbow::before, .google-rainbow::after { animation: none; }
+  .login-card .google-rainbow:hover { transform: none; }
+}

@@ -249,8 +249,13 @@ def history_json(data):
 async def history_data(start: str = "", end: str = "", history_page: int = Query(1, ge=1),
     conversation: str = "", key_id: str = "", endpoint: str = "",
     admin: AdminSession = Depends(require_admin), session: AsyncSession = Depends(get_session)):
-    return history_json(await conversation_history(session, filters=history_time_filters(start, end),
-        page=history_page, conversation_id=conversation, key_id=key_id, endpoint=endpoint, summaries_only=True, include_user_agent=True))
+    data = await conversation_history(session, filters=history_time_filters(start, end),
+        page=history_page, conversation_id=conversation, key_id=key_id, endpoint=endpoint, summaries_only=True, include_user_agent=True)
+    from .dchat import display_names
+    names = await display_names(session, [group['owner_username'] for group in data['groups']], cache_only=True)
+    for group in data['groups']:
+        group['owner_display_name'] = names.get(group['owner_username'], group['owner_username'])
+    return history_json(data)
 
 
 @router.get("/history/requests")

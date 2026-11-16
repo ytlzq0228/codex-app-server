@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>{{ t('登录 · Subscription Gateway') }}</title>
   <link rel="stylesheet" href="/static/admin.css">
+  <link rel="stylesheet" href="/static/login.css">
 </head>
 <body class="login-page">
   <main class="login-shell">
@@ -28,7 +29,7 @@
         <label>{{ t('密码') }}<input type="password" name="password" autocomplete="current-password" required></label>
         <button class="button button-primary button-wide" type="submit">{{ t('登录控制台') }}</button>
       </form>
-      {% if google_enabled %}<a class="button button-wide" href="/auth/google">{{ t('使用 Google 登录') }}</a>{% else %}<button class="button button-wide" disabled>{{ t('Google 登录尚未启用') }}</button>{% endif %}
+      {% if google_enabled %}<a class="button button-wide google-rainbow" href="/auth/google"><span>{{ t('使用 Google 登录') }}</span></a>{% else %}<button class="button button-wide" disabled>{{ t('Google 登录尚未启用') }}</button>{% endif %}
       <p class="login-foot">{{ t('会话将在 12 小时后自动失效') }}</p>
     </section>
   </main>

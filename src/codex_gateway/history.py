@@ -56,6 +56,7 @@ async def conversation_history(db, *, owner=None, page=1, page_size=30, filters=
             selected.c.group_key.label('identity'), ranked.c.conversation.label('conversation_id'),
             UsageRecord.api_key_id.label('key_id'), UsageRecord.endpoint.label('endpoint'),
             ApiKey.name.label('key_name'), selected.c.latest_at.label('latest_at'),
+            func.max(case((ranked.c.position == 1, UsageRecord.owner_username))).label('owner_username'),
             func.bool_or(UsageRecord.logical_conversation_id.is_not(None)).label('logical'),
             func.count().label('request_count'), func.count(func.distinct(ranked.c.worker_thread)).label('thread_count'),
             func.max(case((ranked.c.position == 1, UsageRecord.status_code))).label('latest_status'),

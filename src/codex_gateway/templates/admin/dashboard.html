@@ -28,7 +28,7 @@
     {% if page == 'keys' %}
     <section id="keys" class="panel">
       <div class="section-head"><div><p class="eyebrow">{{ t('ACCESS CONTROL') }}</p><h2>{{ t('API Keys') }}</h2><p class="muted">{{ t('新 Key 默认月限额（USD）：') }} {{ default_key_monthly_limit_usd }} · UTC</p></div><button {% if loading %}disabled{% endif %} class="button button-primary" data-open-dialog="key-dialog">{{ t('创建 Key') }}</button></div>
-<form method="get" action="/admin/api-keys" class="portal-row filter-toolbar">
+<form method="get" action="/admin/api-keys" class="portal-row filter-toolbar admin-search">
 <label>{{ t('搜索') }}<input type="search" name="q" value="{{ request.query_params.get('q', '') }}" placeholder="{{ t('名称、Key 前缀、ID 或归属用户名') }}"></label>
 <button class="button button-primary" type="submit">{{ t('搜索') }}</button>
 <a class="button" href="/admin/api-keys">{{ t('清除搜索') }}</a>

@@ -19,7 +19,7 @@
 {% include 'shared/admissions.html' %}
 {% elif page == 'users' %}
 <section class="panel"><div class="section-head"><h2>{{ t('全部用户') }}</h2><button {% if loading %}disabled{% endif %} type="button" class="button button-primary" data-modal-open="create-user-dialog">{{ t('新建用户') }}</button></div>
-<form method="get" action="/admin/users" class="portal-row filter-toolbar">
+<form method="get" action="/admin/users" class="portal-row filter-toolbar admin-search">
 <label>{{ t('搜索') }}<input type="search" name="q" value="{{ request.query_params.get('q', '') }}" placeholder="{{ t('用户名或邮箱') }}"></label>
 <button class="button button-primary" type="submit">{{ t('搜索') }}</button>
 <a class="button" href="/admin/users">{{ t('清除搜索') }}</a>

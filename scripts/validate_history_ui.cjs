@@ -29,7 +29,7 @@ print(e.get_template('admin/dashboard.html').render(page='history',history_keys=
   if(url.pathname==='/admin/history/data'){
    if(failNext){failNext=false;return route.fulfill({status:500,json:{detail:'测试加载失败'}});}
    const number=Number(url.searchParams.get('history_page') || 1);
-   return route.fulfill({json:{total:31,request_total:55,page:number,pages:2,page_size:30,groups:[{identity:'key:responses:conversation-'+number,conversation_id:'conversation-'+number,key_id:'key',key_name:'<img src=x onerror="window.pwned=1">',endpoint:'responses',latest_at:'2026-10-02T15:00:00Z',latest_user_agent:number===1?'<img src=x onerror="window.pwned=1">':null,logical:true,thread_count:2,request_count:25,latest_status:200,latest_model:'<img src=x onerror="window.pwned=1">',input_tokens:'1100000',output_tokens:'150000',duration_ms:30,cost_usd:'0.1000',unpriced_count:0}]}});
+   return route.fulfill({json:{total:31,request_total:55,page:number,pages:2,page_size:30,groups:[{identity:'key:responses:conversation-'+number,conversation_id:'conversation-'+number,key_id:'key',owner_display_name:'显示名称 <b>用户</b>',key_name:'<img src=x onerror="window.pwned=1">',endpoint:'responses',latest_at:'2026-10-02T15:00:00Z',latest_user_agent:number===1?'<img src=x onerror="window.pwned=1">':null,logical:true,thread_count:2,request_count:25,latest_status:200,latest_model:'<img src=x onerror="window.pwned=1">',input_tokens:'1100000',output_tokens:'150000',duration_ms:30,cost_usd:'0.1000',unpriced_count:0}]}});
   }
   if(url.pathname==='/admin/history/requests'){
    const number=Number(url.searchParams.get('page') || 1);
@@ -45,6 +45,10 @@ print(e.get_template('admin/dashboard.html').render(page='history',history_keys=
  assert.equal(await page.locator('.history-row').getByText('1.2500 million',{exact:true}).count(),1);
  assert.equal(await page.locator('.history-row td').nth(4).innerText(), '<img src=x onerror="window.pwned=1">');
  assert.equal(await page.getByRole('columnheader',{name:'接口/UA',exact:true}).count(),1);
+ const keyCell=page.locator('.history-row td').nth(2);
+ assert.equal(await keyCell.locator('span').innerText(),'显示名称 <b>用户</b>');
+ assert.equal(await keyCell.locator('small').innerText(),'<img src=x onerror="window.pwned=1">');
+ assert.equal(await keyCell.evaluate(cell=>cell.querySelector('small').getBoundingClientRect().top>=cell.querySelector('span').getBoundingClientRect().bottom),true);
  const ua=page.locator('.history-row td').nth(3).locator('small');
  assert.equal(await ua.innerText(),'<img src=x...');
  assert.equal(await ua.getAttribute('title'),'<img src=x onerror="window.pwned=1">');

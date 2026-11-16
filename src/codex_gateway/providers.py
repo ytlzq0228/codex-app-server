@@ -21,6 +21,15 @@ def provider_for(model):
     return get_settings().provider_map().get(model, "gemini" if model.startswith("gemini-") else "claude" if model.startswith("claude-") else "codex")
 
 def reject(param, message, code="unsupported_parameter"):
+    from .audit import current_audit, request_params
+    audit = current_audit.get()
+    # Values help repair options; never echo arbitrary prompts, keys or schemas.
+    visible = {"model", "temperature", "top_p", "max_output_tokens", "max_tokens",
+               "stream", "parallel_tool_calls", "background", "service_tier",
+               "truncation", "max_tool_calls", "seed", "verbosity"}
+    value = request_params(audit).get(param) if audit and param in visible else None
+    suffix = f" (value={value!r})" if isinstance(value, (str, int, float, bool)) and len(str(value)) <= 128 else ""
+    message = f"{param}{suffix}: {message}"
     raise HTTPException(400, detail={"error": {"message": message, "type": "invalid_request_error", "code": code, "param": param}})
 
 def validate_capabilities(request):

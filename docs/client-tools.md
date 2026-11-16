@@ -1,6 +1,6 @@
 # Client tools and Worker isolation
 
-Client declarations are limited to 512 tools after namespace expansion and merging additional tools. Gateway and Claude/Gemini Worker request and relay validation enforce the same limit. Tool names retain the separate 64-character limit; event queues and pending-call limits are unchanged. This is a gateway capacity policy, not a claimed upstream protocol maximum.
+Client declarations are limited to 512 tools after namespace expansion and merging additional tools. Gateway and Claude/Gemini Worker request and relay validation enforce the same limit. Client tool names accept 1–128 ASCII letters, digits, underscores or hyphens. Longer names return the offending name, length and field path. Worker-facing aliases remain short (Claude direct names are capped at 64 characters); event queues and pending-call limits are unchanged. This is a gateway capacity policy, not a claimed upstream protocol maximum.
 
 The gateway never executes client tools. Supported declarations are Responses `tools`, `input[].additional_tools.tools`, function namespaces, JSON-object function parameters, and custom tools with text, Lark grammar, or regex grammar input. Chat Completions supports `tools[].function`, assistant `tool_calls`, and `role=tool` results. Forced choices for non-Claude providers, legacy `functions`, hosted/native tool types, nested namespaces, unsupported grammar syntax, and non-text results return explicit 400 errors. Smartwork/Codex CLI `functions.exec` grammar declarations are bridged to a JSON input string internally and restored to `custom_tool_call` for the client; there is no fallback to Worker execution.
 
@@ -108,3 +108,9 @@ Timeout/error/cancellation paths close the upstream generator, release local
 capacity, and attempt bounded pending-route deletion (the route TTL remains a
 fallback if the database is unavailable). Logs record lifecycle failure codes
 and remaining active sessions. `tool_choice=none` bypasses tool-session admission.
+
+Worker ingress rate-limit rejection before a pending tool result is submitted preserves
+the waiting checkpoint, history/configuration hashes and response binding. The client
+can retry after Retry-After. Restoration is fenced by the execution lease token;
+concurrent requests and duplicate results retain their existing protection. Failures
+after execution starts do not use this rollback.

@@ -326,3 +326,35 @@ def test_tool_count_limit_includes_namespaces_and_additional_tools():
         input=[{"type":"additional_tools", "tools":[{**TOOL, "name":"overflow"}]}])
     with pytest.raises(ToolProtocolError, match="At most 512"):
         validate(body)
+
+
+@pytest.mark.parametrize("length", [64, 65, 128])
+def test_long_tool_names_roundtrip(length):
+    name = "x" * length
+    body = ResponseRequest(model="test", input="hello", tools=[{**TOOL, "name": name}])
+    specs = validate(body)
+    assert specs[0]["alias"] == "gateway_client_0"
+    assert public_call(specs, {"tool": "gateway_client_0", "arguments": {}})["name"] == name
+
+
+def test_overlong_tool_name_diagnostic():
+    name = "x" * 129
+    body = ResponseRequest(model="test", input="hello", tools=[{**TOOL, "name": name}])
+    with pytest.raises(ToolProtocolError) as exc:
+        validate(body)
+    assert name in str(exc.value) and "129" in str(exc.value) and "1-128" in str(exc.value)
+    assert body.unsupported()[0] == "tools[0].name"
+
+
+def test_chat_tool_diagnostics_use_original_field_path():
+    body = ChatCompletionRequest(model="test", messages=[{"role": "user", "content": "hello"}],
+        tools=[{"type": "function", "function": {**TOOL, "name": "x" * 129}}])
+    assert body.unsupported()[0] == "tools[0].function.name"
+    malformed = body.model_copy(update={"tools": [{"type": "function"}]})
+    assert malformed.unsupported() is not None
+
+
+def test_additional_tool_diagnostics_use_original_field_path():
+    body = ResponseRequest(model="test", input=[{"type": "additional_tools", "tools": [
+        {**TOOL, "name": "x" * 129}]}])
+    assert body.unsupported()[0] == "input[0].tools[0].name"

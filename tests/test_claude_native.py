@@ -210,3 +210,39 @@ def test_forced_choice_translation(choice, expected):
     body = prompt() | {"tools": [{"name": "lookup", "input_schema": {"type": "object"}}],
                        "tool_choice": choice}
     assert translate_request(body)["tool_choice"] == expected
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_unsupported_input_returns_authenticated_english_notice(monkeypatch, stream):
+    from fastapi.testclient import TestClient
+    from unittest.mock import AsyncMock
+    from codex_gateway import main
+    prepare = AsyncMock(side_effect=AssertionError("must not mutate execution"))
+    monkeypatch.setattr(main, "prepare_execution", prepare)
+    monkeypatch.setattr(main, "model_available", AsyncMock(return_value=True))
+    body = prompt() | {"stream": stream, "messages": [
+        {"role": "user", "content": [{"type": "document", "source": {"data": "PRIVATE_PAYLOAD"}}]}]}
+    with TestClient(main.app) as client:
+        response = client.post("/v1/messages", headers={
+            "anthropic-version": "2023-06-01", "Authorization": "Bearer cag_dev_local"}, json=body)
+        assert response.status_code == 200, response.text
+        assert "messages[0].content[0].type" in response.text
+        assert "document" in response.text and "has not been executed" in response.text
+        assert "PRIVATE_PAYLOAD" not in response.text
+        if stream:
+            assert "event: message_stop" in response.text
+            assert "event: error" not in response.text
+        else:
+            assert response.json()["stop_reason"] == "end_turn"
+            assert response.json()["usage"]["output_tokens"] == 0
+        denied = client.post("/v1/messages", headers={"anthropic-version": "2023-06-01"}, json=body)
+        assert denied.status_code == 401
+    prepare.assert_not_awaited()
+
+
+def test_nested_unsupported_tool_result_has_precise_path():
+    from codex_gateway.claude_native import UnsupportedInputBlock
+    body = prompt() | {"messages": [{"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "c", "content": [{"type": "document"}]}]}]}
+    with pytest.raises(UnsupportedInputBlock, match=r"messages\[0\].content\[0\].content\[0\].type"):
+        translate_request(body)

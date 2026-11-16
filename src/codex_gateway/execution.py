@@ -606,7 +606,8 @@ async def _prepare(request, principal, endpoint, audit, *, pending_thread=None, 
         token = str(uuid4())
         claim = {"logical_id": logical, "token": token, "history": checkpoint,
                  "config": (row.config_hash if pending_thread and row.config_hash else configuration(request)),
-                 "action": action, "reason": reason, "previous_thread_id": row.thread_id}
+                 "action": action, "reason": reason, "previous_thread_id": row.thread_id,
+                 "prior_state": row.state}
         row.lease_token, row.lease_until, row.state = token, instant + timedelta(seconds=LEASE_SECONDS), "running"
         await db.commit()
     audit["execution"] = claim
@@ -658,9 +659,14 @@ async def cleanup(audit):
     if task:
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
-    # Also covers cancellation, validation/selection failures and failed DB saves.
+    # Only an explicitly rejected ingress admission can restore a waiting checkpoint.
+    # No tool result has been submitted at that point. All other failures stay fenced.
+    restore_waiting = claim.get("admission_rejected") and claim.get("prior_state") == "waiting_tool"
+    values = {"lease_token": None, "lease_until": None, "state": "waiting_tool" if restore_waiting else "invalid"}
+    if not restore_waiting:
+        values["history_hashes"] = None
     async with SessionLocal() as db:
         await db.execute(update(ExecutionSession).where(
             ExecutionSession.logical_id == claim["logical_id"], ExecutionSession.lease_token == claim["token"],
-        ).values(lease_token=None, lease_until=None, state="invalid", history_hashes=None))
+        ).values(**values))
         await db.commit()

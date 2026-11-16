@@ -4,31 +4,34 @@ import re
 from uuid import uuid4
 from .multimodal import content_parts
 
-NAME = re.compile(r'^[A-Za-z0-9_-]{1,64}$')
+NAME = re.compile(r'^[A-Za-z0-9_-]{1,128}$')
 FORBIDDEN = {'config', 'cwd', 'environments', 'permissions', 'sandbox', 'sandboxPolicy',
              'approvalPolicy', 'approval_policy', 'dynamicTools', 'modelProvider', 'model_provider'}
 
 
 class ToolProtocolError(ValueError):
-    def __init__(self, message, code="invalid_client_tool"):
+    def __init__(self, message, code="invalid_client_tool", param="tools"):
         super().__init__(message)
         self.code = code
+        self.param = param
 
 
 def definitions(request):
     from .web_search import configuration
     configuration(request)
     tools = list(request.tools or [])
-    for item in request.input if isinstance(request.input, list) else [request.input]:
+    paths = [f"tools[{i}]" for i in range(len(tools))]
+    for item_index, item in enumerate(request.input if isinstance(request.input, list) else [request.input]):
         if isinstance(item, dict) and item.get('type') == 'additional_tools':
             if not isinstance(item.get('tools'), list):
                 raise ToolProtocolError('additional_tools.tools must be an array')
             if any(isinstance(t, dict) and t.get('type') == 'web_search' for t in item['tools']):
                 raise ToolProtocolError('Declare web_search in top-level tools')
+            paths.extend(f'input[{item_index}].tools[{i}]' for i in range(len(item['tools'])))
             tools.extend(item['tools'])
     result = []
     seen = set()
-    def add(tool, namespace=None):
+    def add(tool, namespace=None, path="tools"):
         if not isinstance(tool, dict):
             raise ToolProtocolError('Tool definitions must be objects')
         name, kind = tool.get('name'), tool.get('type')
@@ -37,20 +40,22 @@ def definitions(request):
                 raise ToolProtocolError('Declare web_search in top-level tools')
             return
         if not isinstance(name, str) or not NAME.fullmatch(name):
-            raise ToolProtocolError('Tool names must contain 1-64 letters, digits, underscores or hyphens')
+            raise ToolProtocolError(
+                f"Invalid {path}.name {name!r}: length {len(name) if isinstance(name, str) else 'not a string'}; "
+                "expected 1-128 letters, digits, underscores or hyphens", param=f"{path}.name")
         if kind == 'namespace':
             if namespace or not isinstance(tool.get('tools'), list):
                 raise ToolProtocolError('Nested or invalid tool namespaces are not supported')
-            for child in tool['tools']:
-                add(child, name)
+            for index, child in enumerate(tool['tools']):
+                add(child, name, f'{path}.tools[{index}]')
             return
         if kind not in {'function', 'custom'}:
-            raise ToolProtocolError(f'Tool type {kind!r} is not supported; Worker built-in tools cannot be requested')
+            raise ToolProtocolError(f'{path}.type={kind!r} is not supported; expected function, custom or namespace. Worker built-in tools cannot be requested', param=f'{path}.type')
         from .grammar_tools import grammar_format
         grammar = grammar_format(tool.get('format')) if kind == 'custom' else None
         schema = tool.get('parameters', {'type':'object','properties':{}}) if kind == 'function' else {'type':'object','properties':{'input':{'type':'string'}},'required':['input'],'additionalProperties':False}
         if not isinstance(schema, dict) or schema.get('type') != 'object':
-            raise ToolProtocolError('Function parameters must be an object JSON Schema')
+            raise ToolProtocolError(f'{path}.parameters for tool {name!r}: expected an object JSON Schema (type=object)', param=f'{path}.parameters')
         identity=(namespace,name)
         if identity in seen:
             raise ToolProtocolError(f'Duplicate client tool: {namespace or ""}.{name}')
@@ -59,8 +64,8 @@ def definitions(request):
                        'kind':kind,'description':str(tool.get('description') or ''),'schema':schema, 'grammar':grammar})
         if len(result)>512:
             raise ToolProtocolError('At most 512 client tools are supported')
-    for tool in tools:
-        add(tool)
+    for index, tool in enumerate(tools):
+        add(tool, path=paths[index])
     return result
 
 

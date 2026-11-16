@@ -16,11 +16,30 @@ def text_blocks(value):
     return "\n".join(p["text"] for p in value)
 
 
-def input_block(part):
+class UnsupportedInputBlock(ValueError):
+    """A valid block kind that the gateway cannot process."""
+
+    def __init__(self, kind, path):
+        self.path = path + ".type"
+        self.kind = kind
+        super().__init__(
+            f"Cannot process {self.path}={kind!r}: only text and image input blocks "
+            "are supported. This request has not been executed. "
+            "Please convert the unsupported content to text or an image and resend.")
+
+
+def input_block(part, path="content"):
+    if not isinstance(part, dict):
+        raise ValueError(f"{path}: expected a content block object, got {type(part).__name__}")
+
+    if not isinstance(part.get("type"), str) or not part["type"]:
+        raise ValueError(f"{path}.type: expected a nonempty block type string")
     if part.get("type") == "text" and isinstance(part.get("text"), str):
         return {"type": "input_text", "text": part["text"]}
     if part.get("type") != "image":
-        raise ValueError("Only text and image input blocks are supported")
+        if isinstance(part.get("type"), str) and part["type"] != "text":
+            raise UnsupportedInputBlock(part["type"], path)
+        raise ValueError(f"{path}.text: expected a string for a text input block")
     source = part["source"]
     if source.get("type") == "base64":
         if source.get("media_type") not in {"image/png", "image/jpeg", "image/gif", "image/webp"}:
@@ -48,7 +67,7 @@ def translate_request(body, model=None, stream=None):
     if messages[-1].get("role") == "assistant":
         raise ValueError("Assistant prefill is not supported")
     items = []
-    for message in messages:
+    for message_index, message in enumerate(messages):
         role = message["role"]
         if role not in {"user", "assistant", "system"}:
             raise ValueError("Unsupported message role")
@@ -65,7 +84,10 @@ def translate_request(body, model=None, stream=None):
             if parts:
                 items.append({"role": "developer" if role == "system" else role, "content": list(parts)})
                 parts.clear()
-        for part in content:
+        for part_index, part in enumerate(content):
+            path = f"messages[{message_index}].content[{part_index}]"
+            if not isinstance(part, dict):
+                raise ValueError(f"{path}: expected a content block object")
             kind = part.get("type")
             if kind in {"thinking", "redacted_thinking"} and role == "assistant":
                 continue
@@ -79,13 +101,13 @@ def translate_request(body, model=None, stream=None):
                 flush()
                 output = part.get("content", "")
                 if isinstance(output, list):
-                    output = [input_block(p) for p in output]
+                    output = [input_block(p, f"{path}.content[{i}]") for i, p in enumerate(output)]
                 elif not isinstance(output, str):
                     raise ValueError("tool_result.content must be text or a block array")
                 items.append({"type": "function_call_output", "call_id": part["tool_use_id"], "output": output,
                               **({"is_error": True} if part.get("is_error") is True else {})})
             else:
-                block = input_block(part)
+                block = input_block(part, path)
                 if role != "user" and block["type"] == "input_image":
                     raise ValueError("Images require user role")
                 if role == "assistant":
@@ -185,7 +207,10 @@ def native_error(value, status=400):
     kind = {400: "invalid_request_error", 401: "authentication_error", 403: "permission_error",
             404: "not_found_error", 413: "request_too_large", 429: "rate_limit_error",
             503: "overloaded_error", 529: "overloaded_error"}.get(status, "api_error")
-    return status, {"type": "error", "error": {"type": kind, "message": error.get("message", str(error))}}
+    message = error.get("message", str(error))
+    if error.get("param") and error["param"] not in message:
+        message = f"{error['param']}: {message}"
+    return status, {"type": "error", "error": {"type": kind, "message": message}}
 
 
 class MessageStream:
@@ -264,6 +289,7 @@ class ClaudeNativeMiddleware:
             if not event.get("more_body", False):
                 break
         count = scope["path"].endswith("/count_tokens")
+        notice = None
         try:
             original = json.loads(raw)
             requested = original["model"]
@@ -274,6 +300,14 @@ class ClaudeNativeMiddleware:
             if provider_for(model) != "claude":
                 return await fail("Claude model is not available", 404)
             body = translate_request(original, model, False if count else None)
+        except UnsupportedInputBlock as exc:
+            if count:
+                return await fail(str(exc))
+            if not isinstance(original.get("stream", False), bool):
+                return await fail("stream: expected a boolean")
+            notice = str(exc)
+            body = {"model": model, "input": notice, "tools": [],
+                    "stream": original.get("stream", False)}
         except (ValueError, TypeError, KeyError, AttributeError) as exc:
             return await fail(str(exc))
         stream = body["stream"]
@@ -284,6 +318,9 @@ class ClaudeNativeMiddleware:
         forwarded.append((b"content-length", str(len(data)).encode()))
         path = "/v1/responses/count_tokens" if count else "/v1/responses"
         inner = dict(scope, path=path, raw_path=path.encode(), query_string=b"", headers=forwarded)
+        if notice:
+            # Internal ASGI state, never accepted from client JSON or headers.
+            inner["state"] = {**scope.get("state", {}), "input_capability_notice": notice}
         consumed = False
         async def translated_receive():
             nonlocal consumed

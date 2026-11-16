@@ -374,3 +374,39 @@ async def test_worker_process_diagnostic_survives_backend_failure(backend, monke
         assert "secret" not in json.dumps(result)
     finally:
         await backend.close()
+
+
+@pytest.mark.asyncio
+async def test_long_name_uses_short_worker_alias_and_returns_original(backend, monkeypatch):
+    name = "long_tool_" + "x" * 118
+    reply = asyncio.Event()
+    class Stream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield (json.dumps({"event": "client_tool", "thread_id": "long-name-thread",
+                "tool": "gateway_client_0", "run_id": "run", "worker_call_id": "private",
+                "arguments": {"query": "hi"}}) + "\n").encode()
+            await reply.wait()
+            yield b'{"delta":"ok","thread_id":"long-name-thread"}\n'
+            yield b'{"done":true,"thread_id":"long-name-thread"}\n'
+    async def handler(request):
+        body = json.loads(request.content)
+        if request.url.path == "/turn":
+            assert body["tools"][0]["name"] == "gateway_client_0"
+            return httpx.Response(200, stream=Stream())
+        assert request.url.path == "/tool-result"
+        reply.set()
+        return httpx.Response(200, json={"ok": True})
+    transport(monkeypatch, handler)
+    try:
+        first = await backend.complete(ResponseRequest(model="claude-test", input="hi",
+            tools=[{**TOOL, "name": name}]), TARGET)
+        assert first.tool_calls[0]["name"] == name
+        follow = ResponseRequest(model="claude-test", input=[{"type": "function_call_output",
+            "call_id": first.tool_calls[0]["call_id"], "output": "answer"}])
+        final = await backend.complete(follow, TARGET)
+        assert final.text == "ok"
+        with pytest.raises(WorkerFailure) as duplicate:
+            await backend.complete(follow, TARGET)
+        assert duplicate.value.__cause__.code == "client_tool_result_duplicate"
+    finally:
+        await backend.close()

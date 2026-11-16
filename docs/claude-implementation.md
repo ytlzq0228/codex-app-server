@@ -102,3 +102,16 @@ Worker 管理与推理使用模拟服务，不代表真实 Docker/OAuth 验收�
 不输出 thinking 块；不支持 assistant prefill、强制工具选择、
 服务端工具、MCP connector、文件/PDF、批处理或精确 token 计数。
 完整矩阵见 [API 兼容性](api-compatibility.md#claude-provider-and-anthropic-messages-2026-10-02)。
+
+### Unsupported input notices
+
+For generation requests to /v1/messages, unsupported content block kinds (including
+nested tool-result content) return HTTP 200 with an English assistant explanation
+containing the block type and exact field path. Both JSON and SSE finish normally
+with end_turn. Authentication, quota and model authorization still apply. No model
+or tool executes, no token usage is charged, and existing execution checkpoints
+are left intact. The audit records unsupported_input_block. Invalid structures and
+the count_tokens estimation endpoint retain validation errors.
+
+Client tool names support up to 128 characters; names longer than the Worker
+transport limit use internal short aliases and return to the client unchanged.

@@ -431,3 +431,57 @@ def test_explicit_delta_does_not_become_full_history_checkpoint():
         assert a['execution_decision']['action']=='explicit_resume'
         await ex.cleanup(a)
     with TestClient(app) as client:client.portal.call(run)
+
+
+@pytest.mark.parametrize("endpoint", ["responses", "chat.completions"])
+def test_admission_rejection_preserves_waiting_checkpoint(endpoint):
+    async def run():
+        async with SessionLocal() as db:
+            key = ApiKey(name="admission-retry", prefix=uuid4().hex[:20], key_hash=uuid4().hex*2)
+            db.add(key)
+            await db.commit()
+        principal = ApiPrincipal(key.id, "test")
+        identity, thread = str(uuid4()), str(uuid4())
+        first = req()
+        initial = audit_for(first, identity)
+        await ex.prepare(first, principal, endpoint, initial)
+        logical = initial["execution"]["logical_id"]
+        async with SessionLocal() as db:
+            row = await db.get(ExecutionSession, logical)
+            row.state, row.lease_token, row.lease_until = "waiting_tool", None, None
+            row.thread_id, row.response_id = thread, "resp_original"
+            row.history_hashes = ["original-checkpoint"]
+            row.config_hash = "original-config"
+            row.expires_at = ex.now() + timedelta(minutes=5)
+            await db.commit()
+        await ex.cleanup(initial)
+        output = req([{"type": "function_call_output", "call_id": "call_a", "output": "ok"}])
+        audit = audit_for(output, identity)
+        await ex.prepare(output, principal, endpoint, audit, pending_thread=thread)
+        audit["execution"]["admission_rejected"] = True
+        await ex.cleanup(audit)
+        async with SessionLocal() as db:
+            row = await db.get(ExecutionSession, logical)
+            assert row.state == "waiting_tool" and row.lease_token is None
+            assert row.history_hashes == ["original-checkpoint"]
+            assert row.config_hash == "original-config"
+            assert row.thread_id == thread and row.response_id == "resp_original"
+            assert row.expires_at is not None
+        retry = audit_for(output, identity)
+        await ex.prepare(output, principal, endpoint, retry, pending_thread=thread)
+        assert retry["execution"]["action"] == "tool_continuation"
+        # Concurrent replay cannot acquire the lease; stale cleanup cannot release it.
+        with pytest.raises(HTTPException) as exc:
+            await ex.prepare(output, principal, endpoint, audit_for(output, identity), pending_thread=thread)
+        assert exc.value.status_code == 409
+        await ex.cleanup(audit)
+        async with SessionLocal() as db:
+            row = await db.get(ExecutionSession, logical)
+            assert row.lease_token == retry["execution"]["token"]
+        # Other failures retain conservative invalidation.
+        await ex.cleanup(retry)
+        async with SessionLocal() as db:
+            row = await db.get(ExecutionSession, logical)
+            assert row.state == "invalid"
+    with TestClient(app) as client:
+        client.portal.call(run)

@@ -345,3 +345,35 @@ async def test_worker_rejection_sets_shared_key_cooldown_without_poll_extension(
                 await conn.execute(text("DELETE FROM request_rate_windows WHERE scope=:scope"), {"scope": scope})
         for engine in engines:
             await engine.dispose()
+
+
+@pytest.mark.parametrize("path,payload", [
+    ("/v1/responses", {"input": "hello"}),
+    ("/v1/chat/completions", {"messages": [{"role": "user", "content": "hello"}]}),
+])
+@pytest.mark.parametrize("stream", [False, True])
+def test_ingress_limit_marks_only_unsubmitted_execution(monkeypatch, path, payload, stream):
+    from fastapi.testclient import TestClient
+    from codex_gateway.audit import current_audit
+    from codex_gateway import execution
+    claims = []
+    async def prepare(body, *args, **kwargs):
+        claim = {"prior_state": "waiting_tool"}
+        current_audit.get()["execution"] = claim
+        claims.append(claim)
+        return body, None
+    async def cleanup(audit):
+        assert audit["execution"]["admission_rejected"] is True
+    monkeypatch.setattr(main, "prepare_execution", prepare)
+    monkeypatch.setattr(execution, "cleanup", cleanup)
+    monkeypatch.setattr(main, "choose_execution_target", AsyncMock(return_value=
+        BackendTarget("test", "http://example.test", "/workspace", uuid4())))
+    monkeypatch.setattr(main, "count_worker_attempt", AsyncMock(side_effect=HTTPException(
+        429, {"error": {"code": "worker_rate_limit_exceeded", "message": "wait"}},
+        headers={"Retry-After": "2"})))
+    with TestClient(main.app) as client:
+        response = client.post(path, headers={"Authorization": "Bearer cag_dev_local"},
+            json={"model": "gpt-6-sol", "stream": stream, **payload})
+        assert response.status_code == 429
+        assert response.headers["Retry-After"] == "2"
+    assert claims[0]["admission_rejected"] is True

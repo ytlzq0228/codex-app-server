@@ -360,7 +360,12 @@ async def validation_error_handler(_: Request, exc: RequestValidationError) -> J
     message = error.get("msg", "Invalid request")
     if message.startswith("Value error, "):
         message = message.removeprefix("Value error, ")
-    return openai_error(400, message, "invalid_request", param=param)
+    value = error.get("input")
+    # Never echo prompts, credentials, nested payloads or image data.
+    safe_fields = {"stream", "model", "temperature", "top_p", "max_tokens", "max_output_tokens",
+                   "parallel_tool_calls", "background", "type", "effort"}
+    detail = f" (value={value!r})" if location and location[-1] in safe_fields and isinstance(value, (str, int, float, bool, type(None))) and len(str(value)) <= 128 else ""
+    return openai_error(400, f"{param or 'request'}{detail}: {message}", "invalid_request", param=param)
 
 
 @app.exception_handler(HTTPException)
@@ -402,7 +407,7 @@ async def backend_error_handler(_: Request, exc: Exception) -> JSONResponse:
 @app.exception_handler(ToolProtocolError)
 async def tool_protocol_error_handler(_: Request, exc: ToolProtocolError):
     capture_failure(exc)
-    return openai_error(409 if exc.code == "conversation_waiting_tool" else 400, str(exc), exc.code, param="tools")
+    return openai_error(409 if exc.code == "conversation_waiting_tool" else 400, str(exc), exc.code, param=exc.param)
 
 
 def get_backend(request: Request) -> CompletionBackend:
@@ -1088,7 +1093,13 @@ async def create_chat_completion(body: ChatCompletionRequest, principal: ApiPrin
         track_backend(target, None, source="selected_worker")
     allow_retry = not pending_target and (execution_binding is None or request._execution_auto_resume) and principal.pinned_worker_id is None
     await release_request_session(session)
-    await count_worker_attempt(target)
+    try:
+        await count_worker_attempt(target)
+    except HTTPException as exc:
+        # Admission has not submitted the tool result. Preserve the fenced checkpoint.
+        if exc.status_code == 429 and (audit := current_audit.get()) and audit.get("execution"):
+            audit["execution"]["admission_rejected"] = True
+        raise
     if body.stream:
         return StreamingResponse(keepalive(chat_completion_stream(body, request, backend, principal, target, allow_retry)), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", **({"x-gateway-generation-policy": "worker-defaults"} if provider_for(body.model) == "claude" else {})})
     started = time.monotonic()
@@ -1119,6 +1130,22 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
         return openai_error(400, f"Model '{body.model}' is not available; select an exact id from /v1/models", "model_not_found", param="model")
     from .providers import authorize_model
     await authorize_model(session, principal, body.model)
+    notice = getattr(http_request.state, "input_capability_notice", None) if http_request else None
+    if notice:
+        # Authentication, quota and model permission checks have already run.
+        # No model call, tool submission or execution checkpoint mutation occurs.
+        if audit := current_audit.get():
+            audit["rejection"] = {"code": "unsupported_input_block", "message": notice, "param": "messages"}
+        result = response_object(f"resp_{uuid4().hex}", body, BackendResult(text=notice, thread_id=""))
+        if not body.stream:
+            return result
+        async def notice_stream():
+            yield sse({"type": "response.created", "response": {**result, "status": "in_progress", "output": []}})
+            yield sse({"type": "response.output_text.delta", "delta": notice})
+            yield sse({"type": "response.output_text.done", "text": notice})
+            yield sse({"type": "response.completed", "response": result})
+        return StreamingResponse(notice_stream(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
     if unsupported := body.unsupported():
         return openai_error(400, unsupported[1], "unsupported_parameter", param=unsupported[0])
     validate_capabilities(body)
@@ -1162,7 +1189,13 @@ async def create_response(body: ResponseRequest, principal: ApiPrincipal = Depen
         from .audit import track_backend
         track_backend(target, None, source="selected_worker")
     await release_request_session(session)
-    await count_worker_attempt(target)
+    try:
+        await count_worker_attempt(target)
+    except HTTPException as exc:
+        # Admission has not submitted the tool result. Preserve the fenced checkpoint.
+        if exc.status_code == 429 and (audit := current_audit.get()) and audit.get("execution"):
+            audit["execution"]["admission_rejected"] = True
+        raise
     if body.stream:
         return StreamingResponse(keepalive(response_stream(body, backend, principal, target, public_previous_id, not pending_target and (binding is None or body._execution_auto_resume) and principal.pinned_worker_id is None)), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", **({"x-gateway-generation-policy": "worker-defaults"} if provider_for(body.model) == "claude" else {})})
     started = time.monotonic()

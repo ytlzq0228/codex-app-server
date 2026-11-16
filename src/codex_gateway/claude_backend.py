@@ -96,7 +96,7 @@ class ClaudeAdapter:
         # for colliding or overlong namespace encodings.
         from .client_tools import NAME
         names = [(s["namespace"] + "__" if s["namespace"] else "") + s["name"] for s in specs]
-        if len(set(names)) == len(names) and all(NAME.fullmatch(n) for n in names):
+        if len(set(names)) == len(names) and all(len(n) <= 64 and NAME.fullmatch(n) for n in names):
             specs = [{**s, "alias": n} for s, n in zip(specs, names)]
         from .client_tools import forced_specs
         forced = forced_specs(request, specs)

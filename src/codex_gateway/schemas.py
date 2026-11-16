@@ -138,7 +138,7 @@ class ResponseRequest(OpenAIRequestModel):
         try:
             validate(self)
         except ToolProtocolError as exc:
-            return "tools", str(exc)
+            return exc.param, str(exc)
         items = self.input if isinstance(self.input, list) else [self.input]
         try:
             if any(self._item_is_unsupported(item) for item in items):
@@ -307,7 +307,12 @@ class ChatCompletionRequest(OpenAIRequestModel):
             request = self.to_response_request()
             validate(request)
         except (ToolProtocolError, ValueError, TypeError, KeyError) as exc:
-            return "tools", str(exc)
+            original_param = getattr(exc, "param", "tools")
+            param = original_param
+            # Responses validation uses flattened tool declarations.
+            if param.startswith("tools[") and "]." in param:
+                param = param.replace("].", "].function.", 1)
+            return param, str(exc).replace(original_param, param, 1)
         if unsupported := request.unsupported():
             return ("messages" if unsupported[0] == "input" else unsupported[0]), unsupported[1]
         return None

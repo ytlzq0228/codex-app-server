@@ -179,3 +179,14 @@ def test_removed_codex_alias_is_not_available() -> None:
             response = client.post(path, headers=AUTH, json={'model':'codex', **body})
             assert response.status_code == 400
             assert response.json()['error']['code'] == 'model_not_found'
+
+
+def test_invalid_option_reports_field_value_and_reason():
+    with TestClient(app) as client:
+        response = client.post("/v1/responses", headers=AUTH,
+            json={"model": "gpt-6-sol", "input": "private prompt", "stream": "invalid-bool"})
+        assert response.status_code == 400
+        error = response.json()["error"]
+        assert error["param"] == "stream"
+        assert "stream" in error["message"] and "invalid-bool" in error["message"]
+        assert "private prompt" not in response.text

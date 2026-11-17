@@ -211,6 +211,13 @@ Worker 设计完全基于以下实测行为（本机 + 测试环境均复现）�
 | `stream` | `stream` | 非流式也走同一管线 |
 | `mcp_servers`、`container`、`attachments`、`files` | 400 | |
 
+客户端工具搜索返回的 `tool_result.content[].tool_reference` 受到支持：
+`tool_name` 必须引用顶层 `tools` 中已声明的工具。适配器将引用转为保留
+`type` 与 `tool_name` 的 JSON 文本，与普通文本和图片按原顺序传递；不会
+创建或执行未声明的工具，也不会修改原始请求。`defer_loading` 仍按现有
+策略忽略，声明的工具均会注册；这不是服务端工具搜索或按需加载实现。
+普通消息中的 `tool_reference` 仍不支持。
+
 ### 6.3 响应翻译 Responses → Messages
 
 非流式：`{"id":"msg_<resp_id>","type":"message","role":"assistant","model","content":[{"type":"text","text"}, {"type":"tool_use","id":call_id,"name","input":json.loads(arguments)}...],"stop_reason":"tool_use"|"end_turn","stop_sequence":null,"usage":{"input_tokens": input - cache_read - cache_write, "cache_read_input_tokens","cache_creation_input_tokens","output_tokens"}}`。

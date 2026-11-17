@@ -56,6 +56,21 @@ def input_block(part, path="content"):
     return {"type": "input_image", "image_url": url}
 
 
+def tool_result_block(part, path, declared_tools):
+    if isinstance(part, dict) and part.get("type") == "tool_reference":
+        name = part.get("tool_name")
+        if not isinstance(name, str) or not name:
+            raise ValueError(f"{path}.tool_name: expected a nonempty tool name")
+        if name not in declared_tools:
+            raise ValueError(f"{path}.tool_name: tool reference {name!r} must name a declared tool")
+        # Definitions are already registered by this adapter (including deferred
+        # tools). Preserve the discovery result as data in the text-only relay;
+        # a reference must never create a new tool or execute it.
+        return {"type": "input_text", "text": json.dumps(
+            {"type": "tool_reference", "tool_name": name}, ensure_ascii=False)}
+    return input_block(part, path)
+
+
 def translate_request(body, model=None, stream=None):
     if not isinstance(body, dict):
         raise ValueError("Expected a JSON object")
@@ -66,6 +81,13 @@ def translate_request(body, model=None, stream=None):
         raise ValueError("messages must be a nonempty array")
     if messages[-1].get("role") == "assistant":
         raise ValueError("Assistant prefill is not supported")
+    tools = []
+    for tool in body.get("tools") or []:
+        if tool.get("type", "custom") != "custom":
+            raise ValueError("This gateway does not provide server tools")
+        tools.append({"type": "function", "name": tool["name"], "description": tool.get("description", ""),
+                      "parameters": tool["input_schema"]})
+    declared_tools = {tool["name"] for tool in tools}
     items = []
     for message_index, message in enumerate(messages):
         role = message["role"]
@@ -101,7 +123,8 @@ def translate_request(body, model=None, stream=None):
                 flush()
                 output = part.get("content", "")
                 if isinstance(output, list):
-                    output = [input_block(p, f"{path}.content[{i}]") for i, p in enumerate(output)]
+                    output = [tool_result_block(p, f"{path}.content[{i}]", declared_tools)
+                              for i, p in enumerate(output)]
                 elif not isinstance(output, str):
                     raise ValueError("tool_result.content must be text or a block array")
                 items.append({"type": "function_call_output", "call_id": part["tool_use_id"], "output": output,
@@ -114,12 +137,6 @@ def translate_request(body, model=None, stream=None):
                     block["type"] = "output_text"
                 parts.append(block)
         flush()
-    tools = []
-    for tool in body.get("tools") or []:
-        if tool.get("type", "custom") != "custom":
-            raise ValueError("This gateway does not provide server tools")
-        tools.append({"type": "function", "name": tool["name"], "description": tool.get("description", ""),
-                      "parameters": tool["input_schema"]})
     choice = body.get("tool_choice") or {"type": "auto"}
     if not isinstance(choice, dict) or choice.get("type") not in {"auto", "none", "any", "tool"}:
         raise ValueError("Invalid tool_choice")

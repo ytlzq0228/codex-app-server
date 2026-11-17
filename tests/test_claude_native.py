@@ -246,3 +246,78 @@ def test_nested_unsupported_tool_result_has_precise_path():
         {"type": "tool_result", "tool_use_id": "c", "content": [{"type": "document"}]}]}]}
     with pytest.raises(UnsupportedInputBlock, match=r"messages\[0\].content\[0\].content\[0\].type"):
         translate_request(body)
+
+
+def reference_prompt():
+    body = prompt() | {"tools": [
+        {"name": "ToolSearch", "input_schema": {"type": "object"}},
+        {"name": "lookup", "description": "Look up an item", "defer_loading": True,
+         "input_schema": {"type": "object", "properties": {"q": {"type": "string"}}}}]}
+    body["messages"] += [
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "search_1",
+                                            "name": "ToolSearch", "input": {}}]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "search_1",
+            "content": [{"type": "tool_reference", "tool_name": "lookup"}]}]}]
+    return body
+
+
+def test_tool_search_reference_preserves_history_and_declared_schema():
+    from copy import deepcopy
+    from codex_gateway.client_tools import validate, tool_outputs
+    from codex_gateway.schemas import ResponseRequest
+    body = reference_prompt()
+    parts = body["messages"][-1]["content"][0]["content"]
+    parts.insert(0, {"type": "text", "text": "Found tool"})
+    parts.append({"type": "image", "source": {"type": "url", "url": "https://example.org/a.png"}})
+    original = deepcopy(body)
+    translated = translate_request(body)
+    output = translated["input"][-1]
+    assert output["call_id"] == "search_1"
+    assert [p["type"] for p in output["output"]] == ["input_text", "input_text", "input_image"]
+    assert json.loads(output["output"][1]["text"]) == {"type": "tool_reference", "tool_name": "lookup"}
+    req = ResponseRequest(**translated)
+    specs = validate(req)
+    assert specs[1]["name"] == "lookup"
+    assert specs[1]["schema"] == body["tools"][1]["input_schema"]
+    assert tool_outputs(req)[0][0] == "search_1"
+    body["messages"].append({"role": "user", "content": "Continue using the discovered tool"})
+    assert translate_request(body)["input"][-2] == output
+    body["messages"].pop()
+    assert body == original
+
+
+@pytest.mark.parametrize("name", [None, "", 123, [], "not_declared"])
+def test_invalid_tool_reference_has_precise_path(name):
+    body = reference_prompt()
+    body["messages"][-1]["content"][0]["content"][0]["tool_name"] = name
+    with pytest.raises(ValueError, match=r"messages\[2\].content\[0\].content\[0\].tool_name"):
+        translate_request(body)
+
+
+def test_tool_reference_outside_tool_result_is_not_accepted():
+    from codex_gateway.claude_native import UnsupportedInputBlock
+    body = reference_prompt()
+    body["messages"][-1]["content"] = [{"type": "tool_reference", "tool_name": "lookup"}]
+    with pytest.raises(UnsupportedInputBlock):
+        translate_request(body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_tool_reference_reaches_execution_pipeline_without_capability_notice(stream):
+    seen = []
+    async def inner(scope, receive, send):
+        assert not scope.get("state", {}).get("input_capability_notice")
+        translated = json.loads((await receive())["body"])
+        seen.append(translated)
+        payload = (('data: ' + json.dumps({"type": "response.completed", "response": result()}) + '\n\n').encode()
+                   if stream else json.dumps(result()).encode())
+        await send({"type": "http.response.start", "status": 200,
+                    "headers": [(b"content-type", b"text/event-stream" if stream else b"application/json")]})
+        await send({"type": "http.response.body", "body": payload})
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=ClaudeNativeMiddleware(inner)), base_url="http://test") as client:
+        response = await client.post('/v1/messages', headers=HEADERS, json=reference_prompt() | {"stream": stream})
+    assert response.status_code == 200
+    assert len(seen) == 1
+    assert seen[0]["input"][-1]["call_id"] == "search_1"
+    assert 'has not been executed' not in response.text

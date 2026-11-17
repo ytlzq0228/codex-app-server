@@ -2,7 +2,8 @@
 """Keep exactly one deployment backup. Run as root on the application host.
 
 Historical backups are deleted BEFORE creating the new backup, as requested.
-The service and all worker containers remain running. Does not restore DB data.
+The service and all worker containers remain running. Database backups are
+excluded from every release (user policy, 2026-11-17).
 """
 import argparse
 from datetime import datetime, timezone
@@ -12,7 +13,6 @@ from pathlib import Path
 import shutil
 import subprocess
 import tarfile
-from urllib.parse import urlsplit, unquote
 
 
 def output(*args):
@@ -34,14 +34,6 @@ def main():
     managed_ids = output('docker', 'ps', '-q', '--filter', 'label=io.codex-gateway.managed=true').decode().split()
     managed = json.loads(output('docker', 'inspect', *managed_ids)) if managed_ids else []
     claude = [container for container in managed if container['Config']['Image'].startswith('codex-claude-worker:')]
-    env = dict(item.split('=', 1) for item in gateway['Config']['Env'])
-    url = urlsplit(env['CODEX_GATEWAY_DATABASE_URL'])
-    network = next(iter(gateway['NetworkSettings']['Networks']))
-    db_env = {**os.environ, 'PGPASSWORD': unquote(url.password or '')}
-    db_cmd = ['docker', 'run', '--rm', '--network', network, '--env', 'PGPASSWORD', 'postgres:16-alpine']
-    db_args = ['-h', url.hostname, '-p', str(url.port or 5432), '-U', unquote(url.username or ''), '-d', unquote(url.path.lstrip('/'))]
-    # Verify DB access, Docker image and config before removing old backups.
-    subprocess.run(db_cmd + ['psql', *db_args, '-Atc', 'SELECT 1'], env=db_env, check=True, stdout=subprocess.DEVNULL)
     backup_root = root / 'deploy-backups'
     roots = [backup_root, *args.historical_root]
     for directory in roots:
@@ -59,8 +51,6 @@ def main():
     backup.mkdir(parents=True, mode=0o700)
     os.chmod(backup_root, 0o700)
     (backup / 'containers.json').write_text(json.dumps([gateway, manager, *claude], indent=2))
-    with (backup / 'database.dump').open('wb') as dump:
-        subprocess.run(db_cmd + ['pg_dump', *db_args, '-Fc'], env=db_env, check=True, stdout=dump)
     with tarfile.open(backup / 'application.tar.gz', 'w:gz') as archive:
         for child in root.iterdir():
             if child.name not in {'deploy-backups', '.git', '.venv', '__pycache__', '.pytest_cache'} and not child.name.endswith(('.tar', '.tar.gz')):
@@ -68,8 +58,8 @@ def main():
     images = sorted({gateway['Image'], manager['Image'], *(container['Image'] for container in claude)})
     with (backup / 'application-images.tar').open('wb') as archive:
         subprocess.run(['docker', 'save', *images], check=True, stdout=archive)
-    (backup / 'README.txt').write_text('Rollback: restore configuration and load saved gateway/manager and running Claude Worker images. Container settings include prior Claude ports and volumes. Account volumes remain at their original locations; stop the current Worker before restoring a prior container. Database dump is a consistent snapshot; reconcile later writes before restoring it.\n')
-    print(json.dumps({'backup': str(backup), 'retention': 1, 'database_bytes': (backup / 'database.dump').stat().st_size}))
+    (backup / 'README.txt').write_text('Rollback: restore configuration and load saved gateway/manager and running Claude Worker images. Container settings include prior Claude ports and volumes. Account volumes remain at their original locations; stop the current Worker before restoring a prior container. Database backups are intentionally excluded from releases. Do not restore an older database as part of application rollback.\n')
+    print(json.dumps({'backup': str(backup), 'retention': 1, 'database_backup': 'excluded by release policy'}))
 
 
 if __name__ == '__main__':

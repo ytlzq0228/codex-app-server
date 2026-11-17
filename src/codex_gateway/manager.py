@@ -149,3 +149,10 @@ def infrastructure(authorization: str | None = Header(default=None)):
     authorize(authorization)
     from .docker_monitor import snapshot
     return snapshot(client)
+
+
+@app.get('/monitoring/host')
+def host_monitoring(authorization: str | None = Header(default=None)):
+    authorize(authorization)
+    from .host_monitor import snapshot
+    return snapshot()

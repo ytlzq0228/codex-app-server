@@ -175,6 +175,8 @@ from .dchat_admin import router as dchat_admin_router
 app.include_router(dchat_admin_router)
 from .infra import router as infra_router
 app.include_router(infra_router)
+from .prtg import router as prtg_router
+app.include_router(prtg_router)
 from .self_service import router as self_service_router
 from .reporting import router as reporting_router
 app.include_router(self_service_router)

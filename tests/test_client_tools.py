@@ -10,6 +10,86 @@ from codex_gateway.worker_policy import thread_policy,turn_policy
 
 TOOL={'type':'function','name':'lookup','parameters':{'type':'object','properties':{'query':{'type':'string'}}}}
 
+
+def declaration(*tools):
+    return {'type': 'additional_tools', 'tools': [
+        {'type': 'namespace', 'name': 'functions', 'tools': list(tools)}]}
+
+
+def test_history_tool_updates_preserve_other_tools_aliases_and_input():
+    old = {'type': 'custom', 'name': 'exec', 'format': {'type': 'text'}}
+    new = {**old, 'format': {'type': 'grammar', 'syntax': 'lark', 'definition': 'start: /.+/'}}
+    body = ResponseRequest(model='test', tools=[{**TOOL, 'name': 'base'}], input=[
+        declaration(old, TOOL), {'role': 'user', 'content': 'hello'},
+        declaration(new), declaration(new), declaration()])
+    before = body.model_dump_json()
+    specs = validate(body)
+    assert [(s['namespace'], s['name']) for s in specs] == [
+        (None, 'base'), ('functions', 'exec'), ('functions', 'lookup')]
+    assert specs[1]['grammar']['syntax'] == 'lark'
+    assert specs[1]['alias'] == 'gateway_client_1'
+    assert body.model_dump_json() == before
+    assert body.unsupported() is None
+    call = public_call(specs, {'tool': 'gateway_client_1', 'arguments': {'input': 'hello'}})
+    assert call['type'] == 'custom_tool_call' and call['name'] == 'exec'
+
+
+@pytest.mark.parametrize('historical', [False, True])
+def test_duplicate_in_one_declaration_reports_both_paths(historical):
+    body = ResponseRequest(model='test', input=[declaration(TOOL, TOOL)] if historical else 'hello',
+                           tools=None if historical else [TOOL, TOOL])
+    prefix = 'input[0].tools[0].tools' if historical else 'tools'
+    with pytest.raises(ToolProtocolError) as exc:
+        validate(body)
+    assert f'{prefix}[0]' in str(exc.value) and f'{prefix}[1]' in str(exc.value)
+    assert exc.value.param == f'{prefix}[1].name'
+
+
+def test_history_updates_override_base_without_collapsing_namespaces():
+    body = ResponseRequest(model='test', tools=[TOOL], input=[
+        {'type': 'additional_tools', 'tools': [{**TOOL, 'description': 'updated'}]},
+        declaration(TOOL)])
+    specs = validate(body)
+    assert len(specs) == 2
+    assert specs[0]['description'] == 'updated' and specs[0]['namespace'] is None
+    assert specs[1]['namespace'] == 'functions'
+
+
+@pytest.mark.asyncio
+async def test_historical_update_preserves_pending_contract_and_duplicate_protection():
+    old = {**TOOL, 'parameters': {'type': 'object', 'properties': {}}}
+    first = ResponseRequest(model='test', input=[declaration(old), declaration(TOOL),
+                                               {'role': 'user', 'content': 'hello'}])
+    executions = []
+    async def events(req, target, run):
+        executions.append('started')
+        call = {'id': 'fc_history', 'type': 'function_call', 'call_id': 'call_history',
+                'name': 'lookup', 'namespace': 'functions', 'arguments': '{}', 'status': 'completed'}
+        await sessions.await_result(run, call)
+        yield BackendStreamEvent(tool_call=call, thread_id='history-thread')
+        result = await sessions.receive_result(run)
+        yield BackendStreamEvent(delta=result, thread_id='history-thread')
+        yield BackendStreamEvent(done=True, thread_id='history-thread')
+    sessions = ToolSessions(events, ttl=10)
+    target = BackendTarget('key:worker', 'ws://worker', '/workspace')
+    try:
+        assert [e async for e in sessions.stream(first, target)][0].tool_call
+        output = {'type': 'function_call_output', 'call_id': 'call_history', 'output': 'answer'}
+        changed = first.model_copy(update={'input': first.input + [declaration(old), output]})
+        with pytest.raises(ToolProtocolError) as exc:
+            sessions.find(changed, 'key')
+        assert exc.value.code == 'tool_configuration_changed'
+        good = first.model_copy(update={'input': first.input + [declaration(TOOL), output]})
+        assert sessions.find(good, 'key') is not None
+        resumed = [e async for e in sessions.stream(good, target)]
+        assert any(e.delta == 'answer' for e in resumed)
+        with pytest.raises(ToolProtocolError) as exc:
+            sessions.find(good, 'key')
+        assert exc.value.code == 'client_tool_result_duplicate'
+        assert executions == ['started']
+    finally:
+        await sessions.close()
+
 def request(**kwargs):return ResponseRequest(model='test',input='hello',tools=[TOOL],**kwargs)
 
 

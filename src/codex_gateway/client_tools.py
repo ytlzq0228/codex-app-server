@@ -19,18 +19,19 @@ class ToolProtocolError(ValueError):
 def definitions(request):
     from .web_search import configuration
     configuration(request)
-    tools = list(request.tools or [])
-    paths = [f"tools[{i}]" for i in range(len(tools))]
+    # Top-level tools establish the base; historical declarations are ordered
+    # incremental updates. Never mutate history used for continuation fencing.
+    blocks = [(list(request.tools or []), "tools")]
     for item_index, item in enumerate(request.input if isinstance(request.input, list) else [request.input]):
         if isinstance(item, dict) and item.get('type') == 'additional_tools':
             if not isinstance(item.get('tools'), list):
                 raise ToolProtocolError('additional_tools.tools must be an array')
             if any(isinstance(t, dict) and t.get('type') == 'web_search' for t in item['tools']):
                 raise ToolProtocolError('Declare web_search in top-level tools')
-            paths.extend(f'input[{item_index}].tools[{i}]' for i in range(len(item['tools'])))
-            tools.extend(item['tools'])
+            blocks.append((item['tools'], f'input[{item_index}].tools'))
     result = []
-    seen = set()
+    positions = {}
+    seen = {}
     def add(tool, namespace=None, path="tools"):
         if not isinstance(tool, dict):
             raise ToolProtocolError('Tool definitions must be objects')
@@ -58,14 +59,23 @@ def definitions(request):
             raise ToolProtocolError(f'{path}.parameters for tool {name!r}: expected an object JSON Schema (type=object)', param=f'{path}.parameters')
         identity=(namespace,name)
         if identity in seen:
-            raise ToolProtocolError(f'Duplicate client tool: {namespace or ""}.{name}')
-        seen.add(identity)
-        result.append({'alias':f'gateway_client_{len(result)}','name':name,'namespace':namespace,
-                       'kind':kind,'description':str(tool.get('description') or ''),'schema':schema, 'grammar':grammar})
+            raise ToolProtocolError(
+                f'Duplicate client tool: {namespace or ""}.{name}; declared at '
+                f'{seen[identity]} and {path}', param=f'{path}.name')
+        seen[identity] = path
+        position = positions.setdefault(identity, len(result))
+        spec = {'alias':f'gateway_client_{position}','name':name,'namespace':namespace,
+                'kind':kind,'description':str(tool.get('description') or ''),'schema':schema, 'grammar':grammar}
+        if position == len(result):
+            result.append(spec)
+        else:
+            result[position] = spec
         if len(result)>512:
             raise ToolProtocolError('At most 512 client tools are supported')
-    for index, tool in enumerate(tools):
-        add(tool, path=paths[index])
+    for tools, path in blocks:
+        seen.clear()
+        for index, tool in enumerate(tools):
+            add(tool, path=f'{path}[{index}]')
     return result
 
 

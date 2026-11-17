@@ -77,15 +77,22 @@ async def test_account_read_releases_db_and_rejects_stale_snapshot(monkeypatch, 
 async def test_quota_lock_wait_is_bounded_by_database():
     from sqlalchemy import text
     from sqlalchemy.exc import DBAPIError
-    from codex_gateway.database import SessionLocal
+    from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+    from codex_gateway.config import get_settings
     from codex_gateway.quota import quota_lock
 
-    async with SessionLocal() as holder, SessionLocal() as waiter:
-        await holder.execute(text('SELECT pg_advisory_xact_lock(724193228)'))
-        started = asyncio.get_running_loop().time()
-        with pytest.raises(DBAPIError) as failure:
-            await asyncio.wait_for(quota_lock(waiter), 8)
-        assert getattr(failure.value.orig, 'sqlstate', None) == '55P03'
-        assert asyncio.get_running_loop().time() - started < 7
-        await waiter.rollback()
-        await holder.rollback()
+    # Keep this async test's connections out of the TestClient lifespan pool.
+    engine = create_async_engine(get_settings().database_url)
+    sessions = async_sessionmaker(engine)
+    try:
+        async with sessions() as holder, sessions() as waiter:
+            await holder.execute(text('SELECT pg_advisory_xact_lock(724193228)'))
+            started = asyncio.get_running_loop().time()
+            with pytest.raises(DBAPIError) as failure:
+                await asyncio.wait_for(quota_lock(waiter), 8)
+            assert getattr(failure.value.orig, 'sqlstate', None) == '55P03'
+            assert asyncio.get_running_loop().time() - started < 7
+            await waiter.rollback()
+            await holder.rollback()
+    finally:
+        await engine.dispose()

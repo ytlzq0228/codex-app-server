@@ -49,8 +49,8 @@ def quota_channels(payload, age):
         used = window.get('used')
         if used is None:
             raise ValueError('No valid quota samples for ' + label)
-        rows += [channel(label + ' remaining', float(100 - used), 'Percent', limitminwarning=20, limitminerror=5),
-                 channel(label + ' coverage', float(window.get('covered_weight', 0) / total * 100), 'Percent', limitminwarning=90)]
+        rows += [channel(label + ' remaining', float(100 - used), 'Percent', limitminwarning=20, limitminerror=20),
+                 channel(label + ' coverage', float(window.get('covered_weight', 0) / total * 100), 'Percent', limitminwarning=50, limitminerror=20)]
     return rows
 
 

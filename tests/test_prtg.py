@@ -27,7 +27,9 @@ def test_quota_missing_stale_and_partial_coverage():
     p = {'total_weight':10, 'windows':{k:{'used':25, 'covered_weight':5} for k in ('five_hour','week','risk')}}
     rows = prtg.quota_channels(p, 300)
     assert rows[1]['value'] == 75 and rows[2]['value'] == 50
-    assert rows[1]['limitminerror'] == 5
+    assert rows[1]['limitminerror'] == 20
+    assert rows[2]['limitminwarning'] == 50
+    assert rows[2]['limitminerror'] == 20
     with pytest.raises(ValueError, match='older'):
         prtg.quota_channels(p, 901)
     p['windows']['week']['used'] = None

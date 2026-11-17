@@ -36,7 +36,8 @@ Each APP exposes authenticated `GET /monitoring/prtg/{health,workers,capacity,sy
 Use `Authorization: Bearer <CODEX_GATEWAY_MONITORING_TOKEN>` with an independent random token of at least 32 characters.
 Create one PRTG device per APP private IP and eight HTTP Data Advanced sensors, polling every 60 seconds with a 20-second timeout.
 Do not point these sensors at a load balancer. Quota sensors intentionally repeat the global shared snapshot on both devices; never sum them.
-Quota older than 15 minutes or missing valid samples returns a PRTG error; partial coverage has its own warning channel.
+Quota remaining channels use a 20% lower error limit (strictly below 20%). Existing PRTG channel limits must be updated through PRTG; response limits initialize new channels only.
+Quota older than 15 minutes or missing valid samples returns a PRTG error; coverage channels warn below 50% and enter error below 20%.
 
 Worker state excludes deleted records. Capacity is local: Codex configured WS slots, Claude 40 turns/Worker, Gemini 4 turns/Worker.
 In-flight turns include tool waits and upstream admission waits, not just currently generating turns; waiting tool results are reported separately.

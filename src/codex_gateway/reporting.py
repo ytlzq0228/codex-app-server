@@ -290,8 +290,12 @@ async def subscription_cost(request: Request, month: str = Form(...), amount: De
 
 @data_page(router, "/user/debug", "account.html", "debug")
 async def debug(request: Request, identity=Depends(require_user), db: AsyncSession = Depends(get_session)):
-    from .providers import allowed_providers, provider_for
-    providers = await allowed_providers(db, identity.username)
+    from .auth import ApiPrincipal
+    from .providers import visible_models, provider_for
+    from .model_capabilities import filter_visible_models
+    principal = ApiPrincipal(key_id=None, name=identity.username, owner_username=identity.username)
+    public_models = await visible_models(db, principal)
+    public_models = await filter_visible_models(db, principal, public_models)
     models = [{"id": model, "provider": provider_for(model)}
-              for model in get_settings().public_models() if provider_for(model) in providers]
+              for model in public_models]
     return render(request, identity, page="debug", debug_models=models)

@@ -1,5 +1,7 @@
 """Antigravity transport, kept separate from the existing Codex backend."""
 import json
+from collections import Counter
+from contextlib import aclosing
 import logging
 from datetime import datetime, timedelta, timezone
 import httpx
@@ -20,6 +22,7 @@ async def worker_rpc(endpoint, settings, path, payload=None):
 class GeminiAdapter:
     def __init__(self, settings):
         self.settings = settings
+        self.active_turns = Counter()
         self.tool_sessions = ToolSessions(self._turn_events,
             ttl=settings.client_tool_result_timeout_seconds,
             progress_timeout=settings.client_tool_progress_timeout_seconds,
@@ -35,6 +38,18 @@ class GeminiAdapter:
             raise WorkerFailure(str(exc), kind="request") from exc
 
     async def _turn_events(self, request, target, tool_run=None):
+        worker = str(target.worker_id)
+        self.active_turns[worker] += 1
+        try:
+            async with aclosing(self._worker_events(request, target, tool_run)) as events:
+                async for event in events:
+                    yield event
+        finally:
+            self.active_turns[worker] -= 1
+            if not self.active_turns[worker]:
+                del self.active_turns[worker]
+
+    async def _worker_events(self, request, target, tool_run=None):
         from .providers import validate_capabilities, provider_for
         validate_capabilities(request)
         if target.provider != provider_for(request.model):
@@ -286,7 +301,7 @@ class ProviderBackend:
     async def routing_load(self, key):
         codex = await self.pool.routing_load(key)
         claude = self.claude.routing_load(key)
-        return {"active": {**codex["active"], **claude["active"]},
+        return {"active": {**codex["active"], **claude["active"], **self.gemini.active_turns},
                 "saturated": codex["saturated"] + claude["saturated"]}
 
 async def probe_gemini(worker, db, settings, *, inference=True, login_session=None):

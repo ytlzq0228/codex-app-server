@@ -225,6 +225,26 @@ async def refresh_worker_account(worker_id):
     from .database import SessionLocal
     from .admin import probe_worker_record
     settings = get_settings()
+    import asyncio
+    # Account RPCs can emit notifications indefinitely. Read without holding a
+    # database connection or the cluster-wide quota lock, then reject stale data.
+    snapshot = None
+    account = None
+    async with SessionLocal() as db:
+        candidate = await db.get(Worker, worker_id)
+        if (candidate and candidate.enabled
+                and candidate.endpoint not in {"removed://worker", "provisioning://worker"}
+                and (candidate.provider or "codex") == "codex"
+                and candidate.status not in {WorkerStatus.offline, WorkerStatus.error}):
+            snapshot = (candidate.endpoint, candidate.execution_generation,
+                        candidate.account_checked_at, candidate.status)
+    if snapshot is not None:
+        try:
+            async with asyncio.timeout(20):
+                async with open_app_server(snapshot[0], settings.app_server_token.get_secret_value(), 20) as server:
+                    account = (await server.call("account/read", {"refreshToken": True})).get("account")
+        except Exception:
+            account = None
     async with SessionLocal() as db:
         await quota_lock(db)
         worker = await db.scalar(select(Worker).where(Worker.id == worker_id, Worker.enabled.is_(True), Worker.endpoint.not_in(["removed://worker", "provisioning://worker"])).with_for_update(skip_locked=True))
@@ -241,11 +261,9 @@ async def refresh_worker_account(worker_id):
             if not worker.retry_after or worker.retry_after <= datetime.now(timezone.utc):
                 await probe_worker_record(worker, db, settings)
             return
-        try:
-            async with open_app_server(worker.endpoint, settings.app_server_token.get_secret_value(), 20) as server:
-                account = (await server.call("account/read", {"refreshToken": True})).get("account")
-        except Exception:
-            account = None
+        if snapshot != (worker.endpoint, worker.execution_generation,
+                        worker.account_checked_at, worker.status):
+            return  # A concurrent probe, logout or replacement superseded this read.
         if not account:
             await probe_worker_record(worker, db, settings)
             return

@@ -36,6 +36,9 @@ checkpoint/租约均保存在 PG。进程内 WebSocket、运行任务与工具 F
 
 ## 部署
 
+2026-11-17 用户明确要求：今后所有测试及生产发布均不备份数据库，不运行
+pg_dump，也不等待数据库备份完成。下文历史数据库迁移步骤不适用于日常发布。
+
 使用 `deploy/compose.ha.yaml`，正式目录 `/opt/codex-app-server-ha`。
 `.env` 指定统一 gateway 镜像和本机 NODE_IP；`.env.ha` 包含 gateway 配置，
 `.env.manager.ha` 包含 manager 配置。三个文件仅 root 可读。

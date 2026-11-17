@@ -29,3 +29,26 @@ Worker 五类状态互斥，分母包含数据库所有 Worker 记录：
 同一接口支持 `view=summary` 和 `view=history`；缺省 `view=all` 保留组合响应。概览与历史并行独立加载。1 天保留原始粒度，7/30/90 天分别按 UTC 30 分钟/2 小时/6 小时聚合。首尾桶可能不完整。用量主线显示有效样本平均值，悬浮提示包含最小/最大值；状态主线显示桶内最后值，并提示峰值。没有有效样本的用量仍为 null，完整缺失的桶不补点。
 
 历史返回 `server_time`、`intervals`（毫秒）、`replace_from`。刷新通过带时区的 `since` 查询增量，重读当前及前一聚合桶，覆盖迟到提交的采样。客户端按 `replace_from` 替换尾部，并移除范围外的数据。请求完成后等待一分钟再刷新；切换范围取消旧请求，页面隐藏暂停，单次请求 45 秒超时后等待重试。SVG 每条曲线只保留一个悬浮定位点。
+
+## PRTG HTTP Data Advanced
+
+Each APP exposes authenticated `GET /monitoring/prtg/{health,workers,capacity,system,throughput,codex,gemini,claude}`.
+Use `Authorization: Bearer <CODEX_GATEWAY_MONITORING_TOKEN>` with an independent random token of at least 32 characters.
+Create one PRTG device per APP private IP and eight HTTP Data Advanced sensors, polling every 60 seconds with a 20-second timeout.
+Do not point these sensors at a load balancer. Quota sensors intentionally repeat the global shared snapshot on both devices; never sum them.
+Quota remaining channels use a 20% lower error limit (strictly below 20%). Existing PRTG channel limits must be updated through PRTG; response limits initialize new channels only.
+Quota older than 15 minutes or missing valid samples returns a PRTG error; coverage channels warn below 50% and enter error below 20%.
+
+Worker state excludes deleted records. Capacity is local: Codex configured WS slots, Claude 40 turns/Worker, Gemini 4 turns/Worker.
+In-flight turns include tool waits and upstream admission waits, not just currently generating turns; waiting tool results are reported separately.
+Free slots apply only to healthy enabled Workers and do not guarantee admission for a particular API Key (per-Key limits and idle WS ownership still apply).
+Resource capacity is an estimate using 80% of host CPU/RAM, with 2 CPU and 4 GiB per Worker. This is not an enforced creation limit; resource oversubscription can make the current count exceed it.
+
+Throughput uses audit records completed in the last 60 seconds, attributed through the Worker's owner node, so cross-node forwarding is counted once.
+Input/output Token rates use currently settled usage, not streaming chunks or instantaneous generation speed. Claude final settlement can move usage between records/windows.
+Tool rate counts distinct client call IDs in those completed records, not client execution completion or hidden upstream tools. Requests rejected before Worker selection are excluded.
+
+Manager host sampling requires explicit read-only `/proc:/host/proc:ro` and `/:/host/root:ro` mounts.
+The mounted host procfs provides CPU, available memory, load and host network counters; root filesystem capacity is read with statvfs.
+Virtual bridge/veth and loopback interfaces are excluded from network totals. The first CPU sample spans 200 ms; subsequent samples span the polling interval, cached for 10 seconds.
+Sampling errors return PRTG `error:1`, never a fabricated zero. Monitoring does not expose prompts, account identifiers, credentials or container environments.

@@ -18,6 +18,11 @@ previous single-node layout. Use `scripts/verify_ha.py` for the current release.
 
 ## Release backup policy
 
+As confirmed on 2026-11-17, **all test and production releases skip database
+backups**. Do not run pg_dump or wait for a database snapshot as a release step.
+Application/configuration/image backups follow the policy below; existing backups
+are not deleted by this change.
+
 Validate each release in the test environment before deploying production.
 `scripts/deploy_release.py` backs up test deployments, deleting historical test
 backups before creating the latest one. For the canonical production directory
@@ -137,9 +142,10 @@ runs `backup_release.py` before replacing test application files or containers.
 The canonical production HA directory skips this step after test validation.
 For a standalone backup use
 `sudo python3 scripts/backup_release.py <application-directory>`; add
-`--historical-root /opt/codex-app-server/deploy-backups` for the former layout. The script checks database access, deletes historical backups
-**before** creating the new backup, and saves configuration, a consistent database
-dump, gateway/manager images and container settings. Account volumes and Worker
+`--historical-root /opt/codex-app-server/deploy-backups` for the former layout. The script deletes historical backups
+**before** creating the new application backup, and saves configuration,
+gateway/manager images and container settings. It neither connects to the database
+nor creates a database dump. Account volumes and Worker
 images remain in place for application-only releases; back them up separately
 when a release changes Worker data or images. Rollback must restore the prior overrides and
 container configuration as well as images. Never restore an older database over

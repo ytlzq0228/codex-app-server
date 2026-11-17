@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     workspace_worker_root: str = "/workspace"
     manager_url: str = "http://worker-manager:4600"
     manager_token: SecretStr = SecretStr("development-manager-token-change-me")
+    monitoring_token: SecretStr = SecretStr("")
     max_request_bytes: int = 20_971_520
     worker_probe_timeout_seconds: float = 60.0
     worker_recovery_interval_seconds: float = 30.0

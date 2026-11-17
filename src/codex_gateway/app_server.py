@@ -52,22 +52,24 @@ class AppServerSession:
             yield json.loads(raw)
 
     async def call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        request_id = await self.send(method, params)
-        while True:
-            raw = await asyncio.wait_for(self.websocket.recv(), self.timeout)
-            message = json.loads(raw)
-            if message.get("method") or message.get("id") != request_id:
-                if message.get("id") is not None and message.get("method") == "item/tool/call":
-                    self.pending_notifications.append(message)
-                elif message.get("id") is not None and message.get("method"):
-                    await self.reject_server_request(message)
-                elif message.get("method"):
-                    self.pending_notifications.append(message)
-                continue
-            if "error" in message:
-                error = message["error"]
-                raise AppServerError(f"{method}: {error.get('message', error)}")
-            return message.get("result", {})
+        # Notifications do not extend the deadline for the requested response.
+        async with asyncio.timeout(self.timeout):
+            request_id = await self.send(method, params)
+            while True:
+                raw = await asyncio.wait_for(self.websocket.recv(), self.timeout)
+                message = json.loads(raw)
+                if message.get("method") or message.get("id") != request_id:
+                    if message.get("id") is not None and message.get("method") == "item/tool/call":
+                        self.pending_notifications.append(message)
+                    elif message.get("id") is not None and message.get("method"):
+                        await self.reject_server_request(message)
+                    elif message.get("method"):
+                        self.pending_notifications.append(message)
+                    continue
+                if "error" in message:
+                    error = message["error"]
+                    raise AppServerError(f"{method}: {error.get('message', error)}")
+                return message.get("result", {})
 
     async def reject_server_request(self, message: dict[str, Any]) -> None:
         method = message.get("method", "")

@@ -20,7 +20,7 @@ services:
     command: ["uvicorn", "codex_gateway.manager:app", "--host", "0.0.0.0", "--port", "4600"]
     user: "0:0"
     ports: ["${NODE_IP:?set NODE_IP}:4600:4600"]
-    volumes: ["/var/run/docker.sock:/var/run/docker.sock"]
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock", "/proc:/host/proc:ro", "/:/host/root:ro"]
     read_only: true
     tmpfs: ["/tmp:size=16m,noexec,nosuid"]
     security_opt: ["no-new-privileges:true"]

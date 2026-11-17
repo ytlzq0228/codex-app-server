@@ -10,6 +10,9 @@ async def quota_lock(db):
     # A transaction-scoped advisory lock covers creation, enabling, transfer and
     # worker credit changes across gateway processes. Never commit inside helpers.
     with db.no_autoflush:
+        # Bound waits on the server as well as the client: cancelled callers must
+        # not leave an unbounded queue consuming both gateway connection pools.
+        await db.execute(text("SET LOCAL lock_timeout = '5s'"))
         await db.execute(text("SELECT pg_advisory_xact_lock(724193228)"))
 
 
